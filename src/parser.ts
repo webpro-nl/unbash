@@ -68,6 +68,110 @@ class WordImpl implements Word {
   }
 }
 
+class ArithmeticCommandImpl implements ArithmeticCommand {
+  type: "ArithmeticCommand" = "ArithmeticCommand";
+  pos: number;
+  end: number;
+  body: string;
+  #expression: ArithmeticExpression | undefined | null = null;
+
+  constructor(pos: number, end: number, body: string) {
+    this.pos = pos;
+    this.end = end;
+    this.body = body;
+  }
+
+  get expression(): ArithmeticExpression | undefined {
+    if (this.#expression === null) {
+      this.#expression = parseArithmeticExpression(this.body, this.pos + 2) ?? undefined;
+    }
+    return this.#expression;
+  }
+  set expression(v: ArithmeticExpression | undefined) {
+    this.#expression = v ?? undefined;
+  }
+}
+
+class ArithmeticForImpl implements ArithmeticFor {
+  type: "ArithmeticFor" = "ArithmeticFor";
+  pos: number;
+  end: number;
+  body: CompoundList;
+  #initStr: string;
+  #testStr: string;
+  #updateStr: string;
+  #initPos: number;
+  #testPos: number;
+  #updatePos: number;
+  #initialize: ArithmeticExpression | undefined | null = null;
+  #test: ArithmeticExpression | undefined | null = null;
+  #update: ArithmeticExpression | undefined | null = null;
+
+  constructor(
+    pos: number, end: number, body: CompoundList,
+    initStr: string, testStr: string, updateStr: string,
+    initPos: number, testPos: number, updatePos: number,
+  ) {
+    this.pos = pos;
+    this.end = end;
+    this.body = body;
+    this.#initStr = initStr;
+    this.#testStr = testStr;
+    this.#updateStr = updateStr;
+    this.#initPos = initPos;
+    this.#testPos = testPos;
+    this.#updatePos = updatePos;
+  }
+
+  get initialize(): ArithmeticExpression | undefined {
+    if (this.#initialize === null) {
+      if (this.#initStr) {
+        const expr = parseArithmeticExpression(this.#initStr);
+        if (expr) offsetArith(expr, this.#initPos);
+        this.#initialize = expr ?? undefined;
+      } else {
+        this.#initialize = undefined;
+      }
+    }
+    return this.#initialize;
+  }
+  set initialize(v: ArithmeticExpression | undefined) {
+    this.#initialize = v ?? undefined;
+  }
+
+  get test(): ArithmeticExpression | undefined {
+    if (this.#test === null) {
+      if (this.#testStr) {
+        const expr = parseArithmeticExpression(this.#testStr);
+        if (expr) offsetArith(expr, this.#testPos);
+        this.#test = expr ?? undefined;
+      } else {
+        this.#test = undefined;
+      }
+    }
+    return this.#test;
+  }
+  set test(v: ArithmeticExpression | undefined) {
+    this.#test = v ?? undefined;
+  }
+
+  get update(): ArithmeticExpression | undefined {
+    if (this.#update === null) {
+      if (this.#updateStr) {
+        const expr = parseArithmeticExpression(this.#updateStr);
+        if (expr) offsetArith(expr, this.#updatePos);
+        this.#update = expr ?? undefined;
+      } else {
+        this.#update = undefined;
+      }
+    }
+    return this.#update;
+  }
+  set update(v: ArithmeticExpression | undefined) {
+    this.#update = v ?? undefined;
+  }
+}
+
 const CASE_TERMINATORS: Record<number, CaseTerminator> = {
   [Token.DoubleSemi]: ";;",
   [Token.SemiAmp]: ";&",
@@ -469,12 +573,8 @@ class Parser {
   // arith_command := (( expr ))
   private arithCommand(): ArithmeticCommand {
     const tok = this.tok.next(LexContext.CommandStart);
-    const body = tok.value;
-    const tokPos = tok.pos;
-    const tokEnd = tok.end;
-    const expr = parseArithmeticExpression(body, tokPos + 2) ?? undefined;
     this._redirects = this.collectTrailingRedirects();
-    return { type: "ArithmeticCommand", pos: tokPos, end: tokEnd, expression: expr, body };
+    return new ArithmeticCommandImpl(tok.pos, tok.end, tok.value);
   }
 
   // coproc := COPROC [name] command [redirections]
@@ -629,25 +729,11 @@ class Parser {
   // C-style for: (( expr; expr; expr )) [;|NL] do list done | { list }
   private cStyleFor(pos: number): ArithmeticFor {
     const [initStr, testStr, updateStr, initPos, testPos, updatePos] = this.tok.readCStyleForExprs();
-    const init = initStr ? (parseArithmeticExpression(initStr) ?? undefined) : undefined;
-    const test_ = testStr ? (parseArithmeticExpression(testStr) ?? undefined) : undefined;
-    const update = updateStr ? (parseArithmeticExpression(updateStr) ?? undefined) : undefined;
-    if (init) offsetArith(init, initPos);
-    if (test_) offsetArith(test_, testPos);
-    if (update) offsetArith(update, updatePos);
     if (this.tok.peek(LexContext.CommandStart).token === Token.Semi) this.tok.next(LexContext.CommandStart);
     this.skipNewlines(LexContext.CommandStart);
     if (this.tok.peek(LexContext.CommandStart).token === Token.LBrace) {
       const bg = this.braceGroup();
-      return {
-        type: "ArithmeticFor",
-        pos,
-        end: bg.end,
-        initialize: init,
-        test: test_,
-        update,
-        body: bg.body,
-      } satisfies ArithmeticFor;
+      return new ArithmeticForImpl(pos, bg.end, bg.body, initStr, testStr, updateStr, initPos, testPos, updatePos);
     }
     if (!this.accept(Token.Do, LexContext.CommandStart)) this.error("expected 'do'", this.tok.getPos());
     const body = this.list();
@@ -655,15 +741,7 @@ class Parser {
     if (closeEnd < 0) this.error("expected 'done' to close 'for'", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
     this._redirects = this.collectTrailingRedirects();
-    return {
-      type: "ArithmeticFor",
-      pos,
-      end,
-      initialize: init,
-      test: test_,
-      update,
-      body: this.makeCompoundList(body),
-    } satisfies ArithmeticFor;
+    return new ArithmeticForImpl(pos, end, this.makeCompoundList(body), initStr, testStr, updateStr, initPos, testPos, updatePos);
   }
 
   private whileClause(): While {
