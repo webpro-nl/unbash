@@ -37,9 +37,36 @@ import type {
   TestUnaryExpression,
   While,
   Word,
+  WordPart,
 } from "./types.ts";
 import { LexContext, Token, Lexer, TokenValue } from "./lexer.ts";
 import { parseArithmeticExpression } from "./arithmetic.ts";
+import { computeWordParts } from "./parts.ts";
+
+class WordImpl implements Word {
+  text: string;
+  pos: number;
+  end: number;
+  #source: string;
+  #parts: WordPart[] | undefined | null = null; // null = not yet computed
+
+  constructor(text: string, pos: number, end: number, source: string) {
+    this.text = text;
+    this.pos = pos;
+    this.end = end;
+    this.#source = source;
+  }
+
+  get parts(): WordPart[] | undefined {
+    if (this.#parts === null) {
+      this.#parts = computeWordParts(this.#source, this) ?? undefined;
+    }
+    return this.#parts;
+  }
+  set parts(v: WordPart[] | undefined) {
+    this.#parts = v ?? undefined;
+  }
+}
 
 const CASE_TERMINATORS: Record<number, CaseTerminator> = {
   [Token.DoubleSemi]: ";;",
@@ -175,11 +202,13 @@ export function parse(source: string): Script & { errors?: ParseError[] } {
 
 class Parser {
   private tok: Lexer;
+  private source: string;
   private errors: ParseError[] = [];
   private _redirects: Redirect[] = [];
 
   constructor(source: string) {
     this.tok = new Lexer(source);
+    this.source = source;
   }
 
   parse(sourceLen: number): Script & { errors?: ParseError[] } {
@@ -961,7 +990,7 @@ class Parser {
       body: undefined,
     };
     if (t.content != null) {
-      r.target = { text: t.content, pos: t.targetPos, end: t.targetEnd, parts: undefined };
+      r.target = new WordImpl(t.content, t.targetPos, t.targetEnd, this.source);
     }
     if (t.value === "<<" || t.value === "<<-") this.tok.registerHereDocTarget(r);
     redirects.push(r);
@@ -982,11 +1011,11 @@ class Parser {
   }
 
   private toWord(tok: TokenValue): Word {
-    return { text: tok.value, pos: tok.pos, end: tok.end, parts: undefined };
+    return new WordImpl(tok.value, tok.pos, tok.end, this.source);
   }
 
   private toWordFromPosEnd(tok: TokenValue, pos: number, end: number): Word {
-    return { text: tok.value, pos, end, parts: undefined };
+    return new WordImpl(tok.value, pos, end, this.source);
   }
 
   private parseAssignment(tok: TokenValue): AssignmentPrefix {
@@ -1045,7 +1074,7 @@ class Parser {
       const elements = this.parseArrayElements(inner, arrayOffset);
       result.array = elements;
     } else {
-      result.value = { text: valText, pos: tokPos + valStart, end: tokEnd, parts: undefined };
+      result.value = new WordImpl(valText, tokPos + valStart, tokEnd, this.source);
     }
 
     return result;
