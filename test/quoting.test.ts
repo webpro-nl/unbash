@@ -60,7 +60,7 @@ test("backslash-escaped reserved word is not a keyword", () => {
 
 test("single quote inside double quotes is literal", () => {
   const c = getCmd(parse(`echo "TEST1 'TEST2"`));
-  assert.equal(c.suffix[0].text, "\"TEST1 'TEST2\"");
+  assert.equal(c.suffix[0].text, '"TEST1 \'TEST2"');
 });
 
 test("double quote inside single quotes is literal", () => {

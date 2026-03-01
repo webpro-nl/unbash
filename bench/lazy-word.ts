@@ -123,7 +123,7 @@ function visitTestExpr(expr: import("../src/types.ts").TestExpression): number {
 }
 
 function touchWord(w: Word): number {
-  w.parts; // trigger lazy computation
+  void w.parts; // trigger lazy computation
   return 1;
 }
 

@@ -18,7 +18,11 @@ test("double-quoted literal", () => {
   const src = 'echo "hello world"';
   const c = getCmd(parse(src));
   assert.deepEqual(p(src, c.suffix[0]), [
-    { type: "DoubleQuoted", text: '"hello world"', parts: [{ type: "Literal", value: "hello world", text: "hello world" }] },
+    {
+      type: "DoubleQuoted",
+      text: '"hello world"',
+      parts: [{ type: "Literal", value: "hello world", text: "hello world" }],
+    },
   ]);
 });
 

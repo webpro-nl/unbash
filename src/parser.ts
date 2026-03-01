@@ -1,6 +1,6 @@
 // oxlint-disable unicorn/no-thenable
-export type { AssignmentPrefix, Node, ParseError, Script, Statement, WordPart } from "./types.ts";
-export { computeWordParts } from "./parts.ts";
+export type * from "./types.ts";
+
 import type {
   ArithmeticCommand,
   ArithmeticExpression,
@@ -69,7 +69,7 @@ class WordImpl implements Word {
 }
 
 class ArithmeticCommandImpl implements ArithmeticCommand {
-  type: "ArithmeticCommand" = "ArithmeticCommand";
+  type = "ArithmeticCommand" as const;
   pos: number;
   end: number;
   body: string;
@@ -93,7 +93,7 @@ class ArithmeticCommandImpl implements ArithmeticCommand {
 }
 
 class ArithmeticForImpl implements ArithmeticFor {
-  type: "ArithmeticFor" = "ArithmeticFor";
+  type = "ArithmeticFor" as const;
   pos: number;
   end: number;
   body: CompoundList;
@@ -108,9 +108,15 @@ class ArithmeticForImpl implements ArithmeticFor {
   #update: ArithmeticExpression | undefined | null = null;
 
   constructor(
-    pos: number, end: number, body: CompoundList,
-    initStr: string, testStr: string, updateStr: string,
-    initPos: number, testPos: number, updatePos: number,
+    pos: number,
+    end: number,
+    body: CompoundList,
+    initStr: string,
+    testStr: string,
+    updateStr: string,
+    initPos: number,
+    testPos: number,
+    updatePos: number,
   ) {
     this.pos = pos;
     this.end = end;
@@ -747,7 +753,17 @@ class Parser {
     if (closeEnd < 0) this.error("expected 'done' to close 'for'", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
     this._redirects = this.collectTrailingRedirects();
-    return new ArithmeticForImpl(pos, end, this.makeCompoundList(body), initStr, testStr, updateStr, initPos, testPos, updatePos);
+    return new ArithmeticForImpl(
+      pos,
+      end,
+      this.makeCompoundList(body),
+      initStr,
+      testStr,
+      updateStr,
+      initPos,
+      testPos,
+      updatePos,
+    );
   }
 
   private whileClause(): While {
@@ -777,7 +793,8 @@ class Parser {
     const pos = this.tok.next(LexContext.CommandStart).pos;
     const word = this.readWord(LexContext.Normal);
     this.skipNewlines(LexContext.CommandStart);
-    if (!this.accept(Token.In, LexContext.CommandStart)) this.error("expected 'in' after 'case' word", this.tok.getPos());
+    if (!this.accept(Token.In, LexContext.CommandStart))
+      this.error("expected 'in' after 'case' word", this.tok.getPos());
     this.skipNewlines(LexContext.CommandStart);
 
     const items: CaseItem[] = [];
@@ -853,7 +870,8 @@ class Parser {
     const pos = this.tok.next(LexContext.CommandStart).pos; // consume [[
     const expr = this.parseTestOr();
     const closeEnd = this.acceptEnd(Token.DblRBracket, LexContext.TestMode);
-    if (closeEnd < 0 && this.tok.peek(LexContext.Normal).token === Token.EOF) this.error("expected ']]' to close '[['", this.tok.getPos());
+    if (closeEnd < 0 && this.tok.peek(LexContext.Normal).token === Token.EOF)
+      this.error("expected ']]' to close '[['", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
     this._redirects = this.collectTrailingRedirects();
     return { type: "TestCommand", pos, end, expression: expr };
@@ -1188,5 +1206,4 @@ class Parser {
     const end = commands.length > 0 ? commands[commands.length - 1].end : p;
     return { type: "CompoundList", pos, end, commands };
   }
-
 }

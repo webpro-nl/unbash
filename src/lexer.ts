@@ -1619,7 +1619,8 @@ export class Lexer {
 
     if (bp && parts && litBuf) parts.push({ type: "Literal", value: litBuf, text: src.slice(litStart, this.pos) });
 
-    if (this.pos < len) this.pos++; // closing "
+    if (this.pos < len)
+      this.pos++; // closing "
     else this.errors.push({ message: "unterminated double quote", pos: contentStart - 1 });
     this._dqText = text;
     this._dqHasExpansions = hasExpansions;
@@ -1668,7 +1669,9 @@ export class Lexer {
       const value = this.readAnsiCQuoted();
       this._resultText = value;
       this._resultHasExpansion = false;
-      this._resultPart = this._buildParts ? { type: "AnsiCQuoted", text: src.slice(dollarPos, this.pos), value } : undefined;
+      this._resultPart = this._buildParts
+        ? { type: "AnsiCQuoted", text: src.slice(dollarPos, this.pos), value }
+        : undefined;
       return;
     }
 
@@ -1682,7 +1685,9 @@ export class Lexer {
         this._resultPart = {
           type: "LocaleString",
           text,
-          parts: this._dqParts ?? [{ type: "Literal", value: this._dqText, text: src.slice(dollarPos + 2, this.pos - 1) }],
+          parts: this._dqParts ?? [
+            { type: "Literal", value: this._dqText, text: src.slice(dollarPos + 2, this.pos - 1) },
+          ],
         };
       } else {
         this._resultPart = undefined;
@@ -1880,7 +1885,8 @@ export class Lexer {
         }
       }
     }
-    if (this.pos < len) this.pos++; // closing `
+    if (this.pos < len)
+      this.pos++; // closing `
     else this.errors.push({ message: "unterminated backtick", pos: start - 1 });
 
     const text = src.slice(start - 1, this.pos); // raw source including backticks

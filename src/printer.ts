@@ -72,8 +72,7 @@ function heredocBody(r: Redirect): string {
 function delimName(r: Redirect): string {
   if (!r.target) return "";
   const text = wd(r.target);
-  if ((text[0] === "'" && text[text.length - 1] === "'") ||
-      (text[0] === '"' && text[text.length - 1] === '"')) {
+  if ((text[0] === "'" && text[text.length - 1] === "'") || (text[0] === '"' && text[text.length - 1] === '"')) {
     return text.slice(1, -1);
   }
   if (text.includes("\\")) return text.replaceAll("\\", "");
@@ -82,22 +81,38 @@ function delimName(r: Redirect): string {
 
 function printNode(n: Node, indent: number): string {
   switch (n.type) {
-    case "Command": return cmd(n);
-    case "Pipeline": return pipe(n, indent);
-    case "AndOr": return andOr(n, indent);
-    case "If": return ifNode(n, indent, false);
-    case "For": return forNode(n, indent);
-    case "While": return whileNode(n, indent);
-    case "Case": return caseNode(n, indent);
-    case "Function": return funcNode(n, indent);
-    case "Subshell": return subshell(n, indent);
-    case "BraceGroup": return braceGroup(n, indent);
-    case "CompoundList": return stmts(n.commands, indent);
-    case "TestCommand": return testCmd(n);
-    case "ArithmeticCommand": return arithCmd(n);
-    case "Select": return selectNode(n, indent);
-    case "ArithmeticFor": return arithFor(n, indent);
-    case "Coproc": return coprocNode(n, indent);
+    case "Command":
+      return cmd(n);
+    case "Pipeline":
+      return pipe(n, indent);
+    case "AndOr":
+      return andOr(n, indent);
+    case "If":
+      return ifNode(n, indent, false);
+    case "For":
+      return forNode(n, indent);
+    case "While":
+      return whileNode(n, indent);
+    case "Case":
+      return caseNode(n, indent);
+    case "Function":
+      return funcNode(n, indent);
+    case "Subshell":
+      return subshell(n, indent);
+    case "BraceGroup":
+      return braceGroup(n, indent);
+    case "CompoundList":
+      return stmts(n.commands, indent);
+    case "TestCommand":
+      return testCmd(n);
+    case "ArithmeticCommand":
+      return arithCmd(n);
+    case "Select":
+      return selectNode(n, indent);
+    case "ArithmeticFor":
+      return arithFor(n, indent);
+    case "Coproc":
+      return coprocNode(n, indent);
     case "Statement": {
       let out = printNode(n.command, indent);
       for (const r of n.redirects) out += " " + redir(r);
@@ -119,7 +134,7 @@ function assign(a: AssignmentPrefix): string {
   if (a.index != null) out += "[" + a.index + "]";
   out += a.append ? "+=" : "=";
   if (a.array) {
-    out += "(" + a.array.map(w => wd(w)).join(" ") + ")";
+    out += "(" + a.array.map((w) => wd(w)).join(" ") + ")";
   } else if (a.value) {
     out += wd(a.value);
   }
@@ -202,7 +217,7 @@ function caseNode(n: Case, indent: number): string {
   const bPad = "  ".repeat(indent + 2);
   let out = "case " + wd(n.word) + " in\n";
   for (const item of n.items) {
-    out += iPad + item.pattern.map(p => wd(p)).join(" | ") + ")\n";
+    out += iPad + item.pattern.map((p) => wd(p)).join(" | ") + ")\n";
     if (item.body.commands.length > 0) {
       out += stmts(item.body.commands, indent + 2) + "\n";
     }
@@ -252,11 +267,16 @@ function testCmd(n: TestCommand): string {
 
 function testExpr(e: TestExpression): string {
   switch (e.type) {
-    case "TestUnary": return e.operator + " " + wd(e.operand);
-    case "TestBinary": return wd(e.left) + " " + e.operator + " " + wd(e.right);
-    case "TestLogical": return testExpr(e.left) + " " + e.operator + " " + testExpr(e.right);
-    case "TestNot": return "! " + testExpr(e.operand);
-    case "TestGroup": return "( " + testExpr(e.expression) + " )";
+    case "TestUnary":
+      return e.operator + " " + wd(e.operand);
+    case "TestBinary":
+      return wd(e.left) + " " + e.operator + " " + wd(e.right);
+    case "TestLogical":
+      return testExpr(e.left) + " " + e.operator + " " + testExpr(e.right);
+    case "TestNot":
+      return "! " + testExpr(e.operand);
+    case "TestGroup":
+      return "( " + testExpr(e.expression) + " )";
   }
 }
 
@@ -286,12 +306,12 @@ function coprocNode(n: Coproc, indent: number): string {
 
 function arithExpr(e: ArithmeticExpression): string {
   switch (e.type) {
-    case "ArithmeticWord": return e.value;
-    case "ArithmeticGroup": return "(" + arithExpr(e.expression) + ")";
+    case "ArithmeticWord":
+      return e.value;
+    case "ArithmeticGroup":
+      return "(" + arithExpr(e.expression) + ")";
     case "ArithmeticUnary":
-      return e.prefix
-        ? e.operator + arithExpr(e.operand)
-        : arithExpr(e.operand) + e.operator;
+      return e.prefix ? e.operator + arithExpr(e.operand) : arithExpr(e.operand) + e.operator;
     case "ArithmeticTernary":
       return arithExpr(e.test) + " ? " + arithExpr(e.consequent) + " : " + arithExpr(e.alternate);
     case "ArithmeticBinary": {
@@ -308,30 +328,72 @@ function arithExpr(e: ArithmeticExpression): string {
 
 function arithPrec(op: string): number {
   switch (op) {
-    case ",": return 1;
-    case "=": case "+=": case "-=": case "*=": case "/=": case "%=":
-    case "<<=": case ">>=": case "&=": case "|=": case "^=": return 2;
-    case "||": return 4;
-    case "&&": return 5;
-    case "|": return 6;
-    case "^": return 7;
-    case "&": return 8;
-    case "==": case "!=": return 9;
-    case "<": case "<=": case ">": case ">=": return 10;
-    case "<<": case ">>": return 11;
-    case "+": case "-": return 12;
-    case "*": case "/": case "%": return 13;
-    case "**": return 14;
-    default: return 0;
+    case ",":
+      return 1;
+    case "=":
+    case "+=":
+    case "-=":
+    case "*=":
+    case "/=":
+    case "%=":
+    case "<<=":
+    case ">>=":
+    case "&=":
+    case "|=":
+    case "^=":
+      return 2;
+    case "||":
+      return 4;
+    case "&&":
+      return 5;
+    case "|":
+      return 6;
+    case "^":
+      return 7;
+    case "&":
+      return 8;
+    case "==":
+    case "!=":
+      return 9;
+    case "<":
+    case "<=":
+    case ">":
+    case ">=":
+      return 10;
+    case "<<":
+    case ">>":
+      return 11;
+    case "+":
+    case "-":
+      return 12;
+    case "*":
+    case "/":
+    case "%":
+      return 13;
+    case "**":
+      return 14;
+    default:
+      return 0;
   }
 }
 
 function arithRightAssoc(op: string): boolean {
   switch (op) {
-    case "=": case "+=": case "-=": case "*=": case "/=": case "%=":
-    case "<<=": case ">>=": case "&=": case "|=": case "^=":
-    case "**": return true;
-    default: return false;
+    case "=":
+    case "+=":
+    case "-=":
+    case "*=":
+    case "/=":
+    case "%=":
+    case "<<=":
+    case ">>=":
+    case "&=":
+    case "|=":
+    case "^=":
+    case "**":
+      return true;
+    default:
+      return false;
   }
 }
 

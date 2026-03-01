@@ -130,6 +130,7 @@ function verifyParts(source: string, word: AnyNode) {
   }
 }
 
+// oxlint-disable-next-line only-used-in-recursion
 function verifyPartChildren(source: string, part: WordPart | DoubleQuotedChild) {
   if (part.type === "DoubleQuoted" || part.type === "LocaleString") {
     const prefix = part.type === "LocaleString" ? 2 : 1; // $" vs "

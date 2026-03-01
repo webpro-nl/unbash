@@ -26,7 +26,7 @@ test("simple command", () => {
 });
 
 test("command with quoted args", () => {
-  assert.equal(fmt('echo "hello world" \'foo\''), 'echo "hello world" \'foo\'');
+  assert.equal(fmt("echo \"hello world\" 'foo'"), "echo \"hello world\" 'foo'");
 });
 
 test("assignment-only command", () => {
@@ -102,122 +102,74 @@ test("mixed and/or", () => {
 // --- If ---
 
 test("if/then/fi", () => {
-  assert.equal(fmt("if true; then echo yes; fi"), [
-    "if true; then",
-    "  echo yes",
-    "fi",
-  ].join("\n"));
+  assert.equal(fmt("if true; then echo yes; fi"), ["if true; then", "  echo yes", "fi"].join("\n"));
 });
 
 test("if/else/fi", () => {
-  assert.equal(fmt("if test -f x; then echo y; else echo n; fi"), [
-    "if test -f x; then",
-    "  echo y",
-    "else",
-    "  echo n",
-    "fi",
-  ].join("\n"));
+  assert.equal(
+    fmt("if test -f x; then echo y; else echo n; fi"),
+    ["if test -f x; then", "  echo y", "else", "  echo n", "fi"].join("\n"),
+  );
 });
 
 test("if/elif/else/fi", () => {
-  assert.equal(fmt("if a; then b; elif c; then d; else e; fi"), [
-    "if a; then",
-    "  b",
-    "elif c; then",
-    "  d",
-    "else",
-    "  e",
-    "fi",
-  ].join("\n"));
+  assert.equal(
+    fmt("if a; then b; elif c; then d; else e; fi"),
+    ["if a; then", "  b", "elif c; then", "  d", "else", "  e", "fi"].join("\n"),
+  );
 });
 
 test("nested if", () => {
-  assert.equal(fmt("if a; then if b; then c; fi; fi"), [
-    "if a; then",
-    "  if b; then",
-    "    c",
-    "  fi",
-    "fi",
-  ].join("\n"));
+  assert.equal(
+    fmt("if a; then if b; then c; fi; fi"),
+    ["if a; then", "  if b; then", "    c", "  fi", "fi"].join("\n"),
+  );
 });
 
 // --- For ---
 
 test("for loop", () => {
-  assert.equal(fmt("for x in a b c; do echo $x; done"), [
-    "for x in a b c; do",
-    "  echo $x",
-    "done",
-  ].join("\n"));
+  assert.equal(fmt("for x in a b c; do echo $x; done"), ["for x in a b c; do", "  echo $x", "done"].join("\n"));
 });
 
 test("for loop without wordlist", () => {
-  assert.equal(fmt('for x; do echo $x; done'), [
-    "for x; do",
-    "  echo $x",
-    "done",
-  ].join("\n"));
+  assert.equal(fmt("for x; do echo $x; done"), ["for x; do", "  echo $x", "done"].join("\n"));
 });
 
 // --- While / Until ---
 
 test("while loop", () => {
-  assert.equal(fmt("while true; do echo loop; done"), [
-    "while true; do",
-    "  echo loop",
-    "done",
-  ].join("\n"));
+  assert.equal(fmt("while true; do echo loop; done"), ["while true; do", "  echo loop", "done"].join("\n"));
 });
 
 test("until loop", () => {
-  assert.equal(fmt("until false; do echo loop; done"), [
-    "until false; do",
-    "  echo loop",
-    "done",
-  ].join("\n"));
+  assert.equal(fmt("until false; do echo loop; done"), ["until false; do", "  echo loop", "done"].join("\n"));
 });
 
 // --- Case ---
 
 test("case statement", () => {
-  assert.equal(fmt("case $x in a) echo a;; b) echo b;; esac"), [
-    "case $x in",
-    "  a)",
-    "    echo a",
-    "    ;;",
-    "  b)",
-    "    echo b",
-    "    ;;",
-    "esac",
-  ].join("\n"));
+  assert.equal(
+    fmt("case $x in a) echo a;; b) echo b;; esac"),
+    ["case $x in", "  a)", "    echo a", "    ;;", "  b)", "    echo b", "    ;;", "esac"].join("\n"),
+  );
 });
 
 test("case with multiple patterns", () => {
-  assert.equal(fmt("case $x in a|b) echo ab;; esac"), [
-    "case $x in",
-    "  a | b)",
-    "    echo ab",
-    "    ;;",
-    "esac",
-  ].join("\n"));
+  assert.equal(
+    fmt("case $x in a|b) echo ab;; esac"),
+    ["case $x in", "  a | b)", "    echo ab", "    ;;", "esac"].join("\n"),
+  );
 });
 
 // --- Function ---
 
 test("function definition", () => {
-  assert.equal(fmt("foo() { echo hello; }"), [
-    "foo() {",
-    "  echo hello",
-    "}",
-  ].join("\n"));
+  assert.equal(fmt("foo() { echo hello; }"), ["foo() {", "  echo hello", "}"].join("\n"));
 });
 
 test("function with keyword", () => {
-  assert.equal(fmt("function bar { echo hi; }"), [
-    "bar() {",
-    "  echo hi",
-    "}",
-  ].join("\n"));
+  assert.equal(fmt("function bar { echo hi; }"), ["bar() {", "  echo hi", "}"].join("\n"));
 });
 
 // --- Subshell ---
@@ -227,23 +179,13 @@ test("subshell single command", () => {
 });
 
 test("subshell multi command", () => {
-  assert.equal(fmt("(echo a; echo b)"), [
-    "(",
-    "  echo a",
-    "  echo b",
-    ")",
-  ].join("\n"));
+  assert.equal(fmt("(echo a; echo b)"), ["(", "  echo a", "  echo b", ")"].join("\n"));
 });
 
 // --- Brace group ---
 
 test("brace group", () => {
-  assert.equal(fmt("{ echo a; echo b; }"), [
-    "{",
-    "  echo a",
-    "  echo b",
-    "}",
-  ].join("\n"));
+  assert.equal(fmt("{ echo a; echo b; }"), ["{", "  echo a", "  echo b", "}"].join("\n"));
 });
 
 // --- Test command ---
@@ -253,7 +195,7 @@ test("test unary", () => {
 });
 
 test("test binary", () => {
-  assert.equal(fmt('[[ $x = hello ]]'), "[[ $x = hello ]]");
+  assert.equal(fmt("[[ $x = hello ]]"), "[[ $x = hello ]]");
 });
 
 test("test logical", () => {
@@ -277,29 +219,20 @@ test("arithmetic command normalizes spacing", () => {
 // --- Arithmetic for ---
 
 test("arithmetic for loop", () => {
-  assert.equal(fmt("for ((i=0; i<10; i++)); do echo $i; done"), [
-    "for (( i = 0; i < 10; i++ )); do",
-    "  echo $i",
-    "done",
-  ].join("\n"));
+  assert.equal(
+    fmt("for ((i=0; i<10; i++)); do echo $i; done"),
+    ["for (( i = 0; i < 10; i++ )); do", "  echo $i", "done"].join("\n"),
+  );
 });
 
 // --- Coproc ---
 
 test("coproc with name", () => {
-  assert.equal(fmt("coproc myproc { echo hello; }"), [
-    "coproc myproc {",
-    "  echo hello",
-    "}",
-  ].join("\n"));
+  assert.equal(fmt("coproc myproc { echo hello; }"), ["coproc myproc {", "  echo hello", "}"].join("\n"));
 });
 
 test("coproc without name", () => {
-  assert.equal(fmt("coproc { echo hello; }"), [
-    "coproc {",
-    "  echo hello",
-    "}",
-  ].join("\n"));
+  assert.equal(fmt("coproc { echo hello; }"), ["coproc {", "  echo hello", "}"].join("\n"));
 });
 
 // --- Background ---
@@ -311,11 +244,7 @@ test("background command", () => {
 // --- Multiple statements ---
 
 test("multiple statements", () => {
-  assert.equal(fmt("echo a; echo b; echo c"), [
-    "echo a",
-    "echo b",
-    "echo c",
-  ].join("\n"));
+  assert.equal(fmt("echo a; echo b; echo c"), ["echo a", "echo b", "echo c"].join("\n"));
 });
 
 // --- Heredoc ---
