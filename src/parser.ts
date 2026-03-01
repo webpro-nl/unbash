@@ -1089,15 +1089,15 @@ class Parser {
   }
 
   private toWord(tok: TokenValue): Word {
-    return new WordImpl(tok.value, tok.pos, tok.end, this.source);
+    return new WordImpl(this.source.slice(tok.pos, tok.end), tok.pos, tok.end, this.source);
   }
 
   private toWordFromPosEnd(tok: TokenValue, pos: number, end: number): Word {
-    return new WordImpl(tok.value, pos, end, this.source);
+    return new WordImpl(this.source.slice(pos, end), pos, end, this.source);
   }
 
   private parseAssignment(tok: TokenValue): AssignmentPrefix {
-    const text = tok.value;
+    const text = this.source.slice(tok.pos, tok.end);
     const tokPos = tok.pos;
     const tokEnd = tok.end;
     const result: AssignmentPrefix = {
@@ -1168,12 +1168,9 @@ class Parser {
       }
       const t = subTok.next(LexContext.Normal);
       if (t.token === Token.Word || t.token === Token.Assignment) {
-        const w = this.toWord(t);
-        if (offset) {
-          w.pos += offset;
-          w.end += offset;
-        }
-        elements.push(w);
+        const pos = t.pos + offset;
+        const end = t.end + offset;
+        elements.push(new WordImpl(this.source.slice(pos, end), pos, end, this.source));
       }
     }
     return elements;

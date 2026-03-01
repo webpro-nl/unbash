@@ -110,12 +110,12 @@ test("# after word is a comment", () => {
 
 test("# in single quotes is literal", () => {
   const c = getCmd(parse("echo '# not a comment'"));
-  assert.equal(c.suffix[0].text, "# not a comment");
+  assert.equal(c.suffix[0].text, "'# not a comment'");
 });
 
 test("# in double quotes is literal", () => {
   const c = getCmd(parse('echo "# not a comment"'));
-  assert.equal(c.suffix[0].text, "# not a comment");
+  assert.equal(c.suffix[0].text, '"# not a comment"');
 });
 
 test("# at start of line is a comment", () => {
@@ -178,7 +178,7 @@ test("empty assignment followed by semicolon", () => {
 
 test("# after quote is not a comment", () => {
   const c = getCmd(parse("echo 'word'#not-comment"));
-  assert.equal(c.suffix[0].text, "word#not-comment");
+  assert.equal(c.suffix[0].text, "'word'#not-comment");
 });
 
 test("# after command substitution is not a comment", () => {
@@ -214,7 +214,7 @@ test("nested conditional parameter expansion with unbalanced parens", () => {
 
 test("escaped whitespace continues word", () => {
   const c = getCmd(parse("echo hello\\ world"));
-  assert.equal(c.suffix[0].text, "hello world");
+  assert.equal(c.suffix[0].text, "hello\\ world");
 });
 
 test("double-quoted string with nested double-quoted $() expansion", () => {

@@ -185,7 +185,7 @@ test("double-quoted with arithmetic", () => {
 test("escaped characters in unquoted word", () => {
   // backslash-escaped char enters slow path but is literal
   const c = getCmd(parse("echo hello\\ world"));
-  assert.equal(c.suffix[0].text, "hello world");
+  assert.equal(c.suffix[0].text, "hello\\ world");
   // single literal — parts should be null (no structure)
   assert.equal(computeWordParts("echo hello\\ world", c.suffix[0]), undefined);
 });
@@ -212,7 +212,7 @@ test("assignment word gets parts", () => {
 test("text field unchanged with parts", () => {
   const src = 'echo "hello $name world"';
   const c = getCmd(parse(src));
-  assert.equal(c.suffix[0].text, "hello $name world");
+  assert.equal(c.suffix[0].text, '"hello $name world"');
   assert.ok(p(src, c.suffix[0]));
 });
 

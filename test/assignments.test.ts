@@ -118,8 +118,8 @@ test("array with quoted elements", () => {
   assert.equal(a.name, "x");
   assert.ok(a.array);
   assert.equal(a.array!.length, 2);
-  assert.equal(a.array![0].text, "hello world");
-  assert.equal(a.array![1].text, "literal");
+  assert.equal(a.array![0].text, '"hello world"');
+  assert.equal(a.array![1].text, "'literal'");
 });
 
 test("array with command substitution", () => {
@@ -161,7 +161,7 @@ test("value with double-quoted expansion", () => {
   const input = 'z="hello $name"';
   const a = getAssign(input);
   assert.equal(a.name, "z");
-  assert.equal(a.value?.text, "hello $name");
+  assert.equal(a.value?.text, '"hello $name"');
   assert.ok(computeWordParts(input, a.value!));
   assert.equal(computeWordParts(input, a.value!)![0].type, "DoubleQuoted");
 });

@@ -91,7 +91,7 @@ test("backtick in double quotes", () => {
 test('$"..." locale string', () => {
   const c = getCmd(parse('echo $"hello world"'));
   assert.equal(c.name?.text, "echo");
-  assert.equal(c.suffix[0].text, "hello world");
+  assert.equal(c.suffix[0].text, '$"hello world"');
 });
 
 test('$"..." with variable interpolation', () => {
