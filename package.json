@@ -31,7 +31,7 @@
     "lint": "oxlint",
     "prepack": "tsc",
     "test": "node --test test/*.test.ts",
-    "playground": "npx rolldown src/parser.ts -f esm -m -o playground/parser.js && npx rolldown src/printer.ts -f esm -m -o playground/printer.js"
+    "playground": "npx rolldown src/parser.ts -f esm -m -o playground/parser.js && npx rolldown src/printer.ts -f esm -m -o playground/printer.js && sed -i 's/id=\"version\">[^<]*/id=\"version\">'\"$(node -p \"require('.\\x2fpackage.json').version\")\"'/' playground/index.html"
   },
   "devDependencies": {
     "@ericcornelissen/bash-parser": "^0.5.3",
