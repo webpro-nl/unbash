@@ -125,6 +125,36 @@ test("$'...' adjacent to unquoted text", () => {
   assert.equal(c.suffix[0].text, "foo$'\\n'bar");
 });
 
+// ── Word.value (dequoted) ───────────────────────────────────────────
+
+test("value strips double quotes", () => {
+  assert.equal(getCmd(parse('echo "hello world"')).suffix[0].value, "hello world");
+});
+
+test("value strips single quotes", () => {
+  assert.equal(getCmd(parse("echo 'hello world'")).suffix[0].value, "hello world");
+});
+
+test("value on unquoted word equals text", () => {
+  assert.equal(getCmd(parse("echo hello")).suffix[0].value, "hello");
+});
+
+test("value joins adjacent quoted segments", () => {
+  assert.equal(getCmd(parse("echo 'foo'\"bar\"baz")).suffix[0].value, "foobarbaz");
+});
+
+test("value interprets ansi-c escapes", () => {
+  assert.equal(getCmd(parse("echo $'hello\\nworld'")).suffix[0].value, "hello\nworld");
+});
+
+test("value preserves expansion text", () => {
+  assert.equal(getCmd(parse('echo "$HOME/bin"')).suffix[0].value, "$HOME/bin");
+});
+
+test("value on command name with quotes", () => {
+  assert.equal(getCmd(parse('"if" true')).name?.value, "if");
+});
+
 // ── Line continuation ───────────────────────────────────────────────
 
 test("backslash-newline mid-word joins lines", () => {

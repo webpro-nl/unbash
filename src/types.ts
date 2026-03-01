@@ -1,5 +1,6 @@
 export interface Word {
   text: string;
+  value: string;
   pos: number;
   end: number;
   parts?: WordPart[];

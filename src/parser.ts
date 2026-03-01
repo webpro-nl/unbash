@@ -37,36 +37,13 @@ import type {
   TestUnaryExpression,
   While,
   Word,
-  WordPart,
 } from "./types.ts";
 import { LexContext, Token, Lexer, TokenValue } from "./lexer.ts";
 import { parseArithmeticExpression } from "./arithmetic.ts";
 import { computeWordParts } from "./parts.ts";
+import { WordImpl } from "./word.ts";
 
-class WordImpl implements Word {
-  text: string;
-  pos: number;
-  end: number;
-  #source: string;
-  #parts: WordPart[] | undefined | null = null; // null = not yet computed
-
-  constructor(text: string, pos: number, end: number, source: string) {
-    this.text = text;
-    this.pos = pos;
-    this.end = end;
-    this.#source = source;
-  }
-
-  get parts(): WordPart[] | undefined {
-    if (this.#parts === null) {
-      this.#parts = computeWordParts(this.#source, this) ?? undefined;
-    }
-    return this.#parts;
-  }
-  set parts(v: WordPart[] | undefined) {
-    this.#parts = v ?? undefined;
-  }
-}
+WordImpl._resolve = computeWordParts;
 
 class ArithmeticCommandImpl implements ArithmeticCommand {
   type = "ArithmeticCommand" as const;

@@ -9,6 +9,7 @@ import type {
   WordPart,
 } from "./types.ts";
 import { parseArithmeticExpression } from "./arithmetic.ts";
+import { WordImpl } from "./word.ts";
 import {
   CH_TAB,
   CH_NL,
@@ -966,7 +967,7 @@ export class Lexer {
       if (c === CH_BACKSLASH) i++; // skip escaped char
     }
     if (!hasExpansion) return null;
-    return { text: body, pos: bodyPos, end: bodyPos + body.length, parts: undefined };
+    return new WordImpl(body, bodyPos, bodyPos + body.length);
   }
 
   private _wordText = "";
@@ -1396,7 +1397,7 @@ export class Lexer {
   }
 
   private parseSubFieldWord(s: string): Word {
-    if (!s) return { text: "", pos: 0, end: 0, parts: undefined };
+    if (!s) return new WordImpl("", 0, 0);
     const savedSrc = this.src;
     const savedPos = this.pos;
     const savedText = this._wordText;
@@ -1407,11 +1408,7 @@ export class Lexer {
     this.pos = 0;
     this.readInnerWordText();
 
-    const word: Word = {
-      text: this._wordText,
-      pos: 0,
-      end: 0,
-    };
+    const word = new WordImpl(this._wordText, 0, 0);
     if (this._buildParts && this._wordParts) {
       word.parts = this._wordParts;
     }
@@ -2100,7 +2097,7 @@ export class Lexer {
       if (sepIdx === -1) {
         result.replace = {
           pattern: this.parseSubFieldWord(rest),
-          replacement: { text: "", pos: 0, end: 0, parts: undefined },
+          replacement: new WordImpl("", 0, 0),
         };
       } else {
         result.replace = {
