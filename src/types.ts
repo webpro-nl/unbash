@@ -10,25 +10,30 @@ export interface Word {
 export interface LiteralPart {
   type: "Literal";
   value: string;
+  text: string;
 }
 
 export interface SingleQuotedPart {
   type: "SingleQuoted";
   value: string;
+  text: string;
 }
 
 export interface DoubleQuotedPart {
   type: "DoubleQuoted";
+  text: string;
   parts: DoubleQuotedChild[];
 }
 
 export interface AnsiCQuotedPart {
   type: "AnsiCQuoted";
+  text: string;
   value: string;
 }
 
 export interface LocaleStringPart {
   type: "LocaleString";
+  text: string;
   parts: DoubleQuotedChild[];
 }
 

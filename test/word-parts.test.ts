@@ -17,7 +17,9 @@ test("simple word has no parts", () => {
 test("double-quoted literal", () => {
   const src = 'echo "hello world"';
   const c = getCmd(parse(src));
-  assert.deepEqual(p(src, c.suffix[0]), [{ type: "DoubleQuoted", parts: [{ type: "Literal", value: "hello world" }] }]);
+  assert.deepEqual(p(src, c.suffix[0]), [
+    { type: "DoubleQuoted", text: '"hello world"', parts: [{ type: "Literal", value: "hello world", text: "hello world" }] },
+  ]);
 });
 
 test("double-quoted with variable", () => {
@@ -26,10 +28,11 @@ test("double-quoted with variable", () => {
   assert.deepEqual(p(src, c.suffix[0]), [
     {
       type: "DoubleQuoted",
+      text: '"hello $name world"',
       parts: [
-        { type: "Literal", value: "hello " },
+        { type: "Literal", value: "hello ", text: "hello " },
         { type: "SimpleExpansion", text: "$name" },
-        { type: "Literal", value: " world" },
+        { type: "Literal", value: " world", text: " world" },
       ],
     },
   ]);
@@ -99,7 +102,7 @@ test("arithmetic expansion", () => {
 test("single-quoted string", () => {
   const src = "echo 'hello world'";
   const c = getCmd(parse(src));
-  assert.deepEqual(p(src, c.suffix[0]), [{ type: "SingleQuoted", value: "hello world" }]);
+  assert.deepEqual(p(src, c.suffix[0]), [{ type: "SingleQuoted", value: "hello world", text: "'hello world'" }]);
 });
 
 test("ANSI-C quoted string", () => {
@@ -108,6 +111,7 @@ test("ANSI-C quoted string", () => {
   const parts = p(src, c.suffix[0])!;
   assert.equal(parts.length, 1);
   assert.equal(parts[0].type, "AnsiCQuoted");
+  assert.equal((parts[0] as any).text, "$'line1\\nline2'");
 });
 
 test("mixed quoting: un'quo'ted\"mix\"$end", () => {
@@ -116,11 +120,15 @@ test("mixed quoting: un'quo'ted\"mix\"$end", () => {
   const parts = p(src, c.suffix[0])!;
   assert.equal(parts[0].type, "Literal");
   assert.equal((parts[0] as any).value, "un");
+  assert.equal((parts[0] as any).text, "un");
   assert.equal(parts[1].type, "SingleQuoted");
   assert.equal((parts[1] as any).value, "quo");
+  assert.equal((parts[1] as any).text, "'quo'");
   assert.equal(parts[2].type, "Literal");
   assert.equal((parts[2] as any).value, "ted");
+  assert.equal((parts[2] as any).text, "ted");
   assert.equal(parts[3].type, "DoubleQuoted");
+  assert.equal((parts[3] as any).text, '"mix"');
   assert.equal(parts[4].type, "SimpleExpansion");
   assert.equal((parts[4] as any).text, "$end");
 });
@@ -131,10 +139,12 @@ test("variable concatenated with literal", () => {
   const parts = p(src, c.suffix[0])!;
   assert.equal(parts[0].type, "Literal");
   assert.equal((parts[0] as any).value, "prefix-");
+  assert.equal((parts[0] as any).text, "prefix-");
   assert.equal(parts[1].type, "SimpleExpansion");
   assert.equal((parts[1] as any).text, "$name");
   assert.equal(parts[2].type, "Literal");
   assert.equal((parts[2] as any).value, "-suffix");
+  assert.equal((parts[2] as any).text, "-suffix");
 });
 
 test("double-quoted with command substitution", () => {
@@ -143,10 +153,12 @@ test("double-quoted with command substitution", () => {
   const parts = p(src, c.suffix[0])!;
   assert.equal(parts.length, 1);
   assert.equal(parts[0].type, "DoubleQuoted");
+  assert.equal((parts[0] as any).text, '"hello $(whoami)"');
   const inner = (parts[0] as any).parts;
   assert.equal(inner.length, 2);
   assert.equal(inner[0].type, "Literal");
   assert.equal(inner[0].value, "hello ");
+  assert.equal(inner[0].text, "hello ");
   assert.equal(inner[1].type, "CommandExpansion");
 });
 
@@ -183,9 +195,11 @@ test('locale string $"..."', () => {
   const c = getCmd(parse(src));
   const parts = p(src, c.suffix[0])!;
   assert.equal(parts[0].type, "LocaleString");
+  assert.equal((parts[0] as any).text, '$"hello $name"');
   const inner = (parts[0] as any).parts;
   assert.equal(inner[0].type, "Literal");
   assert.equal(inner[0].value, "hello ");
+  assert.equal(inner[0].text, "hello ");
   assert.equal(inner[1].type, "SimpleExpansion");
 });
 
@@ -200,6 +214,27 @@ test("text field unchanged with parts", () => {
   const c = getCmd(parse(src));
   assert.equal(c.suffix[0].text, "hello $name world");
   assert.ok(p(src, c.suffix[0]));
+});
+
+test("LiteralPart.text includes backslash escapes", () => {
+  const src = "echo he\\nllo-$x";
+  const c = getCmd(parse(src));
+  const parts = p(src, c.suffix[0])!;
+  assert.equal(parts[0].type, "Literal");
+  assert.equal((parts[0] as any).value, "henllo-");
+  assert.equal((parts[0] as any).text, "he\\nllo-");
+});
+
+test("locale string without expansions", () => {
+  const src = 'echo $"hello"';
+  const c = getCmd(parse(src));
+  const parts = p(src, c.suffix[0])!;
+  assert.equal(parts[0].type, "LocaleString");
+  assert.equal((parts[0] as any).text, '$"hello"');
+  const inner = (parts[0] as any).parts;
+  assert.equal(inner[0].type, "Literal");
+  assert.equal(inner[0].value, "hello");
+  assert.equal(inner[0].text, "hello");
 });
 
 test("CommandExpansion part has script", () => {

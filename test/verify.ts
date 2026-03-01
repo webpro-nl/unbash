@@ -1,7 +1,9 @@
 // Round-trip AST verifier: verify(src, parse(src)) === src
 // Walks AST, fills gaps from source, validates content fields against source.
+// Also verifies word parts: parts.map(p => p.text).join('') === source span.
 
-import type { Node, Script } from "../src/types.ts";
+import type { Node, Script, WordPart, DoubleQuotedChild } from "../src/types.ts";
+import { computeWordParts } from "../src/parts.ts";
 
 type AnyNode = { type: string; pos: number; end: number; [k: string]: any };
 
@@ -94,7 +96,12 @@ export function verify(source: string, node: Node | Script): string {
 function _verify(source: string, node: AnyNode): string {
   checkContent(source, node);
   const children = getChildren(node);
-  if (children.length === 0) return source.slice(node.pos, node.end);
+  if (children.length === 0) {
+    if (typeof node.text === "string" && !node.type) {
+      verifyParts(source, node);
+    }
+    return source.slice(node.pos, node.end);
+  }
   let result = "";
   let cursor = node.pos;
   for (const child of children) {
@@ -104,4 +111,49 @@ function _verify(source: string, node: AnyNode): string {
   }
   result += source.slice(cursor, node.end);
   return result;
+}
+
+function verifyParts(source: string, word: AnyNode) {
+  const parts = computeWordParts(source, word as any);
+  if (!parts) return;
+
+  const span = source.slice(word.pos, word.end);
+  const concat = parts.map((p: any) => p.text).join("");
+  if (concat !== span) {
+    throw new Error(
+      `Parts text concat mismatch at ${word.pos}: expected ${JSON.stringify(span)}, got ${JSON.stringify(concat)}`,
+    );
+  }
+
+  for (const part of parts) {
+    verifyPartChildren(source, part);
+  }
+}
+
+function verifyPartChildren(source: string, part: WordPart | DoubleQuotedChild) {
+  if (part.type === "DoubleQuoted" || part.type === "LocaleString") {
+    const prefix = part.type === "LocaleString" ? 2 : 1; // $" vs "
+    const inner = part.text.slice(prefix, -1);
+    const childConcat = part.parts.map((c: any) => c.text).join("");
+    if (childConcat !== inner) {
+      throw new Error(
+        `${part.type} children text concat mismatch: expected ${JSON.stringify(inner)}, got ${JSON.stringify(childConcat)}`,
+      );
+    }
+    for (const child of part.parts) {
+      verifyPartChildren(source, child);
+    }
+  }
+
+  if ((part.type === "CommandExpansion" || part.type === "ProcessSubstitution") && part.script) {
+    const prefix = part.type === "ProcessSubstitution" ? 2 : part.text.startsWith("$(") ? 2 : 1;
+    const suffix = part.text.startsWith("`") ? 1 : 1;
+    const innerSrc = part.text.slice(prefix, -suffix);
+    const rebuilt = _verify(innerSrc, part.script as any);
+    if (rebuilt !== innerSrc) {
+      throw new Error(
+        `${part.type} inner script verify failed: expected ${JSON.stringify(innerSrc)}, got ${JSON.stringify(rebuilt)}`,
+      );
+    }
+  }
 }

@@ -430,11 +430,12 @@ export class Lexer {
     const src = this.src;
     const parts: WordPart[] = [];
     let litBuf = "";
+    let litStart = bodyPos;
     let i = bodyPos;
 
     const flushLit = () => {
       if (litBuf) {
-        parts.push({ type: "Literal", value: litBuf });
+        parts.push({ type: "Literal", value: litBuf, text: src.slice(litStart, i) });
         litBuf = "";
       }
     };
@@ -458,12 +459,13 @@ export class Lexer {
       }
 
       if (ch === 0x24 /* $ */) {
-        // Save state and use lexer to read expansion
         flushLit();
+        litStart = i;
         this.pos = i;
         this.readDollar();
         if (this._resultPart) {
           parts.push(this._resultPart);
+          litStart = this.pos;
         } else {
           litBuf += src.slice(i, this.pos);
         }
@@ -473,10 +475,12 @@ export class Lexer {
 
       if (ch === 0x60 /* ` */) {
         flushLit();
+        litStart = i;
         this.pos = i;
         this.readBacktickExpansion();
         if (this._resultPart) {
           parts.push(this._resultPart);
+          litStart = this.pos;
         } else {
           litBuf += src.slice(i, this.pos);
         }
@@ -1067,9 +1071,11 @@ export class Lexer {
     const bp = this._buildParts;
     let parts: WordPart[] | undefined;
     let litBuf = "";
+    let litStart = 0;
     if (bp) {
       parts = [];
       litBuf = text; // fast-path prefix is literal
+      litStart = fastStart;
     }
 
     while (pos < len) {
@@ -1109,12 +1115,13 @@ export class Lexer {
             // Remove the prefix char from litBuf (it was appended in the previous iteration)
             if (litBuf.length > 0) {
               const trimmed = litBuf.slice(0, -1);
-              if (trimmed) parts!.push({ type: "Literal", value: trimmed });
+              if (trimmed) parts!.push({ type: "Literal", value: trimmed, text: src.slice(litStart, innerStart - 2) });
               litBuf = "";
             }
             const op = extglobOp[prefixChar];
             const fullText = op + eg;
             parts!.push({ type: "ExtendedGlob", text: fullText, operator: op, pattern });
+            litStart = pos;
           } else if (bp) {
             litBuf += eg;
           }
@@ -1139,6 +1146,7 @@ export class Lexer {
       }
 
       if (ch === CH_SQUOTE) {
+        const sqStart = pos;
         quoted = true;
         pos++;
         const start = pos;
@@ -1149,15 +1157,17 @@ export class Lexer {
         else this.errors.push({ message: "unterminated single quote", pos: start - 1 });
         if (bp) {
           if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf });
+            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, sqStart) });
             litBuf = "";
           }
-          parts!.push({ type: "SingleQuoted", value });
+          parts!.push({ type: "SingleQuoted", value, text: src.slice(sqStart, pos) });
+          litStart = pos;
         }
         continue;
       }
 
       if (ch === CH_DQUOTE) {
+        const dqStart = pos;
         quoted = true;
         pos++;
         this.pos = pos;
@@ -1167,15 +1177,22 @@ export class Lexer {
         if (this._dqHasExpansions) hasExpansions = true;
         if (bp) {
           if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf });
+            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, dqStart) });
             litBuf = "";
           }
-          parts!.push({ type: "DoubleQuoted", parts: this._dqParts ?? [{ type: "Literal", value: this._dqText }] });
+          const dqText = src.slice(dqStart, pos);
+          parts!.push({
+            type: "DoubleQuoted",
+            text: dqText,
+            parts: this._dqParts ?? [{ type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, pos - 1) }],
+          });
+          litStart = pos;
         }
         continue;
       }
 
       if (ch === CH_DOLLAR) {
+        const dollarStart = pos;
         this.pos = pos;
         this.readDollar();
         pos = this.pos;
@@ -1184,10 +1201,11 @@ export class Lexer {
         if (bp) {
           if (this._resultPart) {
             if (litBuf) {
-              parts!.push({ type: "Literal", value: litBuf });
+              parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, dollarStart) });
               litBuf = "";
             }
             parts!.push(this._resultPart);
+            litStart = pos;
           } else {
             litBuf += this._resultText;
           }
@@ -1196,6 +1214,7 @@ export class Lexer {
       }
 
       if (ch === CH_BACKTICK) {
+        const btStart = pos;
         this.pos = pos;
         this.readBacktickExpansion();
         pos = this.pos;
@@ -1203,10 +1222,11 @@ export class Lexer {
         hasExpansions = true;
         if (bp) {
           if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf });
+            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, btStart) });
             litBuf = "";
           }
           parts!.push(this._resultPart!);
+          litStart = pos;
         }
         continue;
       }
@@ -1216,14 +1236,15 @@ export class Lexer {
         if (braceEnd > 0) {
           const braceText = src.slice(pos, braceEnd);
           text += braceText;
-          pos = braceEnd;
           if (bp) {
             if (litBuf) {
-              parts!.push({ type: "Literal", value: litBuf });
+              parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, pos) });
               litBuf = "";
             }
             parts!.push({ type: "BraceExpansion", text: braceText });
+            litStart = braceEnd;
           }
+          pos = braceEnd;
           continue;
         }
         text += "{";
@@ -1235,7 +1256,7 @@ export class Lexer {
       pos++;
     }
 
-    if (bp && litBuf) parts!.push({ type: "Literal", value: litBuf });
+    if (bp && litBuf) parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, pos) });
 
     this.pos = pos;
     this._wordText = text;
@@ -1255,7 +1276,11 @@ export class Lexer {
     const bp = this._buildParts;
     let parts: WordPart[] | undefined;
     let litBuf = "";
-    if (bp) parts = [];
+    let litStart = 0;
+    if (bp) {
+      parts = [];
+      litStart = pos;
+    }
 
     while (pos < len) {
       const ch = src.charCodeAt(pos);
@@ -1275,6 +1300,7 @@ export class Lexer {
       }
 
       if (ch === CH_SQUOTE) {
+        const sqStart = pos;
         pos++;
         const start = pos;
         while (pos < len && src.charCodeAt(pos) !== CH_SQUOTE) pos++;
@@ -1283,15 +1309,17 @@ export class Lexer {
         if (pos < len) pos++;
         if (bp) {
           if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf });
+            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, sqStart) });
             litBuf = "";
           }
-          parts!.push({ type: "SingleQuoted", value });
+          parts!.push({ type: "SingleQuoted", value, text: src.slice(sqStart, pos) });
+          litStart = pos;
         }
         continue;
       }
 
       if (ch === CH_DQUOTE) {
+        const dqStart = pos;
         pos++;
         this.pos = pos;
         this.readDoubleQuoted();
@@ -1299,15 +1327,22 @@ export class Lexer {
         text += this._dqText;
         if (bp) {
           if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf });
+            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, dqStart) });
             litBuf = "";
           }
-          parts!.push({ type: "DoubleQuoted", parts: this._dqParts ?? [{ type: "Literal", value: this._dqText }] });
+          const dqText = src.slice(dqStart, pos);
+          parts!.push({
+            type: "DoubleQuoted",
+            text: dqText,
+            parts: this._dqParts ?? [{ type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, pos - 1) }],
+          });
+          litStart = pos;
         }
         continue;
       }
 
       if (ch === CH_DOLLAR) {
+        const dollarStart = pos;
         this.pos = pos;
         this.readDollar();
         pos = this.pos;
@@ -1315,10 +1350,11 @@ export class Lexer {
         if (bp) {
           if (this._resultPart) {
             if (litBuf) {
-              parts!.push({ type: "Literal", value: litBuf });
+              parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, dollarStart) });
               litBuf = "";
             }
             parts!.push(this._resultPart);
+            litStart = pos;
           } else {
             litBuf += this._resultText;
           }
@@ -1327,16 +1363,18 @@ export class Lexer {
       }
 
       if (ch === CH_BACKTICK) {
+        const btStart = pos;
         this.pos = pos;
         this.readBacktickExpansion();
         pos = this.pos;
         text += this._resultText;
         if (bp) {
           if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf });
+            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, btStart) });
             litBuf = "";
           }
           parts!.push(this._resultPart!);
+          litStart = pos;
         }
         continue;
       }
@@ -1346,7 +1384,7 @@ export class Lexer {
       pos++;
     }
 
-    if (bp && litBuf) parts!.push({ type: "Literal", value: litBuf });
+    if (bp && litBuf) parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, pos) });
 
     this.pos = pos;
     this._wordText = text;
@@ -1490,6 +1528,7 @@ export class Lexer {
     let text = "";
     let parts: DoubleQuotedChild[] | null = null;
     let litBuf = "";
+    let litStart = bp ? this.pos : 0;
 
     while (this.pos < len && src.charCodeAt(this.pos) !== CH_DQUOTE) {
       // Scan run of plain chars inside double quotes
@@ -1539,6 +1578,7 @@ export class Lexer {
           this.pos++;
           continue;
         }
+        const expStart = this.pos;
         this.readDollar();
         text += this._resultText;
         if (this._resultHasExpansion) hasExpansions = true;
@@ -1547,10 +1587,11 @@ export class Lexer {
           if (rp && isDQChild(rp)) {
             if (!parts) parts = [];
             if (litBuf) {
-              parts.push({ type: "Literal", value: litBuf });
+              parts.push({ type: "Literal", value: litBuf, text: src.slice(litStart, expStart) });
               litBuf = "";
             }
             parts.push(rp);
+            litStart = this.pos;
           } else {
             litBuf += this._resultText;
           }
@@ -1559,22 +1600,24 @@ export class Lexer {
       }
 
       if (ch === CH_BACKTICK) {
+        const btStart = this.pos;
         this.readBacktickExpansion();
         text += this._resultText;
         hasExpansions = true;
         if (bp && this._resultPart && isDQChild(this._resultPart)) {
           if (!parts) parts = [];
           if (litBuf) {
-            parts.push({ type: "Literal", value: litBuf });
+            parts.push({ type: "Literal", value: litBuf, text: src.slice(litStart, btStart) });
             litBuf = "";
           }
           parts.push(this._resultPart);
+          litStart = this.pos;
         }
         continue;
       }
     }
 
-    if (bp && parts && litBuf) parts.push({ type: "Literal", value: litBuf });
+    if (bp && parts && litBuf) parts.push({ type: "Literal", value: litBuf, text: src.slice(litStart, this.pos) });
 
     if (this.pos < len) this.pos++; // closing "
     else this.errors.push({ message: "unterminated double quote", pos: contentStart - 1 });
@@ -1584,6 +1627,7 @@ export class Lexer {
   }
 
   private readDollar(): void {
+    const dollarPos = this.pos;
     this.pos++; // skip $
     const src = this.src;
     const len = src.length;
@@ -1624,7 +1668,7 @@ export class Lexer {
       const value = this.readAnsiCQuoted();
       this._resultText = value;
       this._resultHasExpansion = false;
-      this._resultPart = this._buildParts ? { type: "AnsiCQuoted", value } : undefined;
+      this._resultPart = this._buildParts ? { type: "AnsiCQuoted", text: src.slice(dollarPos, this.pos), value } : undefined;
       return;
     }
 
@@ -1633,9 +1677,16 @@ export class Lexer {
       this.readDoubleQuoted();
       this._resultText = this._dqText;
       this._resultHasExpansion = this._dqHasExpansions;
-      this._resultPart = this._buildParts
-        ? { type: "LocaleString", parts: this._dqParts ?? [{ type: "Literal", value: this._dqText }] }
-        : undefined;
+      if (this._buildParts) {
+        const text = src.slice(dollarPos, this.pos);
+        this._resultPart = {
+          type: "LocaleString",
+          text,
+          parts: this._dqParts ?? [{ type: "Literal", value: this._dqText, text: src.slice(dollarPos + 2, this.pos - 1) }],
+        };
+      } else {
+        this._resultPart = undefined;
+      }
       return;
     }
 
