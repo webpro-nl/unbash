@@ -6,8 +6,6 @@ export interface Word {
   parts?: WordPart[];
 }
 
-// Word part types
-
 export interface LiteralPart {
   type: "Literal";
   value: string;
@@ -90,8 +88,6 @@ export interface BraceExpansionPart {
   type: "BraceExpansion";
   text: string;
 }
-
-// Arithmetic expression types
 
 export type ArithmeticExpression =
   | ArithmeticBinary
@@ -325,8 +321,6 @@ export interface ArithmeticFor {
   update: ArithmeticExpression | undefined;
   body: CompoundList;
 }
-
-// Test expression types (for [[ ]])
 
 export type TestExpression =
   | TestUnaryExpression

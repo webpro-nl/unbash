@@ -112,7 +112,12 @@ node bench/all.ts
 
 ## Size
 
-unbash is under 50K minified, 12KB gzipped.
+unbash is 53K minified, 13KB gzipped.
+
+## Playgrounds
+
+- [unbash-playground.statichost.page][6]
+- [ast-explorer.dev][7]
 
 ## License
 
@@ -123,3 +128,5 @@ ISC
 [3]: https://github.com/mvdan/sh
 [4]: https://github.com/vorpaljs/bash-parser
 [5]: https://github.com/ericcornelissen/bash-parser
+[6]: https://unbash-playground.statichost.page
+[7]: https://ast-explorer.dev/#eNoVjDsKwzAQRK8yDK5CyAGS2nVAId02jixZAbFr/Kls393rbh7zeBsrn5xLqpV3jr5X/XVzcYgOKRaD8LoNzffTBqFotgkZf8XtUW14oTdRIHaLq00WYscwpRFtCO8g2psm75n3toPHCdz+Ivg=

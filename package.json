@@ -2,6 +2,16 @@
   "name": "unbash",
   "version": "2.1.0",
   "description": "Fast 0-deps bash parser written in TypeScript",
+  "keywords": [
+    "ast",
+    "bash",
+    "lexer",
+    "parser",
+    "posix",
+    "scanner",
+    "tokenizer",
+    "typescript"
+  ],
   "license": "ISC",
   "author": {
     "name": "Lars Kappert",

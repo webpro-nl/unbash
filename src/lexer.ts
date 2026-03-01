@@ -323,7 +323,6 @@ export class Lexer {
   private current: TokenValue;
   private nextState: TokenValue;
   private hasPeek: boolean;
-  // Removed parseFn
   private pendingHereDocs: PendingHereDoc[];
   private collectedExpansions: DeferredCommandExpansion[];
   _errors: ParseError[] | null = null;
@@ -343,8 +342,6 @@ export class Lexer {
       this.pos = nl === -1 ? src.length : nl + 1;
     }
   }
-
-  // Removed setParser
 
   get errors(): ParseError[] {
     return this._errors ?? (this._errors = []);
