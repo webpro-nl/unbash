@@ -64,4 +64,8 @@ export class WordImpl implements Word {
   set parts(v: WordPart[] | undefined) {
     this.#parts = v ?? undefined;
   }
+
+  toJSON() {
+    return { text: this.text, pos: this.pos, end: this.end, parts: this.parts, value: this.value };
+  }
 }
