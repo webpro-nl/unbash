@@ -323,6 +323,8 @@ function arithExpr(e: ArithmeticExpression): string {
       if (arithNeedsParens(e.right, prec, ra ? true : false)) right = "(" + right + ")";
       return left + " " + e.operator + " " + right;
     }
+    case "ArithmeticCommandExpansion":
+      return e.text; // preserve original text for roundtrip
   }
 }
 
