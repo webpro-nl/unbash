@@ -40,10 +40,11 @@ import type {
 } from "./types.ts";
 import { LexContext, Token, Lexer, TokenValue } from "./lexer.ts";
 import { parseArithmeticExpression } from "./arithmetic.ts";
-import { computeWordParts } from "./parts.ts";
+import { computeWordParts, computeHereDocBodyParts } from "./parts.ts";
 import { WordImpl } from "./word.ts";
 
-WordImpl._resolve = computeWordParts;
+WordImpl._resolveWord = computeWordParts;
+WordImpl._resolveHeredocBody = computeHereDocBodyParts;
 
 class ArithmeticCommandImpl implements ArithmeticCommand {
   type = "ArithmeticCommand" as const;

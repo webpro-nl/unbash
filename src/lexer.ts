@@ -937,7 +937,7 @@ export class Lexer {
       if (c === CH_BACKSLASH) i++; // skip escaped char
     }
     if (!hasExpansion) return null;
-    return new WordImpl(body, bodyPos, bodyPos + body.length);
+    return new WordImpl(body, bodyPos, bodyPos + body.length, this.src, WordImpl._resolveHeredocBody);
   }
 
   private _wordText = "";

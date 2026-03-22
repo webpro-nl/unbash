@@ -1,6 +1,6 @@
 import type { DoubleQuotedChild, Word, WordPart } from "./types.ts";
 
-type PartsResolver = (source: string, word: Word) => WordPart[] | undefined;
+export type PartsResolver = (source: string, word: Word) => WordPart[] | undefined;
 
 function dequoteValue(parts: DoubleQuotedChild[]): string {
   let s = "";
@@ -9,20 +9,23 @@ function dequoteValue(parts: DoubleQuotedChild[]): string {
 }
 
 export class WordImpl implements Word {
-  static _resolve: PartsResolver;
+  static _resolveWord: PartsResolver;
+  static _resolveHeredocBody: PartsResolver;
 
   text: string;
   pos: number;
   end: number;
   #source: string;
+  #resolver: PartsResolver;
   #parts: WordPart[] | undefined | null;
   #value: string | null = null;
 
-  constructor(text: string, pos: number, end: number, source?: string) {
+  constructor(text: string, pos: number, end: number, source?: string, resolver?: PartsResolver) {
     this.text = text;
     this.pos = pos;
     this.end = end;
     this.#source = source ?? "";
+    this.#resolver = resolver ?? WordImpl._resolveWord;
     this.#parts = source !== undefined ? null : undefined;
   }
 
@@ -57,7 +60,7 @@ export class WordImpl implements Word {
 
   get parts(): WordPart[] | undefined {
     if (this.#parts === null) {
-      this.#parts = WordImpl._resolve(this.#source, this) ?? undefined;
+      this.#parts = this.#resolver(this.#source, this) ?? undefined;
     }
     return this.#parts;
   }
