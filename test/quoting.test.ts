@@ -188,3 +188,55 @@ test("line continuation in whitespace between tokens", () => {
   const ast = parse("echo; \\\nls");
   assert.equal(ast.commands.length, 2);
 });
+
+// ── Single-quoted strings are fully literal ───────────────────────────
+// Everything inside single quotes is literal, including backticks, $(),
+// ${}, $var, etc. No expansions of any kind occur.
+
+test("backticks inside single quotes are literal (not command substitution)", () => {
+  const ast = parse("echo '`cmd`'");
+  const word = getCmd(ast).suffix[0];
+  assert.equal(word.parts?.length, 1, "should have exactly one part");
+  assert.equal(word.parts?.[0]?.type, "SingleQuoted", "should be SingleQuoted part");
+  assert.equal(word.parts?.[0]?.value, "`cmd`", "backticks should be literal in value");
+});
+
+test("$() inside single quotes is literal (not command substitution)", () => {
+  const ast = parse("echo '$(cmd)'");
+  const word = getCmd(ast).suffix[0];
+  assert.equal(word.parts?.length, 1, "should have exactly one part");
+  assert.equal(word.parts?.[0]?.type, "SingleQuoted", "should be SingleQuoted part");
+  assert.equal(word.parts?.[0]?.value, "$(cmd)", "$() should be literal in value");
+});
+
+test("${} inside single quotes is literal (not parameter expansion)", () => {
+  const ast = parse("echo '${var}'");
+  const word = getCmd(ast).suffix[0];
+  assert.equal(word.parts?.length, 1, "should have exactly one part");
+  assert.equal(word.parts?.[0]?.type, "SingleQuoted", "should be SingleQuoted part");
+  assert.equal(word.parts?.[0]?.value, "${var}", "${} should be literal in value");
+});
+
+test("multiline single-quoted string with backticks is one SingleQuoted part", () => {
+  const ast = parse(`echo '
+const x = \`hello\`;
+console.log(x);
+'`);
+  const word = getCmd(ast).suffix[0];
+  assert.equal(word.parts?.length, 1, "should have exactly one part");
+  assert.equal(word.parts?.[0]?.type, "SingleQuoted", "should be SingleQuoted part");
+  // The value should contain the backticks literally
+  assert.ok(word.parts?.[0]?.value?.includes("`hello`"), "value should contain literal backticks");
+});
+
+test("multiline single-quoted string with $() is one SingleQuoted part", () => {
+  const ast = parse(`echo '
+const src = "for (( i = $(start); i < $(limit); i++ )); do echo $i; done";
+'`);
+  const word = getCmd(ast).suffix[0];
+  assert.equal(word.parts?.length, 1, "should have exactly one part");
+  assert.equal(word.parts?.[0]?.type, "SingleQuoted", "should be SingleQuoted part");
+  // The value should contain $() literally
+  assert.ok(word.parts?.[0]?.value?.includes("$(start)"), "value should contain literal $(start)");
+  assert.ok(word.parts?.[0]?.value?.includes("$(limit)"), "value should contain literal $(limit)");
+});

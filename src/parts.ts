@@ -10,14 +10,25 @@ import { parse } from "./parser.ts";
  */
 export function computeWordParts(source: string, word: Word): WordPart[] | undefined {
   const lexer = new Lexer(source);
-  let parts: import("./types.ts").WordPart[] | null;
+  const parts = lexer.buildWordParts(word.pos);
+  if (!parts) return undefined;
 
-  // Heredoc bodies contain newlines — use dedicated scanning
-  if (word.text.includes("\n") && word.pos > 0) {
-    parts = lexer.buildHereDocParts(word.pos, word.end);
-  } else {
-    parts = lexer.buildWordParts(word.pos);
+  // Resolve command expansions: parse inner scripts
+  for (const exp of lexer.getCollectedExpansions()) {
+    resolveExpansion(exp);
   }
+
+  return parts;
+}
+
+/**
+ * Compute parts for an unquoted heredoc body.
+ * Heredoc bodies use different scanning rules than shell words: newlines are
+ * literal and single/double quotes have no special meaning.
+ */
+export function computeHereDocBodyParts(source: string, word: Word): WordPart[] | undefined {
+  const lexer = new Lexer(source);
+  const parts = lexer.buildHereDocParts(word.pos, word.end);
   if (!parts) return undefined;
 
   // Resolve command expansions: parse inner scripts

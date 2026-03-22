@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
 import type { Command, Redirect } from "../src/types.ts";
-import { computeWordParts } from "../src/parts.ts";
+import { computeHereDocBodyParts } from "../src/parts.ts";
 
-const wp = (s: string, w: import("../src/types.ts").Word) => computeWordParts(s, w);
+const wp = (s: string, w: import("../src/types.ts").Word) => computeHereDocBodyParts(s, w);
 
 const getRedirect = (src: string, i = 0, ri = 0): Redirect => {
   const ast = parse(src);
