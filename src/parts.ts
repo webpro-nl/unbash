@@ -1,4 +1,4 @@
-import type { DeferredCommandExpansion, Word, WordPart } from "./types.ts";
+import type { Word, WordPart } from "./types.ts";
 import { Lexer } from "./lexer.ts";
 import { parse } from "./parser.ts";
 
@@ -30,25 +30,10 @@ export function computeHereDocBodyParts(source: string, word: Word): WordPart[] 
 }
 
 function resolveCollected(lexer: Lexer): void {
-  for (const exp of lexer.getCollectedExpansions()) {
-    resolveExpansion(exp);
-  }
-  const arithCmdExps = lexer.getCollectedArithCmdExps();
-  if (arithCmdExps) {
-    for (const node of arithCmdExps) {
-      if (node.inner !== undefined) {
-        node.script = parse(node.inner);
-        node.inner = undefined;
-      }
+  for (const e of lexer.getCollectedExpansions()) {
+    if (e.inner !== undefined) {
+      e.script = parse(e.inner);
+      e.inner = undefined;
     }
-  }
-}
-
-function resolveExpansion(e: DeferredCommandExpansion) {
-  if (e.inner !== undefined && e._part) {
-    e._part.script = parse(e.inner);
-    e._part.inner = undefined;
-    e._part = undefined;
-    e.inner = undefined;
   }
 }

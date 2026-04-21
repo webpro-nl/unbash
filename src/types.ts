@@ -435,7 +435,4 @@ export interface ParseError {
   pos: number;
 }
 
-export interface DeferredCommandExpansion {
-  inner?: string;
-  _part?: CommandExpansionPart | ProcessSubstitutionPart;
-}
+export type DeferredCommandExpansion = CommandExpansionPart | ProcessSubstitutionPart | ArithmeticCommandExpansion;

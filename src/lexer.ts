@@ -1,6 +1,5 @@
 // oxlint-disable unicorn/no-thenable
 import type {
-  ArithmeticCommandExpansion,
   DeferredCommandExpansion,
   DoubleQuotedChild,
   ExtGlobOperator,
@@ -326,7 +325,6 @@ export class Lexer {
   private hasPeek: boolean;
   private pendingHereDocs: PendingHereDoc[];
   private collectedExpansions: DeferredCommandExpansion[];
-  private collectedArithCmdExps: ArithmeticCommandExpansion[] | null = null;
   _errors: ParseError[] | null = null;
   _buildParts = false;
 
@@ -351,10 +349,6 @@ export class Lexer {
 
   getCollectedExpansions(): DeferredCommandExpansion[] {
     return this.collectedExpansions;
-  }
-
-  getCollectedArithCmdExps(): ArithmeticCommandExpansion[] | null {
-    return this.collectedArithCmdExps;
   }
 
   getPos(): number {
@@ -382,8 +376,7 @@ export class Lexer {
         script: undefined,
         inner: inner ?? undefined,
       };
-      const exp: DeferredCommandExpansion = { inner: inner ?? undefined, _part: part };
-      this.collectedExpansions.push(exp);
+      this.collectedExpansions.push(part);
       // Continue reading any trailing word text (e.g., suffix after proc sub)
       if (this.pos < this.src.length) {
         this.readWordText();
@@ -1745,10 +1738,7 @@ export class Lexer {
     if (this._buildParts) {
       const expr = parseArithmeticExpression(body) ?? undefined;
       const drained = drainArithCmdExps();
-      if (drained) {
-        if (this.collectedArithCmdExps) this.collectedArithCmdExps.push(...drained);
-        else this.collectedArithCmdExps = drained;
-      }
+      if (drained) for (const node of drained) this.collectedExpansions.push(node);
       this._resultPart = { type: "ArithmeticExpansion", text, expression: expr };
     } else {
       this._resultPart = undefined;
@@ -1770,7 +1760,7 @@ export class Lexer {
     if (this._buildParts) {
       const inner = text.slice(2, -1);
       this._resultPart = { type: "CommandExpansion", text, script: undefined, inner };
-      this.collectedExpansions.push({ inner, _part: this._resultPart });
+      this.collectedExpansions.push(this._resultPart);
     } else {
       this._resultPart = undefined;
     }
@@ -1815,7 +1805,7 @@ export class Lexer {
     this._resultHasExpansion = true;
     if (this._buildParts) {
       this._resultPart = { type: "CommandExpansion", text, script: undefined, inner };
-      this.collectedExpansions.push({ inner, _part: this._resultPart });
+      this.collectedExpansions.push(this._resultPart);
     } else {
       this._resultPart = undefined;
     }
@@ -1872,7 +1862,7 @@ export class Lexer {
     this._resultHasExpansion = true;
     if (this._buildParts) {
       this._resultPart = { type: "CommandExpansion", text, script: undefined, inner };
-      this.collectedExpansions.push({ inner, _part: this._resultPart });
+      this.collectedExpansions.push(this._resultPart);
     } else {
       this._resultPart = undefined;
     }
