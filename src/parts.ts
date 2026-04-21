@@ -1,6 +1,6 @@
 import type { DeferredCommandExpansion, Word, WordPart } from "./types.ts";
 import { Lexer } from "./lexer.ts";
-import { parse } from "./parser.ts";
+import { parse, resolveArithmeticExpansions } from "./parser.ts";
 
 /**
  * Compute the structural parts of a word by re-scanning the source.
@@ -16,6 +16,13 @@ export function computeWordParts(source: string, word: Word): WordPart[] | undef
   // Resolve command expansions: parse inner scripts
   for (const exp of lexer.getCollectedExpansions()) {
     resolveExpansion(exp);
+  }
+
+  // Resolve command substitutions inside arithmetic expressions
+  for (const part of parts) {
+    if (part.type === "ArithmeticExpansion" && part.expression) {
+      resolveArithmeticExpansions(part.expression);
+    }
   }
 
   return parts;
@@ -34,6 +41,13 @@ export function computeHereDocBodyParts(source: string, word: Word): WordPart[] 
   // Resolve command expansions: parse inner scripts
   for (const exp of lexer.getCollectedExpansions()) {
     resolveExpansion(exp);
+  }
+
+  // Resolve command substitutions inside arithmetic expressions
+  for (const part of parts) {
+    if (part.type === "ArithmeticExpansion" && part.expression) {
+      resolveArithmeticExpansions(part.expression);
+    }
   }
 
   return parts;

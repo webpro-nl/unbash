@@ -1,4 +1,4 @@
-import type { ArithmeticExpression } from "./types.ts";
+import type { ArithmeticCommandExpansion, ArithmeticExpression } from "./types.ts";
 import {
   CH_TAB,
   CH_NL,
@@ -400,7 +400,7 @@ export function parseArithmeticExpression(src: string, offset: number = 0): Arit
         }
       } else {
         // $( command substitution )
-        pos++;
+        pos++; // skip (
         let depth = 1;
         while (pos < len && depth > 0) {
           const ch = src.charCodeAt(pos);
@@ -408,6 +408,16 @@ export function parseArithmeticExpression(src: string, offset: number = 0): Arit
           else if (ch === CH_RPAREN) depth--;
           pos++;
         }
+        const text = src.slice(start, pos);
+        const inner = text.slice(2, -1); // remove "$(" and ")"
+        return {
+          type: "ArithmeticCommandExpansion",
+          pos: start + offset,
+          end: pos + offset,
+          text,
+          inner,
+          script: undefined,
+        } satisfies ArithmeticCommandExpansion;
       }
     } else if (c === CH_LBRACE) {
       // ${ parameter expansion }

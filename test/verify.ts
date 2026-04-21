@@ -2,7 +2,7 @@
 // Walks AST, fills gaps from source, validates content fields against source.
 // Also verifies word parts: parts.map(p => p.text).join('') === source span.
 
-import type { Node, Script, WordPart, DoubleQuotedChild } from "../src/types.ts";
+import type { ArithmeticExpression, Node, Script, WordPart, DoubleQuotedChild } from "../src/types.ts";
 import { computeWordParts } from "../src/parts.ts";
 
 type AnyNode = { type: string; pos: number; end: number; [k: string]: any };
@@ -75,6 +75,9 @@ function checkContent(src: string, node: AnyNode) {
       break;
     case "ArithmeticWord":
       if (node.value !== span) fail(node, "value", span, node.value);
+      break;
+    case "ArithmeticCommandExpansion":
+      if (node.text !== span) fail(node, "text", span, node.text);
       break;
     case "ArithmeticCommand":
       // body is text between (( and )), source span starts with ((
@@ -156,5 +159,40 @@ function verifyPartChildren(source: string, part: WordPart | DoubleQuotedChild) 
         `${part.type} inner script verify failed: expected ${JSON.stringify(innerSrc)}, got ${JSON.stringify(rebuilt)}`,
       );
     }
+  }
+
+  if (part.type === "ArithmeticExpansion" && part.expression) {
+    verifyArithExpansions(part.expression);
+  }
+}
+
+function verifyArithExpansions(e: ArithmeticExpression): void {
+  switch (e.type) {
+    case "ArithmeticCommandExpansion":
+      if (e.script) {
+        const innerSrc = e.text.slice(2, -1); // remove "$(" and ")"
+        const rebuilt = _verify(innerSrc, e.script as any);
+        if (rebuilt !== innerSrc) {
+          throw new Error(
+            `ArithmeticCommandExpansion inner script verify failed: expected ${JSON.stringify(innerSrc)}, got ${JSON.stringify(rebuilt)}`,
+          );
+        }
+      }
+      break;
+    case "ArithmeticBinary":
+      verifyArithExpansions(e.left);
+      verifyArithExpansions(e.right);
+      break;
+    case "ArithmeticUnary":
+      verifyArithExpansions(e.operand);
+      break;
+    case "ArithmeticTernary":
+      verifyArithExpansions(e.test);
+      verifyArithExpansions(e.consequent);
+      verifyArithExpansions(e.alternate);
+      break;
+    case "ArithmeticGroup":
+      verifyArithExpansions(e.expression);
+      break;
   }
 }
