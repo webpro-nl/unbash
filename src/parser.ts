@@ -61,6 +61,7 @@ class ArithmeticCommandImpl implements ArithmeticCommand {
   get expression(): ArithmeticExpression | undefined {
     if (this.#expression === null) {
       this.#expression = parseArithmeticExpression(this.body, this.pos + 2) ?? undefined;
+      if (this.#expression) resolveArithmeticExpansions(this.#expression);
     }
     return this.#expression;
   }
@@ -110,7 +111,10 @@ class ArithmeticForImpl implements ArithmeticFor {
     if (this.#initialize === null) {
       if (this.#initStr) {
         const expr = parseArithmeticExpression(this.#initStr);
-        if (expr) offsetArith(expr, this.#initPos);
+        if (expr) {
+          offsetArith(expr, this.#initPos);
+          resolveArithmeticExpansions(expr);
+        }
         this.#initialize = expr ?? undefined;
       } else {
         this.#initialize = undefined;
@@ -126,7 +130,10 @@ class ArithmeticForImpl implements ArithmeticFor {
     if (this.#test === null) {
       if (this.#testStr) {
         const expr = parseArithmeticExpression(this.#testStr);
-        if (expr) offsetArith(expr, this.#testPos);
+        if (expr) {
+          offsetArith(expr, this.#testPos);
+          resolveArithmeticExpansions(expr);
+        }
         this.#test = expr ?? undefined;
       } else {
         this.#test = undefined;
@@ -142,7 +149,10 @@ class ArithmeticForImpl implements ArithmeticFor {
     if (this.#update === null) {
       if (this.#updateStr) {
         const expr = parseArithmeticExpression(this.#updateStr);
-        if (expr) offsetArith(expr, this.#updatePos);
+        if (expr) {
+          offsetArith(expr, this.#updatePos);
+          resolveArithmeticExpansions(expr);
+        }
         this.#update = expr ?? undefined;
       } else {
         this.#update = undefined;
@@ -194,6 +204,32 @@ function offsetArith(node: ArithmeticExpression, base: number): void {
       break;
     case "ArithmeticGroup":
       offsetArith(node.expression, base);
+      break;
+  }
+}
+
+export function resolveArithmeticExpansions(expr: ArithmeticExpression): void {
+  switch (expr.type) {
+    case "ArithmeticBinary":
+      resolveArithmeticExpansions(expr.left);
+      resolveArithmeticExpansions(expr.right);
+      break;
+    case "ArithmeticUnary":
+      resolveArithmeticExpansions(expr.operand);
+      break;
+    case "ArithmeticTernary":
+      resolveArithmeticExpansions(expr.test);
+      resolveArithmeticExpansions(expr.consequent);
+      resolveArithmeticExpansions(expr.alternate);
+      break;
+    case "ArithmeticGroup":
+      resolveArithmeticExpansions(expr.expression);
+      break;
+    case "ArithmeticCommandExpansion":
+      if (expr.inner !== undefined) {
+        expr.script = parse(expr.inner);
+        expr.inner = undefined;
+      }
       break;
   }
 }

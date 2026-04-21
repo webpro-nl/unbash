@@ -5,6 +5,7 @@ import { parse } from "../src/parser.ts";
 import { computeWordParts } from "../src/parts.ts";
 import type {
   ArithmeticBinary,
+  ArithmeticCommandExpansion,
   ArithmeticExpression,
   ArithmeticGroup,
   ArithmeticTernary,
@@ -438,4 +439,86 @@ test("arithmetic expressions parse without errors", () => {
     const ast = parse(script);
     assert.ok(ast.commands.length > 0, `Failed: ${script}`);
   }
+});
+
+// --- Command substitution in arithmetic ---
+
+test("command substitution in arithmetic - raw parse", () => {
+  const e = parseArithmeticExpression("$(cmd) + 1")!;
+  assert.equal(e.type, "ArithmeticBinary");
+  assert.equal(bin(e).operator, "+");
+  const left = bin(e).left;
+  assert.equal(left.type, "ArithmeticCommandExpansion");
+  assert.equal((left as ArithmeticCommandExpansion).text, "$(cmd)");
+  assert.equal((left as ArithmeticCommandExpansion).inner, "cmd");
+  assert.equal((left as ArithmeticCommandExpansion).script, undefined);
+});
+
+test("command substitution with argument in arithmetic", () => {
+  const e = parseArithmeticExpression("$(echo hello) + x")!;
+  assert.equal(e.type, "ArithmeticBinary");
+  const left = bin(e).left as ArithmeticCommandExpansion;
+  assert.equal(left.type, "ArithmeticCommandExpansion");
+  assert.equal(left.text, "$(echo hello)");
+  assert.equal(left.inner, "echo hello");
+});
+
+test("nested command substitution in arithmetic", () => {
+  const e = parseArithmeticExpression("$(echo $(inner))")!;
+  assert.equal(e.type, "ArithmeticCommandExpansion");
+  assert.equal((e as ArithmeticCommandExpansion).text, "$(echo $(inner))");
+  assert.equal((e as ArithmeticCommandExpansion).inner, "echo $(inner)");
+});
+
+test("command substitution at start and end of expression", () => {
+  const e = parseArithmeticExpression("$(a) + $(b)")!;
+  assert.equal(e.type, "ArithmeticBinary");
+  const left = bin(e).left as ArithmeticCommandExpansion;
+  const right = bin(e).right as ArithmeticCommandExpansion;
+  assert.equal(left.type, "ArithmeticCommandExpansion");
+  assert.equal(right.type, "ArithmeticCommandExpansion");
+  assert.equal(left.text, "$(a)");
+  assert.equal(right.text, "$(b)");
+});
+
+test("command substitution resolved in arithmetic expansion", () => {
+  const ast = parse("echo $(( $(cmd) + 1 ))");
+  const parts = computeWordParts("echo $(( $(cmd) + 1 ))", getCmd(ast).suffix[0])!;
+  const arith = parts[0] as import("../src/types.ts").ArithmeticExpansionPart;
+  assert.equal(arith.type, "ArithmeticExpansion");
+  const binary = arith.expression as ArithmeticBinary;
+  assert.equal(binary.type, "ArithmeticBinary");
+  const left = binary.left as ArithmeticCommandExpansion;
+  assert.equal(left.type, "ArithmeticCommandExpansion");
+  assert.equal(left.inner, undefined); // cleared after resolution
+  assert.ok(left.script); // now populated
+  assert.equal(left.script!.commands[0].command.type, "Command");
+});
+
+test("command substitution in arithmetic command", () => {
+  const ast = parse("(( $(cmd) ))");
+  const arithCmd = ast.commands[0].command as import("../src/types.ts").ArithmeticCommand;
+  const expr = arithCmd.expression!;
+  assert.equal(expr.type, "ArithmeticCommandExpansion");
+  assert.ok((expr as ArithmeticCommandExpansion).script);
+});
+
+test("command substitution in arithmetic for loop", () => {
+  const ast = parse("for (( i = $(start); i < $(limit); i++ )); do echo $i; done");
+  const forLoop = ast.commands[0].command as ArithmeticFor;
+  assert.ok(forLoop.initialize);
+  const initBin = forLoop.initialize as ArithmeticBinary;
+  assert.equal(initBin.type, "ArithmeticBinary");
+  assert.equal(initBin.operator, "=");
+  const initRight = initBin.right as ArithmeticCommandExpansion;
+  assert.equal(initRight.type, "ArithmeticCommandExpansion");
+  assert.equal(initRight.text, "$(start)");
+  assert.ok(initRight.script);
+
+  assert.ok(forLoop.test);
+  const testBin = forLoop.test as ArithmeticBinary;
+  assert.equal(testBin.type, "ArithmeticBinary");
+  const testRight = testBin.right as ArithmeticCommandExpansion;
+  assert.equal(testRight.type, "ArithmeticCommandExpansion");
+  assert.ok(testRight.script);
 });

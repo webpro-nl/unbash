@@ -94,7 +94,8 @@ export type ArithmeticExpression =
   | ArithmeticUnary
   | ArithmeticTernary
   | ArithmeticGroup
-  | ArithmeticWord;
+  | ArithmeticWord
+  | ArithmeticCommandExpansion;
 
 export interface ArithmeticBinary {
   type: "ArithmeticBinary";
@@ -135,6 +136,15 @@ export interface ArithmeticWord {
   pos: number;
   end: number;
   value: string;
+}
+
+export interface ArithmeticCommandExpansion {
+  type: "ArithmeticCommandExpansion";
+  pos: number;
+  end: number;
+  text: string; // e.g., "$(cmd)"
+  inner: string | undefined; // e.g., "cmd" - cleared after resolution
+  script: Script | undefined; // set after resolution
 }
 
 export type DoubleQuotedChild =
