@@ -1,5 +1,6 @@
 // oxlint-disable unicorn/no-thenable
 import type {
+  ArithmeticCommandExpansion,
   DeferredCommandExpansion,
   DoubleQuotedChild,
   ExtGlobOperator,
@@ -8,7 +9,7 @@ import type {
   Word,
   WordPart,
 } from "./types.ts";
-import { parseArithmeticExpression } from "./arithmetic.ts";
+import { parseArithmeticExpression, drainArithCmdExps } from "./arithmetic.ts";
 import { WordImpl } from "./word.ts";
 import {
   CH_TAB,
@@ -325,6 +326,7 @@ export class Lexer {
   private hasPeek: boolean;
   private pendingHereDocs: PendingHereDoc[];
   private collectedExpansions: DeferredCommandExpansion[];
+  private collectedArithCmdExps: ArithmeticCommandExpansion[] | null = null;
   _errors: ParseError[] | null = null;
   _buildParts = false;
 
@@ -349,6 +351,10 @@ export class Lexer {
 
   getCollectedExpansions(): DeferredCommandExpansion[] {
     return this.collectedExpansions;
+  }
+
+  getCollectedArithCmdExps(): ArithmeticCommandExpansion[] | null {
+    return this.collectedArithCmdExps;
   }
 
   getPos(): number {
@@ -1738,6 +1744,11 @@ export class Lexer {
     this._resultHasExpansion = false;
     if (this._buildParts) {
       const expr = parseArithmeticExpression(body) ?? undefined;
+      const drained = drainArithCmdExps();
+      if (drained) {
+        if (this.collectedArithCmdExps) this.collectedArithCmdExps.push(...drained);
+        else this.collectedArithCmdExps = drained;
+      }
       this._resultPart = { type: "ArithmeticExpansion", text, expression: expr };
     } else {
       this._resultPart = undefined;

@@ -1,6 +1,6 @@
 import type { DeferredCommandExpansion, Word, WordPart } from "./types.ts";
 import { Lexer } from "./lexer.ts";
-import { parse, resolveArithmeticExpansions } from "./parser.ts";
+import { parse } from "./parser.ts";
 
 /**
  * Compute the structural parts of a word by re-scanning the source.
@@ -12,19 +12,7 @@ export function computeWordParts(source: string, word: Word): WordPart[] | undef
   const lexer = new Lexer(source);
   const parts = lexer.buildWordParts(word.pos);
   if (!parts) return undefined;
-
-  // Resolve command expansions: parse inner scripts
-  for (const exp of lexer.getCollectedExpansions()) {
-    resolveExpansion(exp);
-  }
-
-  // Resolve command substitutions inside arithmetic expressions
-  for (const part of parts) {
-    if (part.type === "ArithmeticExpansion" && part.expression) {
-      resolveArithmeticExpansions(part.expression);
-    }
-  }
-
+  resolveCollected(lexer);
   return parts;
 }
 
@@ -37,20 +25,23 @@ export function computeHereDocBodyParts(source: string, word: Word): WordPart[] 
   const lexer = new Lexer(source);
   const parts = lexer.buildHereDocParts(word.pos, word.end);
   if (!parts) return undefined;
+  resolveCollected(lexer);
+  return parts;
+}
 
-  // Resolve command expansions: parse inner scripts
+function resolveCollected(lexer: Lexer): void {
   for (const exp of lexer.getCollectedExpansions()) {
     resolveExpansion(exp);
   }
-
-  // Resolve command substitutions inside arithmetic expressions
-  for (const part of parts) {
-    if (part.type === "ArithmeticExpansion" && part.expression) {
-      resolveArithmeticExpansions(part.expression);
+  const arithCmdExps = lexer.getCollectedArithCmdExps();
+  if (arithCmdExps) {
+    for (const node of arithCmdExps) {
+      if (node.inner !== undefined) {
+        node.script = parse(node.inner);
+        node.inner = undefined;
+      }
     }
   }
-
-  return parts;
 }
 
 function resolveExpansion(e: DeferredCommandExpansion) {

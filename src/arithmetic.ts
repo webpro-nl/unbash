@@ -106,7 +106,16 @@ function opRightAssoc(op: string): boolean {
   }
 }
 
+let pendingArithCmdExps: ArithmeticCommandExpansion[] | null = null;
+
+export function drainArithCmdExps(): ArithmeticCommandExpansion[] | null {
+  const out = pendingArithCmdExps;
+  pendingArithCmdExps = null;
+  return out;
+}
+
 export function parseArithmeticExpression(src: string, offset: number = 0): ArithmeticExpression | null {
+  pendingArithCmdExps = null;
   let pos = 0;
   const len = src.length;
 
@@ -410,14 +419,16 @@ export function parseArithmeticExpression(src: string, offset: number = 0): Arit
         }
         const text = src.slice(start, pos);
         const inner = text.slice(2, -1); // remove "$(" and ")"
-        return {
+        const node: ArithmeticCommandExpansion = {
           type: "ArithmeticCommandExpansion",
           pos: start + offset,
           end: pos + offset,
           text,
           inner,
           script: undefined,
-        } satisfies ArithmeticCommandExpansion;
+        };
+        (pendingArithCmdExps ??= []).push(node);
+        return node;
       }
     } else if (c === CH_LBRACE) {
       // ${ parameter expansion }

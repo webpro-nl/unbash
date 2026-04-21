@@ -39,7 +39,7 @@ import type {
   Word,
 } from "./types.ts";
 import { LexContext, Token, Lexer, TokenValue } from "./lexer.ts";
-import { parseArithmeticExpression } from "./arithmetic.ts";
+import { parseArithmeticExpression, drainArithCmdExps } from "./arithmetic.ts";
 import { computeWordParts, computeHereDocBodyParts } from "./parts.ts";
 import { WordImpl } from "./word.ts";
 
@@ -62,7 +62,7 @@ class ArithmeticCommandImpl implements ArithmeticCommand {
   get expression(): ArithmeticExpression | undefined {
     if (this.#expression === null) {
       this.#expression = parseArithmeticExpression(this.body, this.pos + 2) ?? undefined;
-      if (this.#expression) resolveArithmeticExpansions(this.#expression);
+      resolveDrainedArithCmdExps();
     }
     return this.#expression;
   }
@@ -112,10 +112,8 @@ class ArithmeticForImpl implements ArithmeticFor {
     if (this.#initialize === null) {
       if (this.#initStr) {
         const expr = parseArithmeticExpression(this.#initStr);
-        if (expr) {
-          offsetArith(expr, this.#initPos);
-          resolveArithmeticExpansions(expr);
-        }
+        if (expr) offsetArith(expr, this.#initPos);
+        resolveDrainedArithCmdExps();
         this.#initialize = expr ?? undefined;
       } else {
         this.#initialize = undefined;
@@ -131,10 +129,8 @@ class ArithmeticForImpl implements ArithmeticFor {
     if (this.#test === null) {
       if (this.#testStr) {
         const expr = parseArithmeticExpression(this.#testStr);
-        if (expr) {
-          offsetArith(expr, this.#testPos);
-          resolveArithmeticExpansions(expr);
-        }
+        if (expr) offsetArith(expr, this.#testPos);
+        resolveDrainedArithCmdExps();
         this.#test = expr ?? undefined;
       } else {
         this.#test = undefined;
@@ -150,10 +146,8 @@ class ArithmeticForImpl implements ArithmeticFor {
     if (this.#update === null) {
       if (this.#updateStr) {
         const expr = parseArithmeticExpression(this.#updateStr);
-        if (expr) {
-          offsetArith(expr, this.#updatePos);
-          resolveArithmeticExpansions(expr);
-        }
+        if (expr) offsetArith(expr, this.#updatePos);
+        resolveDrainedArithCmdExps();
         this.#update = expr ?? undefined;
       } else {
         this.#update = undefined;
@@ -209,29 +203,14 @@ function offsetArith(node: ArithmeticExpression, base: number): void {
   }
 }
 
-export function resolveArithmeticExpansions(expr: ArithmeticExpression): void {
-  switch (expr.type) {
-    case "ArithmeticBinary":
-      resolveArithmeticExpansions(expr.left);
-      resolveArithmeticExpansions(expr.right);
-      break;
-    case "ArithmeticUnary":
-      resolveArithmeticExpansions(expr.operand);
-      break;
-    case "ArithmeticTernary":
-      resolveArithmeticExpansions(expr.test);
-      resolveArithmeticExpansions(expr.consequent);
-      resolveArithmeticExpansions(expr.alternate);
-      break;
-    case "ArithmeticGroup":
-      resolveArithmeticExpansions(expr.expression);
-      break;
-    case "ArithmeticCommandExpansion":
-      if (expr.inner !== undefined) {
-        expr.script = parse(expr.inner);
-        expr.inner = undefined;
-      }
-      break;
+function resolveDrainedArithCmdExps(): void {
+  const list = drainArithCmdExps();
+  if (!list) return;
+  for (const node of list) {
+    if (node.inner !== undefined) {
+      node.script = parse(node.inner);
+      node.inner = undefined;
+    }
   }
 }
 
