@@ -3,7 +3,6 @@
 // Also verifies word parts: parts.map(p => p.text).join('') === source span.
 
 import type { ArithmeticExpression, Node, Script, WordPart, DoubleQuotedChild } from "../src/types.ts";
-import { computeWordParts } from "../src/parts.ts";
 
 type AnyNode = { type: string; pos: number; end: number; [k: string]: any };
 
@@ -117,7 +116,10 @@ function _verify(source: string, node: AnyNode): string {
 }
 
 function verifyParts(source: string, word: AnyNode) {
-  const parts = computeWordParts(source, word as any);
+  // Use the public getter: nested-substitution words resolve their parts in
+  // their bounded inner context (and cache them), so re-lexing the original
+  // here would overrun word boundaries adjacent to substitution delimiters.
+  const parts = (word as { parts?: WordPart[] }).parts;
   if (!parts) return;
 
   const span = source.slice(word.pos, word.end);
@@ -150,13 +152,13 @@ function verifyPartChildren(source: string, part: WordPart | DoubleQuotedChild) 
   }
 
   if ((part.type === "CommandExpansion" || part.type === "ProcessSubstitution") && part.script) {
-    const prefix = part.type === "ProcessSubstitution" ? 2 : part.text.startsWith("$(") ? 2 : 1;
-    const suffix = part.text.startsWith("`") ? 1 : 1;
-    const innerSrc = part.text.slice(prefix, -suffix);
-    const rebuilt = _verify(innerSrc, part.script as any);
-    if (rebuilt !== innerSrc) {
+    // Nested script spans are absolute in the original source, so the inner
+    // command text slices straight out of it.
+    const expected = source.slice(part.script.pos, part.script.end);
+    const rebuilt = _verify(source, part.script as any);
+    if (rebuilt !== expected) {
       throw new Error(
-        `${part.type} inner script verify failed: expected ${JSON.stringify(innerSrc)}, got ${JSON.stringify(rebuilt)}`,
+        `${part.type} inner script verify failed: expected ${JSON.stringify(expected)}, got ${JSON.stringify(rebuilt)}`,
       );
     }
   }

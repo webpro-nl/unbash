@@ -319,6 +319,7 @@ function scanBraceExpansion(src: string, pos: number, len: number): number {
 
 export class Lexer {
   private src: string;
+  private srcEnd: number;
   private pos: number;
   private current: TokenValue;
   private nextState: TokenValue;
@@ -328,19 +329,27 @@ export class Lexer {
   _errors: ParseError[] | null = null;
   _buildParts = false;
 
-  constructor(src: string) {
+  // `start`/`end` bound the lexer to a window of `src` so substitution scripts can be
+  // parsed in place against the original source — every position is then absolute, with
+  // no slicing or re-basing. Defaults cover the whole string (the common top-level parse).
+  constructor(src: string, start = 0, end = src.length) {
     this.src = src;
-    this.pos = 0;
+    this.srcEnd = end;
+    this.pos = start;
     this.current = new TokenValue();
     this.nextState = new TokenValue();
     this.hasPeek = false;
     this.pendingHereDocs = [];
     this.collectedExpansions = [];
 
-    if (src.charCodeAt(0) === CH_HASH && src.charCodeAt(1) === CH_BANG) {
+    if (start === 0 && src.charCodeAt(0) === CH_HASH && src.charCodeAt(1) === CH_BANG) {
       const nl = src.indexOf("\n");
-      this.pos = nl === -1 ? src.length : nl + 1;
+      this.pos = nl === -1 ? this.srcEnd : nl + 1;
     }
+  }
+
+  getSource(): string {
+    return this.src;
   }
 
   get errors(): ParseError[] {
@@ -363,7 +372,7 @@ export class Lexer {
     const ch = this.src.charCodeAt(startPos);
     if (
       (ch === 0x3c /* < */ || ch === 0x3e) /* > */ &&
-      startPos + 1 < this.src.length &&
+      startPos + 1 < this.srcEnd &&
       this.src.charCodeAt(startPos + 1) === 0x28 /* ( */
     ) {
       this.pos = startPos + 2;
@@ -375,10 +384,11 @@ export class Lexer {
         operator: ch === 0x3c ? "<" : ">",
         script: undefined,
         inner: inner ?? undefined,
+        innerStart: startPos + 2,
       };
       this.collectedExpansions.push(part);
       // Continue reading any trailing word text (e.g., suffix after proc sub)
-      if (this.pos < this.src.length) {
+      if (this.pos < this.srcEnd) {
         this.readWordText();
         if (this._wordParts) {
           this._wordParts.unshift(part);
@@ -497,7 +507,7 @@ export class Lexer {
   readCStyleForExprs(): [string, string, string, number, number, number] {
     this.hasPeek = false; // discard any peeked token
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     // Skip spaces to second '('
     while (this.pos < len && (src.charCodeAt(this.pos) === CH_SPACE || src.charCodeAt(this.pos) === CH_TAB)) this.pos++;
     if (this.pos < len && src.charCodeAt(this.pos) === CH_LPAREN) this.pos++;
@@ -573,7 +583,7 @@ export class Lexer {
 
   private readNext(out: TokenValue, ctx: LexContext): void {
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
 
     // Skip spaces and tabs (inlined for hot path)
     let pos = this.pos;
@@ -633,12 +643,12 @@ export class Lexer {
   private tryReadOperator(out: TokenValue, ch: number, ctx: LexContext, tokenStart: number): boolean {
     const src = this.src;
     const pos = this.pos;
-    const next = pos + 1 < src.length ? src.charCodeAt(pos + 1) : 0;
+    const next = pos + 1 < this.srcEnd ? src.charCodeAt(pos + 1) : 0;
 
     switch (ch) {
       case CH_SEMI:
         if (next === CH_SEMI) {
-          if (pos + 2 < src.length && src.charCodeAt(pos + 2) === CH_AMP) {
+          if (pos + 2 < this.srcEnd && src.charCodeAt(pos + 2) === CH_AMP) {
             this.pos += 3;
             setToken(out, Token.DoubleSemiAmp, ";;&", tokenStart, this.pos);
             return true;
@@ -678,11 +688,11 @@ export class Lexer {
         if (next === CH_GT) {
           // &> or &>> — redirect, not background
           this.pos += 2;
-          const append = this.pos < src.length && src.charCodeAt(this.pos) === CH_GT;
+          const append = this.pos < this.srcEnd && src.charCodeAt(this.pos) === CH_GT;
           if (append) this.pos++;
           this.skipSpacesAndTabs();
           this._redirectTargetPos = this.pos;
-          if (this.pos < src.length && src.charCodeAt(this.pos) !== CH_NL) this.readWordText();
+          if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL) this.readWordText();
           this.redirectToken(out, append ? "&>>" : "&>", tokenStart);
           return true;
         }
@@ -716,16 +726,16 @@ export class Lexer {
 
     if (ch === CH_LT) {
       this.pos++;
-      const next = this.pos < src.length ? src.charCodeAt(this.pos) : 0;
+      const next = this.pos < this.srcEnd ? src.charCodeAt(this.pos) : 0;
       if (next === CH_LT) {
         this.pos++;
-        const third = this.pos < src.length ? src.charCodeAt(this.pos) : 0;
+        const third = this.pos < this.srcEnd ? src.charCodeAt(this.pos) : 0;
         if (third === CH_LT) {
           // <<< herestring
           this.pos++;
           this.skipSpacesAndTabs();
           this._redirectTargetPos = this.pos;
-          if (this.pos < src.length && src.charCodeAt(this.pos) !== CH_NL) this.readWordText();
+          if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL) this.readWordText();
           this.redirectToken(out, "<<<", tokenStart);
           return true;
         }
@@ -753,7 +763,7 @@ export class Lexer {
       }
     } else if (ch === CH_GT) {
       this.pos++;
-      const next = this.pos < src.length ? src.charCodeAt(this.pos) : 0;
+      const next = this.pos < this.srcEnd ? src.charCodeAt(this.pos) : 0;
       if (next === CH_LPAREN) {
         this.readProcessSubstitution(out, ">", tokenStart);
         return true;
@@ -773,9 +783,9 @@ export class Lexer {
     }
 
     this.skipSpacesAndTabs();
-    if (this.pos < src.length) {
+    if (this.pos < this.srcEnd) {
       const nc = src.charCodeAt(this.pos);
-      if ((nc === CH_LT || nc === CH_GT) && this.pos + 1 < src.length && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
+      if ((nc === CH_LT || nc === CH_GT) && this.pos + 1 < this.srcEnd && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
         const psStart = this.pos;
         this.pos += 2;
         this.extractBalanced();
@@ -810,7 +820,7 @@ export class Lexer {
 
   private readHereDocDelimiter(): void {
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     let delimiter = "";
 
     if (this.pos < len && src.charCodeAt(this.pos) === CH_SQUOTE) {
@@ -877,7 +887,7 @@ export class Lexer {
 
   private readHereDocBody(delimiter: string, strip: boolean): string {
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     const dLen = delimiter.length;
     const bodyStart = this.pos;
     while (this.pos < len) {
@@ -986,7 +996,7 @@ export class Lexer {
     }
 
     // FD number prefix: all-digit word followed by < or > → redirect with fd
-    if (!hasExpansions && this.pos < this.src.length) {
+    if (!hasExpansions && this.pos < this.srcEnd) {
       const nc = this.src.charCodeAt(this.pos);
       if (nc === CH_LT || nc === CH_GT) {
         if (text.charCodeAt(0) >= CH_0 && text.charCodeAt(0) <= CH_9 && isAllDigits(text)) {
@@ -1011,7 +1021,7 @@ export class Lexer {
 
   private readWordText(): void {
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     let pos = this.pos;
 
     // Fast path: scan a single run of plain chars (covers most words)
@@ -1240,7 +1250,7 @@ export class Lexer {
 
   private readInnerWordText(): void {
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     let pos = this.pos;
     let text = "";
     const bp = this._buildParts;
@@ -1365,24 +1375,31 @@ export class Lexer {
     }
   }
 
-  private parseSubFieldWord(s: string): Word {
-    if (!s) return new WordImpl("", 0, 0);
-    const savedSrc = this.src;
+  // Parse a parameter-expansion sub-field (operand, slice bound, replacement pattern) over
+  // the window [start, end) of the original source. Parsing in place — rather than against a
+  // detached slice — gives the word and any nested substitutions absolute offsets, and
+  // composes through nested ${...}. The `${...}` inner is a verbatim substring of the
+  // source, so every sub-field offset maps straight back.
+  private parseSubFieldWord(start: number, end: number): Word {
+    if (start >= end) return new WordImpl("", start, start);
+    const savedEnd = this.srcEnd;
     const savedPos = this.pos;
     const savedText = this._wordText;
     const savedParts = this._wordParts;
     const savedQuoted = this._wordQuoted;
 
-    this.src = s;
-    this.pos = 0;
+    this.srcEnd = end;
+    this.pos = start;
     this.readInnerWordText();
 
-    const word = new WordImpl(this._wordText, 0, 0);
+    // pos/end span the raw operand in the original source; text keeps the sub-field
+    // convention of the processed value (escapes/quotes resolved), like .value.
+    const word = new WordImpl(this._wordText, start, end);
     if (this._buildParts && this._wordParts) {
       word.parts = this._wordParts;
     }
 
-    this.src = savedSrc;
+    this.srcEnd = savedEnd;
     this.pos = savedPos;
     this._wordText = savedText;
     this._wordParts = savedParts;
@@ -1391,13 +1408,13 @@ export class Lexer {
   }
 
   private skipSQ(): void {
-    while (this.pos < this.src.length && this.src.charCodeAt(this.pos) !== CH_SQUOTE) this.pos++;
-    if (this.pos < this.src.length) this.pos++;
+    while (this.pos < this.srcEnd && this.src.charCodeAt(this.pos) !== CH_SQUOTE) this.pos++;
+    if (this.pos < this.srcEnd) this.pos++;
   }
 
   private skipDQ(): void {
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     while (this.pos < len) {
       const ch = src.charCodeAt(this.pos);
       if (ch === CH_DQUOTE) {
@@ -1457,7 +1474,7 @@ export class Lexer {
 
   private skipSpacesAndTabs(): void {
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     while (this.pos < len) {
       const ch = src.charCodeAt(this.pos);
       if (ch === CH_SPACE || ch === CH_TAB) this.pos++;
@@ -1468,7 +1485,7 @@ export class Lexer {
 
   private readDoubleQuoted(): void {
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     const contentStart = this.pos;
     let hasExpansions = false;
     const bp = this._buildParts;
@@ -1597,7 +1614,7 @@ export class Lexer {
     const dollarPos = this.pos;
     this.pos++; // skip $
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     if (this.pos >= len) {
       this._resultText = "$";
       this._resultHasExpansion = false;
@@ -1710,7 +1727,7 @@ export class Lexer {
     this.pos += 2;
     let depth = 1;
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     const start = this.pos;
     while (this.pos < len && depth > 0) {
       const c = src.charCodeAt(this.pos);
@@ -1731,14 +1748,21 @@ export class Lexer {
   }
 
   private readArithmeticExpansion(): void {
+    const bodyStart = this.pos + 2; // absolute offset of the body, past the "((" at this.pos
     const body = this.scanArithmeticBody();
     const text = "$((" + body + "))";
     this._resultText = text;
     this._resultHasExpansion = false;
     if (this._buildParts) {
-      const expr = parseArithmeticExpression(body) ?? undefined;
+      // Pass the absolute body offset so arithmetic nodes index the original source
+      // directly (no re-basing). Nested $(...) command subs inside the arithmetic get
+      // an absolute innerStart so resolveCollected parses their window in place.
+      const expr = parseArithmeticExpression(body, bodyStart) ?? undefined;
       const drained = drainArithCmdExps();
-      if (drained) for (const node of drained) this.collectedExpansions.push(node);
+      if (drained) for (const node of drained) {
+        node.innerStart = node.pos + 2;
+        this.collectedExpansions.push(node);
+      }
       this._resultPart = { type: "ArithmeticExpansion", text, expression: expr };
     } else {
       this._resultPart = undefined;
@@ -1759,7 +1783,7 @@ export class Lexer {
     this._resultHasExpansion = true;
     if (this._buildParts) {
       const inner = text.slice(2, -1);
-      this._resultPart = { type: "CommandExpansion", text, script: undefined, inner };
+      this._resultPart = { type: "CommandExpansion", text, script: undefined, inner, innerStart: dollarPos + 2 };
       this.collectedExpansions.push(this._resultPart);
     } else {
       this._resultPart = undefined;
@@ -1777,7 +1801,7 @@ export class Lexer {
   private readBraceSubstitution(prefix: string, skip: number): void {
     this.pos += skip;
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     let depth = 1;
     const start = this.pos;
     while (this.pos < len) {
@@ -1799,12 +1823,14 @@ export class Lexer {
       } else if (c === CH_BACKSLASH) this.pos++;
       this.pos++;
     }
-    const inner = src.slice(start, this.pos - 1).trim();
+    const rawInner = src.slice(start, this.pos - 1);
+    const inner = rawInner.trim();
     const text = prefix + inner + " }";
     this._resultText = text;
     this._resultHasExpansion = true;
     if (this._buildParts) {
-      this._resultPart = { type: "CommandExpansion", text, script: undefined, inner };
+      const innerStart = start + (rawInner.length - rawInner.trimStart().length);
+      this._resultPart = { type: "CommandExpansion", text, script: undefined, inner, innerStart };
       this.collectedExpansions.push(this._resultPart);
     } else {
       this._resultPart = undefined;
@@ -1814,7 +1840,7 @@ export class Lexer {
   private readBacktickExpansion(): void {
     this.pos++; // skip opening `
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     let inner = "";
     const start = this.pos;
     let hasEscapes = false;
@@ -1861,7 +1887,15 @@ export class Lexer {
     this._resultText = inner;
     this._resultHasExpansion = true;
     if (this._buildParts) {
-      this._resultPart = { type: "CommandExpansion", text, script: undefined, inner };
+      // Escaped backticks rebuild `inner` (escapes removed), so its offsets no
+      // longer map linearly onto the source — leave innerStart undefined there.
+      this._resultPart = {
+        type: "CommandExpansion",
+        text,
+        script: undefined,
+        inner,
+        innerStart: hasEscapes ? undefined : start,
+      };
       this.collectedExpansions.push(this._resultPart);
     } else {
       this._resultPart = undefined;
@@ -1870,7 +1904,7 @@ export class Lexer {
 
   private readParameterExpansion(): void {
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     const start = this.pos; // at {
     this.pos++;
     let depth = 1;
@@ -1900,13 +1934,16 @@ export class Lexer {
     this._resultHasExpansion = false;
     if (this._buildParts) {
       const inner = src.slice(start + 1, this.pos - 1);
-      this._resultPart = this.parseParamInner(text, inner);
+      this._resultPart = this.parseParamInner(text, inner, start + 1);
     } else {
       this._resultPart = undefined;
     }
   }
 
-  private parseParamInner(text: string, inner: string): ParameterExpansionPart {
+  // `innerStart` is the absolute offset of `inner` in the original source, so each sub-field
+  // word is parsed in place at its true position. `sub(a, b)` maps inner-relative offsets to
+  // that absolute window.
+  private parseParamInner(text: string, inner: string, innerStart: number): ParameterExpansionPart {
     const result: ParameterExpansionPart = {
       type: "ParameterExpansion",
       text,
@@ -1921,6 +1958,7 @@ export class Lexer {
     };
     const ilen = inner.length;
     if (ilen === 0) return result;
+    const sub = (a: number, b: number): Word => this.parseSubFieldWord(innerStart + a, innerStart + b);
 
     let i = 0;
 
@@ -1995,7 +2033,7 @@ export class Lexer {
         const nc = inner.charCodeAt(i + 1);
         if (nc === CH_DASH || nc === CH_EQ || nc === CH_PLUS || nc === CH_QUESTION) {
           result.operator = inner.slice(i, i + 2);
-          result.operand = this.parseSubFieldWord(inner.slice(i + 2));
+          result.operand = sub(i + 2, ilen);
           return result;
         }
       }
@@ -2004,11 +2042,11 @@ export class Lexer {
       const sliceRest = inner.slice(i);
       const colonIdx = findUnnested(sliceRest, CH_COLON);
       if (colonIdx === -1) {
-        result.slice = { offset: this.parseSubFieldWord(sliceRest), length: undefined };
+        result.slice = { offset: sub(i, ilen), length: undefined };
       } else {
         result.slice = {
-          offset: this.parseSubFieldWord(sliceRest.slice(0, colonIdx)),
-          length: this.parseSubFieldWord(sliceRest.slice(colonIdx + 1)),
+          offset: sub(i, i + colonIdx),
+          length: sub(i + colonIdx + 1, ilen),
         };
       }
       return result;
@@ -2017,7 +2055,7 @@ export class Lexer {
     // Default/assign/error/alt without colon
     if (opChar === CH_DASH || opChar === CH_EQ || opChar === CH_PLUS || opChar === CH_QUESTION) {
       result.operator = inner[i];
-      result.operand = this.parseSubFieldWord(inner.slice(i + 1));
+      result.operand = sub(i + 1, ilen);
       return result;
     }
 
@@ -2025,10 +2063,10 @@ export class Lexer {
     if (opChar === CH_HASH) {
       if (i + 1 < ilen && inner.charCodeAt(i + 1) === CH_HASH) {
         result.operator = "##";
-        result.operand = this.parseSubFieldWord(inner.slice(i + 2));
+        result.operand = sub(i + 2, ilen);
       } else {
         result.operator = "#";
-        result.operand = this.parseSubFieldWord(inner.slice(i + 1));
+        result.operand = sub(i + 1, ilen);
       }
       return result;
     }
@@ -2037,10 +2075,10 @@ export class Lexer {
     if (opChar === CH_PERCENT) {
       if (i + 1 < ilen && inner.charCodeAt(i + 1) === CH_PERCENT) {
         result.operator = "%%";
-        result.operand = this.parseSubFieldWord(inner.slice(i + 2));
+        result.operand = sub(i + 2, ilen);
       } else {
         result.operator = "%";
-        result.operand = this.parseSubFieldWord(inner.slice(i + 1));
+        result.operand = sub(i + 1, ilen);
       }
       return result;
     }
@@ -2067,13 +2105,13 @@ export class Lexer {
       const sepIdx = findUnnested(rest, CH_SLASH);
       if (sepIdx === -1) {
         result.replace = {
-          pattern: this.parseSubFieldWord(rest),
-          replacement: new WordImpl("", 0, 0),
+          pattern: sub(i, ilen),
+          replacement: new WordImpl("", innerStart + ilen, innerStart + ilen),
         };
       } else {
         result.replace = {
-          pattern: this.parseSubFieldWord(rest.slice(0, sepIdx)),
-          replacement: this.parseSubFieldWord(rest.slice(sepIdx + 1)),
+          pattern: sub(i, i + sepIdx),
+          replacement: sub(i + sepIdx + 1, ilen),
         };
       }
       return result;
@@ -2083,12 +2121,10 @@ export class Lexer {
     if (opChar === CH_CARET) {
       if (i + 1 < ilen && inner.charCodeAt(i + 1) === CH_CARET) {
         result.operator = "^^";
-        const rest = inner.slice(i + 2);
-        if (rest) result.operand = this.parseSubFieldWord(rest);
+        if (i + 2 < ilen) result.operand = sub(i + 2, ilen);
       } else {
         result.operator = "^";
-        const rest = inner.slice(i + 1);
-        if (rest) result.operand = this.parseSubFieldWord(rest);
+        if (i + 1 < ilen) result.operand = sub(i + 1, ilen);
       }
       return result;
     }
@@ -2096,12 +2132,10 @@ export class Lexer {
     if (opChar === CH_COMMA) {
       if (i + 1 < ilen && inner.charCodeAt(i + 1) === CH_COMMA) {
         result.operator = ",,";
-        const rest = inner.slice(i + 2);
-        if (rest) result.operand = this.parseSubFieldWord(rest);
+        if (i + 2 < ilen) result.operand = sub(i + 2, ilen);
       } else {
         result.operator = ",";
-        const rest = inner.slice(i + 1);
-        if (rest) result.operand = this.parseSubFieldWord(rest);
+        if (i + 1 < ilen) result.operand = sub(i + 1, ilen);
       }
       return result;
     }
@@ -2109,7 +2143,7 @@ export class Lexer {
     // Transform: @
     if (opChar === CH_AT) {
       result.operator = "@";
-      result.operand = this.parseSubFieldWord(inner.slice(i + 1));
+      result.operand = sub(i + 1, ilen);
       return result;
     }
 
@@ -2171,7 +2205,7 @@ export class Lexer {
 
   private readAnsiCQuoted(): string {
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     let text = "";
     while (this.pos < len && src.charCodeAt(this.pos) !== CH_SQUOTE) {
       if (src.charCodeAt(this.pos) === CH_BACKSLASH && this.pos + 1 < len) {
@@ -2234,7 +2268,7 @@ export class Lexer {
   // Extract balanced parens for $(...) — respects nested quotes and case..esac
   private extractBalanced(): string {
     const src = this.src;
-    const len = src.length;
+    const len = this.srcEnd;
     let depth = 1;
     const start = this.pos;
 

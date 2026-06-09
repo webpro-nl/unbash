@@ -298,9 +298,9 @@ const EMPTY_PREFIX: AssignmentPrefix[] = [];
 const EMPTY_SUFFIX: Word[] = [];
 const EMPTY_REDIRECTS: Redirect[] = [];
 
-export function parse(source: string): Script & { errors?: ParseError[] } {
-  const parser = new Parser(source);
-  return parser.parse(source.length);
+export function parse(source: string, start = 0, end = source.length): Script & { errors?: ParseError[] } {
+  const parser = new Parser(source, start, end);
+  return parser.parse(start, end);
 }
 
 class Parser {
@@ -309,14 +309,16 @@ class Parser {
   private errors: ParseError[] = [];
   private _redirects: Redirect[] = [];
 
-  constructor(source: string) {
-    this.tok = new Lexer(source);
+  // `start`/`end` bound the parse to a window of `source` — used to parse a substitution's
+  // script in place so its nodes index the original source directly (offsets are absolute).
+  constructor(source: string, start = 0, end = source.length) {
+    this.tok = new Lexer(source, start, end);
     this.source = source;
   }
 
-  parse(sourceLen: number): Script & { errors?: ParseError[] } {
+  parse(start: number, end: number): Script & { errors?: ParseError[] } {
     let shebang: string | undefined;
-    if (this.source.charCodeAt(0) === 35 && this.source.charCodeAt(1) === 33) {
+    if (start === 0 && this.source.charCodeAt(0) === 35 && this.source.charCodeAt(1) === 33) {
       const nl = this.source.indexOf("\n");
       shebang = nl === -1 ? this.source : this.source.slice(0, nl);
     }
@@ -327,8 +329,8 @@ class Parser {
     }
     const result: Script & { errors?: ParseError[] } = {
       type: "Script",
-      pos: 0,
-      end: sourceLen,
+      pos: start,
+      end,
       shebang,
       commands,
       errors: this.errors.length > 0 ? this.errors : undefined,

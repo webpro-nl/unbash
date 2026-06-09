@@ -59,6 +59,8 @@ export interface CommandExpansionPart {
   text: string;
   script: Script | undefined;
   inner: string | undefined;
+  /** Internal: absolute offset of `inner` in the original source; cleared after resolution. */
+  innerStart?: number;
 }
 
 export interface ArithmeticExpansionPart {
@@ -73,6 +75,8 @@ export interface ProcessSubstitutionPart {
   operator: "<" | ">";
   script: Script | undefined;
   inner: string | undefined;
+  /** Internal: absolute offset of `inner` in the original source; cleared after resolution. */
+  innerStart?: number;
 }
 
 export type ExtGlobOperator = "?" | "*" | "+" | "@" | "!";
@@ -145,6 +149,7 @@ export interface ArithmeticCommandExpansion {
   text: string; // e.g., "$(cmd)"
   inner: string | undefined; // e.g., "cmd" - cleared after resolution
   script: Script | undefined; // set after resolution
+  innerStart?: number; // internal: absolute offset of `inner`; cleared after resolution
 }
 
 export type DoubleQuotedChild =

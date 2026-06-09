@@ -29,6 +29,21 @@ Result:
 }
 ```
 
+## Source offsets
+
+Every node carries `pos`/`end` as absolute offsets into the original source, so `source.slice(node.pos, node.end)` yields that node's text at any nesting depth — including inside command, process, arithmetic, and `${ }` substitutions, and parameter-expansion sub-fields. No need to track inner offsets while traversing.
+
+```ts
+const source = 'echo "$(date -u) $(whoami)"';
+const ast = parse(source);
+const sub = ast.commands[0].command.suffix[0].parts[0].parts[0]; // the $(date -u)
+source.slice(sub.script.pos, sub.script.end); // → "date -u"
+```
+
+`parts` is computed lazily — accessing it resolves a word's substitutions in place. Word `text` equals the source span except for parameter-expansion sub-field words (operands, patterns, replacements), where `text` is the processed value (escapes/quotes resolved, like `value`); their `pos`/`end` still span the source.
+
+The one exception to absolute offsets: legacy escaped backticks (`` `… \`…\` …` ``) rebuild their inner with the escapes removed, so it is no longer a verbatim substring of the source — the nested script's offsets stay relative to that rebuilt inner.
+
 ## Print
 
 Basic opinionated printer, does not preserve whitespace or comments (except shebang):
