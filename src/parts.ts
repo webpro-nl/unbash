@@ -1,6 +1,6 @@
 import type { Word, WordPart } from "./types.ts";
 import { Lexer } from "./lexer.ts";
-import { parse } from "./parser.ts";
+import { parse, parseRegion } from "./parser.ts";
 
 /**
  * Compute the structural parts of a word by re-scanning the source.
@@ -48,7 +48,7 @@ function resolveCollected(lexer: Lexer): void {
   for (const e of lexer.getCollectedExpansions()) {
     if (e.inner !== undefined) {
       e.script =
-        e.innerStart !== undefined ? parse(source, e.innerStart, e.innerStart + e.inner.length) : parse(e.inner);
+        e.innerStart !== undefined ? parseRegion(source, e.innerStart, e.innerStart + e.inner.length) : parse(e.inner);
       e.inner = undefined;
       e.innerStart = undefined;
     }
