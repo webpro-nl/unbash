@@ -41,7 +41,8 @@
     "lint": "oxlint",
     "prepack": "tsc",
     "test": "node --test test/*.test.ts",
-    "playground": "pnpx rolldown src/parser.ts -f esm -m -o playground/parser.js && pnpx rolldown src/printer.ts -f esm -m -o playground/printer.js && sed -i 's/id=\"version\">[^<]*/id=\"version\">'\"$(node -p \"require('.\\x2fpackage.json').version\")\"'/' playground/index.html"
+    "playground": "pnpx rolldown src/parser.ts -f esm -m -o playground/parser.js && pnpx rolldown src/printer.ts -f esm -m -o playground/printer.js && sed -i 's/id=\"version\">[^<]*/id=\"version\">'\"$(node -p \"require('.\\x2fpackage.json').version\")\"'/' playground/index.html",
+    "bench": "node bench/all.ts"
   },
   "devDependencies": {
     "@ericcornelissen/bash-parser": "^0.5.3",
