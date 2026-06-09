@@ -40,7 +40,7 @@ const sub = ast.commands[0].command.suffix[0].parts[0].parts[0]; // the $(date -
 source.slice(sub.script.pos, sub.script.end); // → "date -u"
 ```
 
-`parts` is computed lazily — accessing it resolves a word's substitutions in place. Word `text` equals the source span except for parameter-expansion sub-field words (operands, patterns, replacements), where `text` is the processed value (escapes/quotes resolved, like `value`); their `pos`/`end` still span the source.
+`parts` is computed lazily — accessing it resolves a word's substitutions in place. Every word's `text` equals its source span (`source.slice(pos, end)`); `value` carries the interpreted form (quotes resolved).
 
 The one exception to absolute offsets: legacy escaped backticks (`` `… \`…\` …` ``) rebuild their inner with the escapes removed, so it is no longer a verbatim substring of the source — the nested script's offsets stay relative to that rebuilt inner.
 

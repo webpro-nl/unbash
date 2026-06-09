@@ -191,7 +191,7 @@ test("${var/pat} replace with empty", () => {
   const p = getPart("echo ${pv/\\.}");
   assert.equal(p.parameter, "pv");
   assert.equal(p.operator, "/");
-  assert.equal(p.replace!.pattern.text, ".");
+  assert.equal(p.replace!.pattern.text, "\\."); // raw source span
   assert.equal(p.replace!.replacement.text, "");
 });
 
@@ -447,7 +447,8 @@ test("replace with quoted pattern", () => {
   const p = getPart("echo ${f%'-roff2html'*}");
   assert.equal(p.parameter, "f");
   assert.equal(p.operator, "%");
-  assert.equal(p.operand!.text, "-roff2html*");
+  assert.equal(p.operand!.text, "'-roff2html'*"); // raw source span
+  assert.equal(p.operand!.value, "-roff2html*"); // interpreted (quotes resolved)
   assert.equal(p.operand!.parts![0].type, "SingleQuoted");
 });
 

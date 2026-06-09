@@ -14,13 +14,13 @@ function check(source: string, value: unknown, path: string): void {
   const node = value as Record<string, any>;
   const isWord = typeof node.text === "string" && typeof node.pos === "number" && typeof node.end === "number";
   if (isWord) {
-    // Parameter-expansion sub-field words keep the processed value as `text` (escapes and
-    // quotes resolved), like `value`, so their span need not equal `text` — but pos/end must
-    // still index the original. Other words satisfy source.slice(pos, end) === text.
-    const span = source.slice(node.pos, node.end);
-    if (span !== node.text) {
-      assert.ok(node.parts, `word span mismatch at ${path} (pos=${node.pos}, end=${node.end}): ${JSON.stringify(span)}`);
-    }
+    // Every word — including parameter-expansion sub-fields — has text equal to its source
+    // span. value carries the interpreted form (quotes resolved).
+    assert.strictEqual(
+      source.slice(node.pos, node.end),
+      node.text,
+      `word span mismatch at ${path} (pos=${node.pos}, end=${node.end})`,
+    );
     const parts = node.parts; // getter → lazy resolve of nested substitutions
     if (parts) check(source, parts, `${path}.parts`);
     return;

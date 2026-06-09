@@ -1392,9 +1392,9 @@ export class Lexer {
     this.pos = start;
     this.readInnerWordText();
 
-    // pos/end span the raw operand in the original source; text keeps the sub-field
-    // convention of the processed value (escapes/quotes resolved), like .value.
-    const word = new WordImpl(this._wordText, start, end);
+    // text is the raw source span (so source.slice(pos, end) === text holds, as for every
+    // other word); value resolves quotes via parts.
+    const word = new WordImpl(this.src.slice(start, end), start, end);
     if (this._buildParts && this._wordParts) {
       word.parts = this._wordParts;
     }
