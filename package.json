@@ -45,19 +45,19 @@
   },
   "devDependencies": {
     "@ericcornelissen/bash-parser": "^0.5.3",
-    "@types/node": "^24.10.13",
+    "@types/node": "^24.13.1",
     "bash-parser": "^0.5.0",
     "mitata": "^1.0.34",
-    "oxfmt": "^0.35.0",
-    "oxlint": "^1.50.0",
+    "oxfmt": "^0.53.0",
+    "oxlint": "^1.68.0",
     "remark": "^15.0.1",
-    "remark-preset-webpro": "^2.1.1",
-    "rolldown": "1.0.0-rc.6",
+    "remark-preset-webpro": "^2.2.0",
+    "rolldown": "1.1.0",
     "sh-syntax": "^0.5.8",
     "tree-sitter": "^0.25.0",
     "tree-sitter-bash": "^0.25.1",
-    "typescript": "^5.8.3",
-    "web-tree-sitter": "^0.26.5"
+    "typescript": "^6.0.3",
+    "web-tree-sitter": "^0.26.9"
   },
   "remarkConfig": {
     "plugins": [
@@ -67,5 +67,5 @@
   "engines": {
     "node": ">=14"
   },
-  "packageManager": "pnpm@10.29.2"
+  "packageManager": "pnpm@11.5.2"
 }

@@ -1,0 +1,3 @@
+allowBuilds:
+  tree-sitter: true
+  tree-sitter-bash: true
