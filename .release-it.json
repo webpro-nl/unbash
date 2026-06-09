@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "before:init": ["pnpm build", "pnpm lint", "pnpm test"]
+  },
+  "npm": {
+    "stage": true
+  }
+}
