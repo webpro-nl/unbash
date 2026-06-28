@@ -8,6 +8,27 @@ function dequoteValue(parts: DoubleQuotedChild[]): string {
   return s;
 }
 
+function unescapeBareValue(text: string): string {
+  const first = text.indexOf("\\");
+  if (first === -1) return text;
+
+  let s = "";
+  let start = 0;
+  for (let i = first; i < text.length; i++) {
+    if (text.charCodeAt(i) !== 92) continue;
+    s += text.slice(start, i);
+    i++;
+    if (i >= text.length) {
+      s += "\\";
+      start = i;
+      break;
+    }
+    if (text.charCodeAt(i) !== 10) s += text[i];
+    start = i + 1;
+  }
+  return s + text.slice(start);
+}
+
 export class WordImpl implements Word {
   static _resolveWord: PartsResolver;
   static _resolveHeredocBody: PartsResolver;
@@ -33,7 +54,7 @@ export class WordImpl implements Word {
     if (this.#value === null) {
       const parts = this.parts;
       if (!parts) {
-        this.#value = this.text;
+        this.#value = unescapeBareValue(this.text);
       } else {
         let s = "";
         for (const p of parts) {
