@@ -1170,23 +1170,21 @@ class Parser {
 
     // Value portion starts after =
     const valStart = eqIdx + 1;
-    const valText = text.slice(valStart);
+    const valueStart = tokPos + valStart;
 
     // Check for array assignment: value starts with (
-    if (valText.charCodeAt(0) === 0x28 /* ( */ && valText.charCodeAt(valText.length - 1) === 0x29 /* ) */) {
-      const inner = valText.slice(1, -1);
-      const arrayOffset = tokPos + valStart + 1;
-      const elements = this.parseArrayElements(inner, arrayOffset);
+    if (text.charCodeAt(valStart) === 0x28 /* ( */ && text.charCodeAt(text.length - 1) === 0x29 /* ) */) {
+      const elements = this.parseArrayElements(valueStart + 1, tokEnd - 1);
       result.array = elements;
     } else {
-      result.value = new WordImpl(valText, tokPos + valStart, tokEnd, this.source);
+      result.value = new WordImpl(text.slice(valStart), valueStart, tokEnd, this.source);
     }
 
     return result;
   }
 
-  private parseArrayElements(inner: string, offset = 0): Word[] {
-    const subTok = new Lexer(inner);
+  private parseArrayElements(start: number, end: number): Word[] {
+    const subTok = new Lexer(this.source, start, end);
     const elements: Word[] = [];
     while (subTok.peek(LexContext.Normal).token !== Token.EOF) {
       if (subTok.peek(LexContext.Normal).token === Token.Newline) {
@@ -1195,9 +1193,7 @@ class Parser {
       }
       const t = subTok.next(LexContext.Normal);
       if (t.token === Token.Word || t.token === Token.Assignment) {
-        const pos = t.pos + offset;
-        const end = t.end + offset;
-        elements.push(new WordImpl(this.source.slice(pos, end), pos, end, this.source));
+        elements.push(new WordImpl(this.source.slice(t.pos, t.end), t.pos, t.end, this.source));
       }
     }
     return elements;
