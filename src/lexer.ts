@@ -886,28 +886,49 @@ export class Lexer {
   }
 
   private readHereDocBody(delimiter: string, strip: boolean): string {
+    const bodyStart = this.pos;
+    const bodyEnd = this.skipHereDocBody(delimiter, strip);
+    return this.src.slice(bodyStart, bodyEnd);
+  }
+
+  // Advance past the heredoc body and its delimiter line; return the body end
+  // (start of the delimiter line, or srcEnd when delimited by end-of-input).
+  // With parenEnds (inside $(...)), a line starting with the delimiter directly
+  // followed by ")" also terminates the body, resuming at the ")" — bash treats
+  // the substitution's closing paren as end-of-file for its heredocs.
+  private skipHereDocBody(delimiter: string, strip: boolean, parenEnds = false): number {
     const src = this.src;
     const len = this.srcEnd;
     const dLen = delimiter.length;
-    const bodyStart = this.pos;
     while (this.pos < len) {
       let lineStart = this.pos;
       let lineEnd = src.indexOf("\n", this.pos);
-      if (lineEnd === -1) lineEnd = len;
+      if (lineEnd === -1 || lineEnd > len) lineEnd = len;
 
       if (strip) {
         while (lineStart < lineEnd && src.charCodeAt(lineStart) === CH_TAB) lineStart++;
       }
 
       if (lineEnd - lineStart === dLen && src.startsWith(delimiter, lineStart)) {
-        const body = src.slice(bodyStart, this.pos);
+        const bodyEnd = this.pos;
         this.pos = lineEnd < len ? lineEnd + 1 : lineEnd;
-        return body;
+        return bodyEnd;
+      }
+
+      if (
+        parenEnds &&
+        lineEnd - lineStart > dLen &&
+        src.charCodeAt(lineStart + dLen) === CH_RPAREN &&
+        src.startsWith(delimiter, lineStart)
+      ) {
+        const bodyEnd = this.pos;
+        this.pos = lineStart + dLen;
+        return bodyEnd;
       }
 
       this.pos = lineEnd < len ? lineEnd + 1 : lineEnd;
     }
-    return src.slice(bodyStart, this.pos);
+    return this.pos;
   }
 
   // Scan an unquoted heredoc body for expansions ($var, ${...}, $(...), `...`).
@@ -2285,6 +2306,13 @@ export class Lexer {
         this.pos++;
       } else if (c === CH_LPAREN || c === CH_BACKSLASH || c === CH_SQUOTE || c === CH_DQUOTE || c === CH_BACKTICK) {
         break;
+      } else if (c === CH_LT && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LT) {
+        break;
+      } else if (
+        c === CH_HASH &&
+        (this.pos === start || (src.charCodeAt(this.pos - 1) < 128 && charType[src.charCodeAt(this.pos - 1)] & 1))
+      ) {
+        break;
       } else if (
         c === 99 /* c */ &&
         // Ensure word start boundary (not inside e.g. "lowercase")
@@ -2305,10 +2333,17 @@ export class Lexer {
 
     // Slow path: just track position (source is copied verbatim, so slice at end)
     let caseDepth = 0;
+    let pendingDelims: { delimiter: string; strip: boolean }[] | null = null;
+    let arithBase = -1;
 
     while (this.pos < len && depth > 0) {
       const ch = src.charCodeAt(this.pos);
       if (ch === CH_LPAREN) {
+        // (( opens arithmetic — suppress heredoc detection until the parens
+        // rebalance so shift operators inside aren't mistaken for heredocs
+        if (arithBase < 0 && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
+          arithBase = depth;
+        }
         depth++;
         this.pos++;
       } else if (ch === CH_RPAREN) {
@@ -2321,6 +2356,7 @@ export class Lexer {
             this.pos++;
             return result;
           }
+          if (depth <= arithBase) arithBase = -1;
           this.pos++;
         }
       } else if (ch === CH_BACKSLASH) {
@@ -2339,6 +2375,34 @@ export class Lexer {
           if (this.pos < len) this.pos++;
         }
         if (this.pos < len) this.pos++;
+      } else if (ch === CH_LT && arithBase < 0 && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LT) {
+        // << is a heredoc operator even in case-pattern position — unquoted <<
+        // inside a pattern is a bash syntax error, so no caseDepth gate here
+        if (this.pos + 2 < len && src.charCodeAt(this.pos + 2) === CH_LT) {
+          this.pos += 3; // <<< herestring
+        } else {
+          this.pos += 2;
+          const strip = this.pos < len && src.charCodeAt(this.pos) === CH_DASH;
+          if (strip) this.pos++;
+          this.skipSpacesAndTabs();
+          this.readHereDocDelimiter();
+          // Empty unquoted delimiter means there was no delimiter word (`<< )`)
+          if (this._hereDelim || this._hereQuoted) {
+            (pendingDelims ??= []).push({ delimiter: this._hereDelim, strip });
+          }
+        }
+      } else if (ch === CH_NL && pendingDelims) {
+        this.pos++;
+        for (const hd of pendingDelims) this.skipHereDocBody(hd.delimiter, hd.strip, true);
+        pendingDelims = null;
+      } else if (
+        ch === CH_HASH &&
+        arithBase < 0 &&
+        (this.pos === start || (src.charCodeAt(this.pos - 1) < 128 && charType[src.charCodeAt(this.pos - 1)] & 1))
+      ) {
+        // Word-boundary # opens a comment — opaque up to (not including) the
+        // newline, so quotes and << inside it stay inert
+        while (this.pos < len && src.charCodeAt(this.pos) !== CH_NL) this.pos++;
       } else {
         const wStart = this.pos;
         while (this.pos < len) {

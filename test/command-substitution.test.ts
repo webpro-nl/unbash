@@ -3,6 +3,7 @@ import test from "node:test";
 import { parse } from "../src/parser.ts";
 import type { Command } from "../src/types.ts";
 import { computeWordParts } from "../src/parts.ts";
+import { verify } from "./verify.ts";
 
 const getCmd = (ast: ReturnType<typeof parse>, i = 0) => ast.commands[i].command as Command;
 const wp = (s: string, w: import("../src/types.ts").Word) => computeWordParts(s, w);
@@ -169,4 +170,196 @@ test("nested case in $() with multiple patterns", () => {
   const c = getCmd(ast);
   assert.equal(c.name?.text, "echo");
   assert.equal(wp(src, c.suffix[0])?.[0].type, "CommandExpansion");
+});
+
+// ── heredocs inside $() ──────────────────────────────────────────────
+
+test('apostrophe in quoted-delimiter heredoc inside "$()" (#4)', () => {
+  const src = `echo "$(cat <<'E'\nit's\nE\n)"`;
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  assert.equal(verify(src, ast), src);
+});
+
+test('heredoc inside "$()" resolves inner script and body', () => {
+  const src = `echo "$(cat <<'E'\nit's\nE\n)"`;
+  const dq = wp(src, getCmd(parse(src)).suffix[0])?.[0];
+  assert.equal(dq?.type, "DoubleQuoted");
+  if (dq?.type === "DoubleQuoted") {
+    const part = dq.parts[0];
+    assert.equal(part.type, "CommandExpansion");
+    if (part.type === "CommandExpansion") {
+      const inner = part.script!.commands[0].command as Command;
+      assert.equal(inner.name?.text, "cat");
+      assert.equal(inner.redirects[0].content, "it's\n");
+      assert.equal(inner.redirects[0].heredocQuoted, true);
+    }
+  }
+});
+
+test('apostrophe in unquoted-delimiter heredoc inside "$()"', () => {
+  const src = `echo "$(cat <<E\nit's\nE\n)"`;
+  assert.equal(parse(src).errors, undefined);
+});
+
+test("$() with heredoc ends at closing paren", () => {
+  const src = `echo $(cat <<'E'\nit's\nE\n) after`;
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  const c = getCmd(ast);
+  assert.equal(c.suffix.length, 2);
+  assert.equal(c.suffix[1].text, "after");
+});
+
+test('double quote in heredoc body inside "$()"', () => {
+  const src = `echo "$(cat <<'E'\nsay "hi\nE\n)"`;
+  assert.equal(parse(src).errors, undefined);
+});
+
+test('backtick in heredoc body inside "$()"', () => {
+  const src = "echo \"$(cat <<'E'\nback ` tick\nE\n)\"";
+  assert.equal(parse(src).errors, undefined);
+});
+
+test('<<- heredoc with tab-indented delimiter inside "$()"', () => {
+  const src = `echo "$(cat <<-'E'\n\tit's\n\tE\n)"`;
+  assert.equal(parse(src).errors, undefined);
+});
+
+test('two heredocs inside "$()"', () => {
+  const src = `echo "$(cat <<A <<B\nit's a\nA\nit's b\nB\n)"`;
+  assert.equal(parse(src).errors, undefined);
+});
+
+test("unterminated heredoc before bare ) errors like bash", () => {
+  // bash: only a `delimiter)` line rescues an unterminated heredoc; a bare `)`
+  // line does not (unexpected EOF while looking for matching `)')
+  assert.ok(parse(`echo "$(cat <<B\n) after"`).errors);
+  assert.ok(parse(`echo "$(cat <<A <<B\nA\n) after"`).errors);
+});
+
+test("heredoc inside <() process substitution", () => {
+  const src = `cat <(cat <<'E'\nit's\nE\n)`;
+  assert.equal(parse(src).errors, undefined);
+});
+
+test('herestring inside "$()" is not a heredoc', () => {
+  const src = `echo "$(cat <<< word\necho done)"`;
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  assert.equal(verify(src, ast), src);
+});
+
+test('arithmetic shift inside multi-line "$()" is not a heredoc', () => {
+  const src = `echo "$(x=$((1<<2))\necho $x)"`;
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  assert.equal(verify(src, ast), src);
+});
+
+test('arithmetic command shift inside multi-line "$()" is not a heredoc', () => {
+  const src = `echo "$( ((x<<=2))\necho $x )"`;
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  assert.equal(verify(src, ast), src);
+});
+
+test('adjacent (( as nested subshells inside "$()"', () => {
+  // bash retries failed arithmetic as a subshell — the extent scan must not
+  // assume (( is arithmetic
+  const src = 'echo "$( ((echo a); echo b) )"';
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  assert.equal(verify(src, ast), src);
+});
+
+test("quoted << in case pattern inside $()", () => {
+  const src = `echo "$(case "a<<b" in\n"a<<b") echo hi;;\nesac)"`;
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  assert.equal(verify(src, ast), src);
+});
+
+test("unquoted << in case pattern errors like bash", () => {
+  // bash: syntax error near unexpected token `<<' — << is a heredoc operator
+  // even in pattern position
+  const src = `echo "$(case x in\nfoo<<bar)\necho hi\n;;\nesac)"`;
+  assert.ok(parse(src).errors);
+});
+
+test("<< inside a comment in $() is inert", () => {
+  const src = `echo "$(# <<E\n)"`;
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  assert.equal(verify(src, ast), src);
+});
+
+test("quotes inside a comment in $() are inert", () => {
+  const src = `echo "$(# it's\nls)"`;
+  assert.equal(parse(src).errors, undefined);
+});
+
+test("comment after command in $() hides <<", () => {
+  const src = `echo "$(echo x; # <<E\necho y)"`;
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  assert.equal(verify(src, ast), src);
+});
+
+test("heredoc with trailing comment inside $()", () => {
+  const src = `echo "$(cat <<E # it's\nbody\nE\n)"`;
+  assert.equal(parse(src).errors, undefined);
+});
+
+test("mid-word # in $() is not a comment", () => {
+  const src = `echo "$(echo a#')\n')"`;
+  assert.equal(parse(src).errors, undefined);
+});
+
+test("comment in single-line $() swallows the paren like bash", () => {
+  // bash: the comment runs to a newline, so `)` inside it does not close
+  const src = `echo "$(# c)"`;
+  assert.ok(parse(src).errors);
+});
+
+test("heredoc delimiter directly before closing paren", () => {
+  // bash accepts `E)` with a warning: the substitution's closing paren acts
+  // as end-of-file for the heredoc
+  const src = `echo "$(cat <<E\nhi\nE)"`;
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  assert.equal(verify(src, ast), src);
+  const dq = wp(src, getCmd(ast).suffix[0])?.[0];
+  assert.equal(dq?.type, "DoubleQuoted");
+  if (dq?.type === "DoubleQuoted") {
+    assert.equal(dq.parts[0].type, "CommandExpansion");
+    if (dq.parts[0].type === "CommandExpansion") {
+      const inner = dq.parts[0].script!.commands[0].command as Command;
+      assert.equal(inner.redirects[0].content, "hi\n");
+    }
+  }
+});
+
+test("delimiter+paren line ends heredoc even with exact line later", () => {
+  // bash: empty body, substitution closes at the first `)`, remainder is
+  // literal text inside the double quotes
+  const src = `echo "$(cat <<E\nE) oops\nE\n)"`;
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  assert.equal(verify(src, ast), src);
+});
+
+test("delimiter-prefixed body line does not end heredoc", () => {
+  const src = `echo "$(cat <<E\nError: x\nE\n)"`;
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  const dq = wp(src, getCmd(ast).suffix[0])?.[0];
+  assert.equal(dq?.type, "DoubleQuoted");
+  if (dq?.type === "DoubleQuoted") {
+    assert.equal(dq.parts[0].type, "CommandExpansion");
+    if (dq.parts[0].type === "CommandExpansion") {
+      const inner = dq.parts[0].script!.commands[0].command as Command;
+      assert.equal(inner.redirects[0].content, "Error: x\n");
+    }
+  }
 });
