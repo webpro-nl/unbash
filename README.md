@@ -22,21 +22,60 @@ Result:
 {
   type: "Script",
   commands: [{
-    type: "If",
-    clause: { type: "Command", name: { text: "[" }, ... },
-    then: { type: "Command", name: { text: "cat" }, ... }
+    type: "Statement",
+    command: {
+      type: "If",
+      clause: { type: "CompoundList", commands: [ /* [ -f "$1" ] */ ] },
+      then: { type: "CompoundList", commands: [ /* cat "$1" */ ] }
+    }
   }]
 }
 ```
 
-## Print
+### Word parts
+
+A `Word` holds its expansions in `parts`. This is a lazy getter, computed on
+first access (not an own enumerable property):
+
+```js
+const word = parse("echo a$(id)b").commands[0].command.suffix[0];
+
+word.parts; // [Literal, CommandExpansion, Literal]
+
+Object.keys(word); // ["text", "pos", "end"] — no `parts`
+({ ...word }); // same
+structuredClone(word); // same
+```
+
+Read `parts` directly, or serialize with `JSON.stringify`, which includes it
+through `toJSON`. A generic walker driven by `Object.keys` finds no expansions
+at all, and reports no error while doing so:
+
+```js
+import { parse } from "unbash";
+
+const script = parse('echo "$HOME" $(mktemp)');
+
+for (const statement of script.commands) {
+  const command = statement.command;
+  if (command.type !== "Command") continue;
+  for (const word of [command.name, ...command.suffix]) {
+    for (const part of word?.parts ?? []) {
+      if (part.type === "CommandExpansion") console.log(part.text);
+    }
+  }
+}
+// $(mktemp)
+```
+
+### Print
 
 Basic opinionated printer, does not preserve whitespace or comments (except
 shebang):
 
 ```ts
 import { parse } from "unbash";
-import { print } from "unbash/print";
+import { print } from "unbash/printer";
 
 const ast = parse('if [ -f "$1" ]; then cat "$1"; fi');
 const script = print(ast);
