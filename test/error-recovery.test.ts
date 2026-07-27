@@ -111,3 +111,28 @@ test("comment-only returns empty Script", () => {
   assert.equal(ast.type, "Script");
   assert.equal(ast.commands.length, 0);
 });
+
+test("unclosed command substitution collects error", () => {
+  const ast = parse("curl $(foo");
+  assert.ok(ast.errors);
+  assert.ok(ast.errors.some((e) => e.message.includes("unterminated command substitution")));
+});
+
+test("unclosed command substitution inside double quotes collects error", () => {
+  const ast = parse('echo "$(foo"');
+  assert.ok(ast.errors);
+  assert.ok(ast.errors.some((e) => e.message.includes("unterminated command substitution")));
+});
+
+test("unclosed process substitution collects error", () => {
+  const ast = parse("diff <(foo");
+  assert.ok(ast.errors);
+  assert.ok(ast.errors.some((e) => e.message.includes("unterminated process substitution")));
+});
+
+test("unclosed command substitution keeps the inner command name intact", () => {
+  const ast = parse("curl $(foo");
+  const word = ast.commands[0].command.suffix[0];
+  const part = word.parts.find((p) => p.type === "CommandExpansion");
+  assert.equal(part.script.commands[0].command.name.text, "foo");
+});

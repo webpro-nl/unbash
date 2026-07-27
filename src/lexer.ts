@@ -377,6 +377,7 @@ export class Lexer {
     ) {
       this.pos = startPos + 2;
       const inner = this.extractBalanced();
+      if (this._unbalanced) this.errors.push({ message: "unterminated process substitution", pos: startPos });
       const text = this.src.slice(startPos, this.pos);
       const part: import("./types.ts").ProcessSubstitutionPart = {
         type: "ProcessSubstitution",
@@ -789,6 +790,7 @@ export class Lexer {
         const psStart = this.pos;
         this.pos += 2;
         this.extractBalanced();
+        if (this._unbalanced) this.errors.push({ message: "unterminated process substitution", pos: psStart });
         const psText = src.slice(psStart, this.pos);
         setToken(out, Token.Redirect, op, tokenStart, this.pos);
         out.content = psText;
@@ -814,6 +816,7 @@ export class Lexer {
   private readProcessSubstitution(out: TokenValue, operator: "<" | ">", tokenStart: number): void {
     this.pos++; // skip (
     this.extractBalanced();
+    if (this._unbalanced) this.errors.push({ message: "unterminated process substitution", pos: tokenStart });
     const text = this.src.slice(tokenStart, this.pos);
     setToken(out, Token.Word, text, tokenStart, this.pos);
   }
@@ -978,6 +981,9 @@ export class Lexer {
   private _resultText = "";
   private _resultHasExpansion = false;
   private _resultPart: WordPart | undefined;
+  // Set by extractBalanced when the input ended before the closing paren, so
+  // callers can report the construct they were scanning.
+  private _unbalanced = false;
   private _dqText = "";
   private _dqHasExpansions = false;
   private _dqParts: DoubleQuotedChild[] | null = null;
@@ -1449,8 +1455,10 @@ export class Lexer {
       if (ch === CH_DOLLAR && this.pos + 1 < len) {
         const next = src.charCodeAt(this.pos + 1);
         if (next === CH_LPAREN) {
+          const csStart = this.pos;
           this.pos += 2;
           this.extractBalanced();
+          if (this._unbalanced) this.errors.push({ message: "unterminated command substitution", pos: csStart });
           continue;
         }
         if (next === CH_LBRACE) {
@@ -1798,12 +1806,14 @@ export class Lexer {
   private readCommandSubstitution(): void {
     const dollarPos = this.pos - 1;
     this.pos++; // skip (
-    this.extractBalanced();
+    // extractBalanced returns the inner text without the closing paren, so it
+    // stays correct when the input ended before that paren was reached.
+    const inner = this.extractBalanced();
+    if (this._unbalanced) this.errors.push({ message: "unterminated command substitution", pos: dollarPos });
     const text = this.src.slice(dollarPos, this.pos);
     this._resultText = text;
     this._resultHasExpansion = true;
     if (this._buildParts) {
-      const inner = text.slice(2, -1);
       this._resultPart = { type: "CommandExpansion", text, script: undefined, inner, innerStart: dollarPos + 2 };
       this.collectedExpansions.push(this._resultPart);
     } else {
@@ -2292,6 +2302,7 @@ export class Lexer {
     const len = this.srcEnd;
     let depth = 1;
     const start = this.pos;
+    this._unbalanced = false;
 
     // Fast path: scan for simple cases with no nested quotes/parens/case
     while (this.pos < len && depth > 0) {
@@ -2436,6 +2447,8 @@ export class Lexer {
         }
       }
     }
+    // Ran out of input before the closing paren.
+    this._unbalanced = true;
     return src.slice(start, this.pos);
   }
 }
