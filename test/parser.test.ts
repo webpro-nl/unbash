@@ -51,6 +51,23 @@ test("set and trap commands", () => {
   assert.equal(ast.commands.length, 4);
 });
 
+// Command names that collide with Object.prototype members must not be mistaken
+// for reserved words by the keyword lookup.
+test("Object.prototype member names are ordinary command names", () => {
+  for (const name of ["toString", "valueOf", "constructor", "hasOwnProperty", "__proto__", "isPrototypeOf"]) {
+    const ast = parse(`${name} arg`);
+    assert.equal(ast.commands.length, 1, `no command for: ${name}`);
+    assert.equal(getCmd(ast).name?.text, name);
+    assert.deepEqual(args(getCmd(ast)), ["arg"]);
+  }
+});
+
+test("Object.prototype member name does not truncate the rest of the script", () => {
+  const ast = parse("echo hi; toString foo; echo bye");
+  assert.equal(ast.commands.length, 3);
+  assert.equal(getCmd(ast, 2).name?.text, "echo");
+});
+
 // ── Real-world patterns ─────────────────────────────────────────────
 
 test("real-world scripts parse without errors", () => {

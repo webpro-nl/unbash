@@ -1000,12 +1000,15 @@ export class Lexer {
     if (ctx === LexContext.CommandStart) {
       if (!hasExpansions && !quoted) {
         const fc = text.charCodeAt(0);
-        if (
-          ((fc >= CH_a && fc <= CH_z && text.length <= 8) || fc === CH_BANG || fc === CH_LBRACE || fc === CH_RBRACE) &&
-          text in RESERVED_WORDS
-        ) {
-          setToken(out, RESERVED_WORDS[text], text, tokenStart, wordEnd);
-          return;
+        if ((fc >= CH_a && fc <= CH_z && text.length <= 8) || fc === CH_BANG || fc === CH_LBRACE || fc === CH_RBRACE) {
+          // Single lookup, then a typeof check — `text in RESERVED_WORDS` would also match
+          // inherited Object.prototype members, making `toString` and `valueOf` parse as
+          // keywords. Own reserved words are always numeric Token values.
+          const reserved = RESERVED_WORDS[text];
+          if (typeof reserved === "number") {
+            setToken(out, reserved, text, tokenStart, wordEnd);
+            return;
+          }
         }
         if (fc === CH_LBRACKET && text === "[[") {
           setToken(out, Token.DblLBracket, text, tokenStart, wordEnd);
