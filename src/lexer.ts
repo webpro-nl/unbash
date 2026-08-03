@@ -2815,14 +2815,15 @@ export class Lexer {
   }
 
   private readBraceCommandSubstitution(): void {
-    this.readBraceSubstitution("${ ", 1);
+    this.readBraceSubstitution(1);
   }
 
   private readValueSubstitution(): void {
-    this.readBraceSubstitution("${| ", 2);
+    this.readBraceSubstitution(2);
   }
 
-  private readBraceSubstitution(prefix: string, skip: number): void {
+  private readBraceSubstitution(skip: number): void {
+    const dollarPos = this.pos - 1;
     this.pos += skip;
     const src = this.src;
     const len = this.srcEnd;
@@ -2847,12 +2848,12 @@ export class Lexer {
       } else if (c === CH_BACKSLASH) this.pos++;
       this.pos++;
     }
-    this._resultIsRaw = false;
+    this._resultIsRaw = true;
     this._resultHasExpansion = true;
     if (this._buildParts || this._buildValue) {
       const rawInner = src.slice(start, this.pos - 1);
       const inner = rawInner.trim();
-      const text = prefix + inner + " }";
+      const text = src.slice(dollarPos, this.pos);
       this._resultText = text;
       if (this._buildParts) {
         const innerStart = start + (rawInner.length - rawInner.trimStart().length);

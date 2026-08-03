@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
+import { print } from "../src/printer.ts";
 import type { Command } from "../src/types.ts";
 import { computeWordParts } from "../src/parts.ts";
 import { verify } from "./verify.ts";
@@ -142,6 +143,18 @@ test("${| } does not interfere with ${var}", () => {
   const c = getCmd(parse(src));
   assert.equal(c.suffix[0].text, "${var}");
   assert.equal(wp(src, c.suffix[0])?.[0].type, "ParameterExpansion");
+});
+
+test("multiline brace command substitutions preserve their source text", () => {
+  for (const src of ["echo ${\n  foo\n  bar\n}", "echo ${|\n  foo\n  bar\n}"]) {
+    const ast = parse(src);
+    const word = getCmd(ast).suffix[0];
+    const part = wp(src, word)?.[0];
+    assert.equal(part?.type, "CommandExpansion");
+    assert.equal(part?.text, src.slice(5));
+    assert.equal(word.value, src.slice(5));
+    assert.equal(print(ast), src);
+  }
 });
 
 // ── case inside $() ─────────────────────────────────────────────────
