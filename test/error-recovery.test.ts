@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
+import type { If } from "../src/types.ts";
 
 // ── Error recovery ──────────────────────────────────────────────────
 
@@ -22,6 +23,17 @@ test("unmatched parentheses don't throw", () => {
 test("truncated if (missing fi) doesn't throw", () => {
   const ast = parse("if true; then echo yes");
   assert.equal(ast.type, "Script");
+});
+
+test("truncated elif chain keeps valid branch spans", () => {
+  const ast = parse("if a; then b; elif c; then d");
+  let branch = ast.commands[0].command as If;
+
+  for (;;) {
+    assert.ok(branch.end >= branch.pos);
+    if (branch.else?.type !== "If") break;
+    branch = branch.else;
+  }
 });
 
 test("truncated for (missing done) doesn't throw", () => {

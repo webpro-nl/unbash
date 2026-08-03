@@ -58,6 +58,11 @@ test("if/elif/else/fi", () => {
   assert.equal(roundtrip(src), src);
 });
 
+test("if/elif with trailing redirect", () => {
+  const src = "if a; then b; elif c; then d; fi >out";
+  assert.equal(roundtrip(src), src);
+});
+
 test("for loop", () => {
   const src = "for x in a b c; do echo $x; done";
   assert.equal(roundtrip(src), src);

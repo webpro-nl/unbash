@@ -297,6 +297,7 @@ const BINARY_TEST_OPS: Record<string, 1> = {
 const EMPTY_PREFIX: AssignmentPrefix[] = [];
 const EMPTY_SUFFIX: Word[] = [];
 const EMPTY_REDIRECTS: Redirect[] = [];
+const MAX_SYNTAX_NESTING = 256;
 
 export function parse(source: string): Script & { errors?: ParseError[] } {
   return new Parser(source, 0, source.length).run();
@@ -315,6 +316,7 @@ class Parser {
   private end: number;
   private errors: ParseError[] = [];
   private _redirects: Redirect[] = [];
+  private syntaxDepth = 0;
 
   constructor(source: string, start: number, end: number) {
     this.tok = new Lexer(source, start, end);
@@ -664,7 +666,19 @@ class Parser {
   // subshell := '(' list ')'
   private subshell(): Subshell {
     const pos = this.tok.next(LexContext.CommandStart).pos;
+
+    if (this.syntaxDepth === MAX_SYNTAX_NESTING) {
+      this.error("maximum subshell nesting depth exceeded", pos);
+      const closeEnd = this.tok.skipSubshellBody();
+      if (closeEnd < 0) this.error("expected ')' to close subshell", this.tok.getPos());
+      const end = closeEnd >= 0 ? closeEnd : pos;
+      this._redirects = this.collectTrailingRedirects();
+      return { type: "Subshell", pos, end, body: this.makeCompoundList([]) };
+    }
+
+    this.syntaxDepth++;
     const commands = this.list();
+    this.syntaxDepth--;
     const closeEnd = this.acceptEnd(Token.RParen, LexContext.Normal);
     if (closeEnd < 0) this.error("expected ')' to close subshell", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
@@ -675,7 +689,19 @@ class Parser {
   // brace_group := '{' list '}'
   private braceGroup(): BraceGroup {
     const pos = this.tok.next(LexContext.CommandStart).pos;
+
+    if (this.syntaxDepth === MAX_SYNTAX_NESTING) {
+      this.error("maximum brace group nesting depth exceeded", pos);
+      const closeEnd = this.tok.skipCompoundBody(Token.RBrace);
+      if (closeEnd < 0) this.error("expected '}' to close brace group", this.tok.getPos());
+      const end = closeEnd >= 0 ? closeEnd : pos;
+      this._redirects = this.collectTrailingRedirects();
+      return { type: "BraceGroup", pos, end, body: this.makeCompoundList([]) };
+    }
+
+    this.syntaxDepth++;
     const commands = this.list();
+    this.syntaxDepth--;
     const closeEnd = this.acceptEnd(Token.RBrace, LexContext.Normal);
     if (closeEnd < 0) this.error("expected '}' to close brace group", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
@@ -686,29 +712,75 @@ class Parser {
   // if_clause := IF list THEN list (ELIF list THEN list)* [ELSE list] FI
   private ifClause(): If {
     const pos = this.tok.next(LexContext.CommandStart).pos;
-    const clause = this.makeCompoundList(this.list());
-    this.skipSemi();
-    if (!this.accept(Token.Then, LexContext.CommandStart)) this.error("expected 'then'", this.tok.getPos());
-    const then_ = this.makeCompoundList(this.list());
-    this.skipSemi();
+
+    if (this.syntaxDepth === MAX_SYNTAX_NESTING) {
+      this.error("maximum if nesting depth exceeded", pos);
+      const closeEnd = this.tok.skipCompoundBody(Token.Fi);
+      if (closeEnd < 0) this.error("expected 'fi' to close 'if'", this.tok.getPos());
+      const end = closeEnd >= 0 ? closeEnd : pos;
+      this._redirects = this.collectTrailingRedirects();
+      return {
+        type: "If",
+        pos,
+        end,
+        clause: this.makeCompoundList([]),
+        then: this.makeCompoundList([]),
+        else: undefined,
+      };
+    }
+
+    this.syntaxDepth++;
+    let firstBranch: If | undefined;
+    let lastBranch: If | undefined;
+    let branchPos = pos;
+    let clause: CompoundList;
+    let then_: CompoundList;
+    for (;;) {
+      clause = this.makeCompoundList(this.list());
+      this.skipSemi();
+      if (!this.accept(Token.Then, LexContext.CommandStart)) this.error("expected 'then'", this.tok.getPos());
+      then_ = this.makeCompoundList(this.list());
+      this.skipSemi();
+      const elif = this.accept(Token.Elif, LexContext.CommandStart);
+      if (!elif) break;
+      const branch: If = {
+        type: "If",
+        pos: branchPos,
+        end: branchPos,
+        clause,
+        then: then_,
+        else: undefined,
+      };
+      if (lastBranch) lastBranch.else = branch;
+      else firstBranch = branch;
+      lastBranch = branch;
+      branchPos = elif.pos;
+    }
+
     let else_: CompoundList | If | undefined;
     let end: number;
-    if (this.tok.peek(LexContext.CommandStart).token === Token.Elif) {
-      else_ = this.ifClause();
-      end = else_.end; // elif's ifClause already consumed fi
-    } else if (this.accept(Token.Else, LexContext.CommandStart)) {
+    if (this.accept(Token.Else, LexContext.CommandStart)) {
       else_ = this.makeCompoundList(this.list());
       this.skipSemi();
       const closeEnd = this.acceptEnd(Token.Fi, LexContext.CommandStart);
       if (closeEnd < 0) this.error("expected 'fi' to close 'if'", this.tok.getPos());
-      end = closeEnd >= 0 ? closeEnd : pos;
+      end = closeEnd >= 0 ? closeEnd : branchPos;
     } else {
       const closeEnd = this.acceptEnd(Token.Fi, LexContext.CommandStart);
       if (closeEnd < 0) this.error("expected 'fi' to close 'if'", this.tok.getPos());
-      end = closeEnd >= 0 ? closeEnd : pos;
+      end = closeEnd >= 0 ? closeEnd : branchPos;
     }
+    this.syntaxDepth--;
     this._redirects = this.collectTrailingRedirects();
-    return { type: "If", pos, end, clause, then: then_, else: else_ };
+    const finalBranch: If = { type: "If", pos: branchPos, end, clause, then: then_, else: else_ };
+    if (!firstBranch) return finalBranch;
+    lastBranch!.else = finalBranch;
+    let branch = firstBranch;
+    while (branch !== finalBranch) {
+      branch.end = end;
+      branch = branch.else as If;
+    }
+    return firstBranch;
   }
 
   // for_clause := FOR word [IN word* (';'|NL)] DO list DONE
@@ -732,7 +804,19 @@ class Parser {
     this.skipSemi();
     this.skipNewlines(LexContext.CommandStart);
     if (!this.accept(Token.Do, LexContext.CommandStart)) this.error("expected 'do'", this.tok.getPos());
+
+    if (this.syntaxDepth === MAX_SYNTAX_NESTING) {
+      this.error("maximum for nesting depth exceeded", pos);
+      const closeEnd = this.tok.skipCompoundBody(Token.Done);
+      if (closeEnd < 0) this.error("expected 'done' to close 'for'", this.tok.getPos());
+      const end = closeEnd >= 0 ? closeEnd : pos;
+      this._redirects = this.collectTrailingRedirects();
+      return { type: "For", pos, end, name, wordlist, body: this.makeCompoundList([]) } satisfies For;
+    }
+
+    this.syntaxDepth++;
     const body = this.list();
+    this.syntaxDepth--;
     this.skipSemi();
     const closeEnd = this.acceptEnd(Token.Done, LexContext.CommandStart);
     if (closeEnd < 0) this.error("expected 'done' to close 'for'", this.tok.getPos());
@@ -751,7 +835,29 @@ class Parser {
       return new ArithmeticForImpl(pos, bg.end, bg.body, initStr, testStr, updateStr, initPos, testPos, updatePos);
     }
     if (!this.accept(Token.Do, LexContext.CommandStart)) this.error("expected 'do'", this.tok.getPos());
+
+    if (this.syntaxDepth === MAX_SYNTAX_NESTING) {
+      this.error("maximum for nesting depth exceeded", pos);
+      const closeEnd = this.tok.skipCompoundBody(Token.Done);
+      if (closeEnd < 0) this.error("expected 'done' to close 'for'", this.tok.getPos());
+      const end = closeEnd >= 0 ? closeEnd : pos;
+      this._redirects = this.collectTrailingRedirects();
+      return new ArithmeticForImpl(
+        pos,
+        end,
+        this.makeCompoundList([]),
+        initStr,
+        testStr,
+        updateStr,
+        initPos,
+        testPos,
+        updatePos,
+      );
+    }
+
+    this.syntaxDepth++;
     const body = this.list();
+    this.syntaxDepth--;
     const closeEnd = this.acceptEnd(Token.Done, LexContext.CommandStart);
     if (closeEnd < 0) this.error("expected 'done' to close 'for'", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
@@ -779,6 +885,24 @@ class Parser {
 
   private whileOrUntil(kind: "while" | "until"): While {
     const pos = this.tok.next(LexContext.CommandStart).pos;
+
+    if (this.syntaxDepth === MAX_SYNTAX_NESTING) {
+      this.error(`maximum ${kind} nesting depth exceeded`, pos);
+      const closeEnd = this.tok.skipCompoundBody(Token.Done);
+      if (closeEnd < 0) this.error(`expected 'done' to close '${kind}'`, this.tok.getPos());
+      const end = closeEnd >= 0 ? closeEnd : pos;
+      this._redirects = this.collectTrailingRedirects();
+      return {
+        type: "While",
+        pos,
+        end,
+        kind,
+        clause: this.makeCompoundList([]),
+        body: this.makeCompoundList([]),
+      };
+    }
+
+    this.syntaxDepth++;
     const clause = this.makeCompoundList(this.list());
     this.skipSemi();
     if (!this.accept(Token.Do, LexContext.CommandStart)) this.error("expected 'do'", this.tok.getPos());
@@ -787,6 +911,7 @@ class Parser {
     const closeEnd = this.acceptEnd(Token.Done, LexContext.CommandStart);
     if (closeEnd < 0) this.error(`expected 'done' to close '${kind}'`, this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
+    this.syntaxDepth--;
     this._redirects = this.collectTrailingRedirects();
     return { type: "While", pos, end, kind, clause, body: this.makeCompoundList(body) };
   }
@@ -800,6 +925,16 @@ class Parser {
       this.error("expected 'in' after 'case' word", this.tok.getPos());
     this.skipNewlines(LexContext.CommandStart);
 
+    if (this.syntaxDepth === MAX_SYNTAX_NESTING) {
+      this.error("maximum case nesting depth exceeded", pos);
+      const closeEnd = this.tok.skipCompoundBody(Token.Esac);
+      if (closeEnd < 0) this.error("expected 'esac' to close 'case'", this.tok.getPos());
+      const end = closeEnd >= 0 ? closeEnd : pos;
+      this._redirects = this.collectTrailingRedirects();
+      return { type: "Case", pos, end, word, items: [] } satisfies Case;
+    }
+
+    this.syntaxDepth++;
     const items: CaseItem[] = [];
     let t = this.tok.peek(LexContext.CommandStart).token;
     while (t !== Token.Esac && t !== Token.EOF) {
@@ -840,6 +975,7 @@ class Parser {
     const closeEnd = this.acceptEnd(Token.Esac, LexContext.CommandStart);
     if (closeEnd < 0) this.error("expected 'esac' to close 'case'", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
+    this.syntaxDepth--;
     this._redirects = this.collectTrailingRedirects();
     return { type: "Case", pos, end, word, items } satisfies Case;
   }
@@ -859,7 +995,19 @@ class Parser {
     this.skipSemi();
     this.skipNewlines(LexContext.CommandStart);
     if (!this.accept(Token.Do, LexContext.CommandStart)) this.error("expected 'do'", this.tok.getPos());
+
+    if (this.syntaxDepth === MAX_SYNTAX_NESTING) {
+      this.error("maximum select nesting depth exceeded", pos);
+      const closeEnd = this.tok.skipCompoundBody(Token.Done);
+      if (closeEnd < 0) this.error("expected 'done' to close 'select'", this.tok.getPos());
+      const end = closeEnd >= 0 ? closeEnd : pos;
+      this._redirects = this.collectTrailingRedirects();
+      return { type: "Select", pos, end, name, wordlist, body: this.makeCompoundList([]) } satisfies Select;
+    }
+
+    this.syntaxDepth++;
     const body = this.list();
+    this.syntaxDepth--;
     this.skipSemi();
     const closeEnd = this.acceptEnd(Token.Done, LexContext.CommandStart);
     if (closeEnd < 0) this.error("expected 'done' to close 'select'", this.tok.getPos());
@@ -918,12 +1066,32 @@ class Parser {
 
   // test_not := '!' test_not | test_primary
   private parseTestNot(): TestExpression {
-    if (this.tok.peek(LexContext.TestMode).token === Token.Word && this.tok.peek(LexContext.TestMode).value === "!") {
-      const notPos = this.tok.next(LexContext.TestMode).pos;
-      const operand = this.parseTestNot();
-      return { type: "TestNot", pos: notPos, end: operand.end, operand } satisfies TestNotExpression;
+    let t = this.tok.peek(LexContext.TestMode);
+    if (t.token !== Token.Word || t.value !== "!") return this.parseTestPrimary();
+
+    const firstPos = this.tok.next(LexContext.TestMode).pos;
+    t = this.tok.peek(LexContext.TestMode);
+    if (t.token !== Token.Word || t.value !== "!") {
+      const operand = this.parseTestPrimary();
+      return { type: "TestNot", pos: firstPos, end: operand.end, operand } satisfies TestNotExpression;
     }
-    return this.parseTestPrimary();
+
+    const positions = [firstPos];
+    while (t.token === Token.Word && t.value === "!") {
+      positions.push(this.tok.next(LexContext.TestMode).pos);
+      t = this.tok.peek(LexContext.TestMode);
+    }
+
+    let expression = this.parseTestPrimary();
+    for (let i = positions.length - 1; i >= 0; i--) {
+      expression = {
+        type: "TestNot",
+        pos: positions[i],
+        end: expression.end,
+        operand: expression,
+      } satisfies TestNotExpression;
+    }
+    return expression;
   }
 
   // test_primary := '(' test_or ')' | unary_op word | word binary_op word | word
@@ -931,7 +1099,26 @@ class Parser {
     // Grouped: ( expr )
     if (this.tok.peek(LexContext.TestMode).token === Token.LParen) {
       const openPos = this.tok.next(LexContext.TestMode).pos;
+
+      if (this.syntaxDepth === MAX_SYNTAX_NESTING) {
+        this.error("maximum test group nesting depth exceeded", openPos);
+        const closeEnd = this.tok.skipTestGroup();
+        if (closeEnd < 0) this.error("expected ')' to close test group", this.tok.getPos());
+        const end = closeEnd >= 0 ? closeEnd : openPos;
+        const operand = new WordImpl("", openPos, openPos, this.source);
+        const expression = {
+          type: "TestUnary",
+          pos: openPos,
+          end: openPos,
+          operator: "-n",
+          operand,
+        } satisfies TestUnaryExpression;
+        return { type: "TestGroup", pos: openPos, end, expression } satisfies TestGroupExpression;
+      }
+
+      this.syntaxDepth++;
       const expr = this.parseTestOr();
+      this.syntaxDepth--;
       const closeEnd = this.acceptEnd(Token.RParen, LexContext.TestMode);
       if (closeEnd < 0) this.error("expected ')' to close test group", this.tok.getPos());
       const end = closeEnd >= 0 ? closeEnd : openPos;

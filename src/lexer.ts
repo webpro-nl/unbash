@@ -385,6 +385,237 @@ export class Lexer {
     return this.pos;
   }
 
+  skipSubshellBody(): number {
+    this.extractBalanced();
+    return this._unbalanced ? -1 : this.pos;
+  }
+
+  skipCompoundBody(closeToken: Token): number {
+    type RecoveryPhase =
+      | "commands"
+      | "for-header"
+      | "case-word"
+      | "case-in"
+      | "case-pattern"
+      | "function-name"
+      | "function-body"
+      | "coproc-command"
+      | "coproc-body"
+      | "time-command"
+      | "time-command-after-p";
+    type RecoveryFrame = { close: Token; phase: RecoveryPhase };
+
+    const frames: RecoveryFrame[] = [
+      { close: closeToken, phase: closeToken === Token.Esac ? "case-pattern" : "commands" },
+    ];
+    let commandStart = true;
+
+    for (;;) {
+      const value = this.next(commandStart ? LexContext.CommandStart : LexContext.Normal);
+      const token = value.token;
+      if (token === Token.EOF) return -1;
+
+      const last = frames.length - 1;
+      const frame = frames[last];
+      if (frame.phase === "function-name") {
+        if (token === Token.Newline) continue;
+        frame.phase = "function-body";
+        commandStart = true;
+        continue;
+      } else if (frame.phase === "function-body") {
+        if (token === Token.Newline) continue;
+        frame.phase = "commands";
+        commandStart = true;
+        if (token === Token.LParen && this.peek(LexContext.Normal).token === Token.RParen) {
+          this.next(LexContext.Normal);
+          frame.phase = "function-body";
+          continue;
+        }
+      } else if (frame.phase === "coproc-command") {
+        if (token === Token.Newline) continue;
+        if (token === Token.Word) {
+          frame.phase = "coproc-body";
+          commandStart = true;
+          continue;
+        }
+        frame.phase = "commands";
+        commandStart = true;
+      } else if (frame.phase === "coproc-body") {
+        if (token === Token.Newline) continue;
+        frame.phase = token === Token.Word && value.value === "time" ? "time-command" : "commands";
+        commandStart = true;
+        if (frame.phase === "time-command") continue;
+      } else if (frame.phase === "time-command") {
+        if (token === Token.Word && value.value === "-p") {
+          frame.phase = "time-command-after-p";
+          continue;
+        }
+        if (token === Token.Word && value.value === "--") {
+          frame.phase = "commands";
+          continue;
+        }
+        frame.phase = "commands";
+        commandStart = true;
+      } else if (frame.phase === "time-command-after-p") {
+        if (token === Token.Word && value.value === "--") {
+          frame.phase = "commands";
+          continue;
+        }
+        frame.phase = "commands";
+        commandStart = true;
+      } else if (frame.phase === "for-header") {
+        if (token === Token.ArithCmd || token === Token.Semi || token === Token.Newline) {
+          commandStart = true;
+          continue;
+        }
+        if (token === Token.Do || token === Token.LBrace) {
+          frame.close = token === Token.Do ? Token.Done : Token.RBrace;
+          frame.phase = "commands";
+          commandStart = true;
+          continue;
+        }
+      } else if (frame.phase === "case-word") {
+        if (token === Token.Newline) continue;
+        frame.phase = "case-in";
+        commandStart = false;
+        continue;
+      } else if (frame.phase === "case-in") {
+        if (token === Token.Newline) {
+          commandStart = true;
+          continue;
+        }
+        frame.phase = "case-pattern";
+        commandStart = true;
+        continue;
+      } else if (frame.phase === "case-pattern") {
+        if (token === Token.Esac && commandStart) {
+          frames.pop();
+          if (frames.length === 0) return value.end;
+          commandStart = false;
+          continue;
+        }
+        if (token === Token.RParen) {
+          frame.phase = "commands";
+          commandStart = true;
+        } else {
+          commandStart = token === Token.Newline;
+        }
+        continue;
+      }
+
+      if (token === frame.close) {
+        frames.pop();
+        if (frames.length === 0) return value.end;
+        commandStart = false;
+        continue;
+      }
+
+      if (commandStart) {
+        switch (token) {
+          case Token.LParen:
+            frames.push({ close: Token.RParen, phase: "commands" });
+            break;
+          case Token.LBrace:
+            frames.push({ close: Token.RBrace, phase: "commands" });
+            break;
+          case Token.If:
+            frames.push({ close: Token.Fi, phase: "commands" });
+            break;
+          case Token.For:
+            frames.push({ close: Token.Done, phase: "for-header" });
+            break;
+          case Token.While:
+          case Token.Until:
+          case Token.Select:
+            frames.push({ close: Token.Done, phase: "commands" });
+            break;
+          case Token.Case:
+            frames.push({ close: Token.Esac, phase: "case-word" });
+            break;
+          case Token.DblLBracket:
+            if (!this.skipTestCommandBody()) return -1;
+            commandStart = false;
+            continue;
+          case Token.Assignment:
+          case Token.Redirect:
+          case Token.Bang:
+          case Token.Then:
+          case Token.Else:
+          case Token.Elif:
+          case Token.Do:
+          case Token.In:
+            break;
+          case Token.Semi:
+          case Token.Newline:
+          case Token.Pipe:
+          case Token.And:
+          case Token.Or:
+          case Token.Amp:
+          case Token.DoubleSemi:
+          case Token.SemiAmp:
+          case Token.DoubleSemiAmp:
+            break;
+          case Token.Function:
+            frame.phase = "function-name";
+            break;
+          case Token.Coproc:
+            frame.phase = "coproc-command";
+            break;
+          default:
+            if (token === Token.Word && value.value === "time") {
+              frame.phase = "time-command";
+              commandStart = true;
+            } else {
+              commandStart = false;
+            }
+            continue;
+        }
+      }
+
+      switch (token) {
+        case Token.Semi:
+        case Token.Newline:
+        case Token.Pipe:
+        case Token.And:
+        case Token.Or:
+        case Token.Amp:
+          commandStart = true;
+          break;
+        case Token.DoubleSemi:
+        case Token.SemiAmp:
+        case Token.DoubleSemiAmp:
+          if (frame.close === Token.Esac) frame.phase = "case-pattern";
+          commandStart = true;
+          break;
+        case Token.RParen:
+          commandStart = true;
+          break;
+      }
+    }
+  }
+
+  skipTestGroup(): number {
+    let depth = 1;
+    for (;;) {
+      const value = this.next(LexContext.TestMode);
+      if (value.token === Token.EOF) return -1;
+      if (value.token === Token.DblRBracket) {
+        this.unshift(value);
+        return -1;
+      }
+      if (value.token === Token.LParen) depth++;
+      else if (value.token === Token.RParen && --depth === 0) return value.end;
+    }
+  }
+
+  private skipTestCommandBody(): boolean {
+    for (;;) {
+      const token = this.next(LexContext.TestMode).token;
+      if (token === Token.DblRBracket) return true;
+      if (token === Token.EOF) return false;
+    }
+  }
+
   /** Set position and scan a word, building parts. Used by computeWordParts. */
   buildWordParts(startPos: number): WordPart[] | null {
     this._buildParts = true;
