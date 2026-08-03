@@ -179,3 +179,97 @@ test("two heredocs on one line (tokenizer)", () => {
   const ast = parse("cat <<A; cat <<B\n1\nA\n2\nB");
   assert.equal(ast.commands.length, 2);
 });
+
+// --- Delimiter quote removal ---
+// Bash forms the delimiter from the word after quote removal: quote and escape
+// segments may appear anywhere in the word, any of them makes the body literal,
+// and inside double quotes a backslash is removed only before $ ` " \.
+
+test("escaped space inside heredoc delimiter", () => {
+  const src = "cat <<E\\ OF\nbody\nE OF";
+  const cmd = parse(src).commands[0].command as Command;
+  assert.equal(cmd.suffix.length, 0);
+  const r = cmd.redirects[0];
+  assert.equal(r.target?.value, "E OF");
+  assert.equal(r.heredocQuoted, true);
+  assert.equal(r.content, "body\n");
+});
+
+test("mid-word escape and quotes in heredoc delimiter", () => {
+  for (const [src, value] of [
+    ["cat <<E\\OF\nbody\nEOF", "EOF"],
+    ['cat <<E"O"F\nbody\nEOF', "EOF"],
+    ["cat <<E'O F'\nbody\nEO F", "EO F"],
+    ["cat <<'E'x\nbody\nEx", "Ex"],
+  ] as const) {
+    const r = (parse(src).commands[0].command as Command).redirects[0];
+    assert.equal(r.target?.value, value, src);
+    assert.equal(r.heredocQuoted, true, src);
+    assert.equal(r.content, "body\n", src);
+  }
+});
+
+test("double-quoted heredoc delimiter keeps non-special backslashes", () => {
+  const r = (parse('cat <<"E\\OF"\nbody\nE\\OF').commands[0].command as Command).redirects[0];
+  assert.equal(r.target?.value, "E\\OF");
+  assert.equal(r.content, "body\n");
+  const dq = (parse('cat <<"E\\\\OF"\nbody\nE\\OF').commands[0].command as Command).redirects[0];
+  assert.equal(dq.target?.value, "E\\OF");
+  assert.equal(dq.content, "body\n");
+});
+
+test("unquoted delimiter forms stay unquoted", () => {
+  for (const [src, value] of [
+    ["cat <<EOF\nbody\nEOF", "EOF"],
+    ["cat <<$var\nbody\n$var", "$var"],
+  ] as const) {
+    const r = (parse(src).commands[0].command as Command).redirects[0];
+    assert.equal(r.target?.value, value, src);
+    assert.notEqual(r.heredocQuoted, true, src);
+    assert.equal(r.content, "body\n", src);
+  }
+});
+
+test("leading backslash heredoc delimiter still quotes", () => {
+  const r = (parse("cat <<\\EOF\nbody\nEOF").commands[0].command as Command).redirects[0];
+  assert.equal(r.target?.value, "EOF");
+  assert.equal(r.heredocQuoted, true);
+  assert.equal(r.content, "body\n");
+});
+
+test("dollar-quoted heredoc delimiters use their decoded value", () => {
+  for (const src of ["cat <<$'\\x45OF'\nbody\nEOF", 'cat <<$"EOF"\nbody\nEOF']) {
+    const ast = parse(src);
+    assert.equal(ast.errors, undefined, src);
+    const r = (ast.commands[0].command as Command).redirects[0];
+    assert.equal(r.target?.value, "EOF", src);
+    assert.equal(r.heredocQuoted, true, src);
+    assert.equal(r.content, "body\n", src);
+  }
+});
+
+test("backslash-newline joins heredoc delimiter words", () => {
+  for (const [src, quoted] of [
+    ["cat <<E\\\nOF\nbody\nEOF", false],
+    ['cat <<"E\\\nOF"\nbody\nEOF', true],
+  ] as const) {
+    const ast = parse(src);
+    assert.equal(ast.errors, undefined, src);
+    const r = (ast.commands[0].command as Command).redirects[0];
+    assert.equal(r.target?.value, "EOF", src);
+    assert.equal(r.heredocQuoted === true, quoted, src);
+    assert.equal(r.content, "body\n", src);
+  }
+});
+
+test("substitution syntax remains literal in heredoc delimiters", () => {
+  for (const delimiter of ["$(foo)", "$((1+2))"]) {
+    const src = `cat <<${delimiter}\nbody\n${delimiter}`;
+    const ast = parse(src);
+    assert.equal(ast.errors, undefined, src);
+    const r = (ast.commands[0].command as Command).redirects[0];
+    assert.equal(r.target?.value, delimiter, src);
+    assert.notEqual(r.heredocQuoted, true, src);
+    assert.equal(r.content, "body\n", src);
+  }
+});

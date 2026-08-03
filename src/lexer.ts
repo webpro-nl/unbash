@@ -1373,54 +1373,66 @@ export class Lexer {
     setToken(out, Token.Word, text, tokenStart, this.pos);
   }
 
+  // The delimiter is the word after quote removal: quote and escape segments may
+  // appear anywhere in the word, any of them makes the heredoc quoted, and inside
+  // double quotes a backslash is removed only before $ ` " \.
   private readHereDocDelimiter(): void {
     const src = this.src;
     const len = this.srcEnd;
     let delimiter = "";
+    let quoted = false;
 
-    if (this.pos < len && src.charCodeAt(this.pos) === CH_SQUOTE) {
-      this.pos++;
-      const start = this.pos;
-      while (this.pos < len && src.charCodeAt(this.pos) !== CH_SQUOTE) this.pos++;
-      delimiter = src.slice(start, this.pos);
-      if (this.pos < len) this.pos++;
-      this._hereDelim = delimiter;
-      this._hereQuoted = true;
-      return;
-    } else if (this.pos < len && src.charCodeAt(this.pos) === CH_DQUOTE) {
-      this.pos++;
-      while (this.pos < len && src.charCodeAt(this.pos) !== CH_DQUOTE) {
-        if (src.charCodeAt(this.pos) === CH_BACKSLASH) this.pos++;
-        delimiter += src[this.pos];
+    while (this.pos < len) {
+      const c = src.charCodeAt(this.pos);
+      if (c === CH_SQUOTE) {
+        quoted = true;
         this.pos++;
-      }
-      if (this.pos < len) this.pos++;
-      this._hereDelim = delimiter;
-      this._hereQuoted = true;
-      return;
-    } else if (this.pos < len && src.charCodeAt(this.pos) === CH_BACKSLASH) {
-      while (this.pos < len) {
-        const c = src.charCodeAt(this.pos);
-        if (c < 128 && charType[c] & 1) break;
-        if (c === CH_BACKSLASH) this.pos++;
+        while (this.pos < len && src.charCodeAt(this.pos) !== CH_SQUOTE) {
+          delimiter += src[this.pos];
+          this.pos++;
+        }
+        if (this.pos < len) this.pos++;
+      } else if (c === CH_DQUOTE) {
+        quoted = true;
+        this.pos++;
+        while (this.pos < len && src.charCodeAt(this.pos) !== CH_DQUOTE) {
+          if (src.charCodeAt(this.pos) === CH_BACKSLASH && this.pos + 1 < len) {
+            const next = src.charCodeAt(this.pos + 1);
+            if (next === CH_NL) {
+              this.pos += 2;
+              continue;
+            }
+            if (next === CH_DOLLAR || next === CH_BACKTICK || next === CH_DQUOTE || next === CH_BACKSLASH) this.pos++;
+          }
+          delimiter += src[this.pos];
+          this.pos++;
+        }
+        if (this.pos < len) this.pos++;
+      } else if (c === CH_BACKSLASH) {
+        if (this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_NL) {
+          this.pos += 2;
+          continue;
+        }
+        quoted = true;
+        this.pos++;
         if (this.pos < len) {
           delimiter += src[this.pos];
           this.pos++;
         }
-      }
-      this._hereDelim = delimiter;
-      this._hereQuoted = true;
-      return;
-    } else {
-      const start = this.pos;
-      while (this.pos < len) {
-        const c = src.charCodeAt(this.pos);
-        if (c < 128 && charType[c] & 1) break;
+      } else if (c === CH_DOLLAR) {
+        const next = this.pos + 1 < len ? src.charCodeAt(this.pos + 1) : 0;
+        if (next === CH_SQUOTE || next === CH_DQUOTE) quoted = true;
+        this.readDollar();
+        delimiter += this._resultText;
+      } else if (c < 128 && charType[c] & 1) {
+        break;
+      } else {
+        delimiter += src[this.pos];
         this.pos++;
       }
-      this._hereDelim = src.slice(start, this.pos);
-      this._hereQuoted = false;
     }
+    this._hereDelim = delimiter;
+    this._hereQuoted = quoted;
   }
 
   private consumePendingHereDocs(): void {

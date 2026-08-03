@@ -36,7 +36,7 @@ export class WordImpl implements Word {
   text: string;
   pos: number;
   end: number;
-  #source: string;
+  #source: string | undefined;
   #resolver: PartsResolver;
   #depth: number;
   #parts: WordPart[] | undefined | null;
@@ -46,7 +46,7 @@ export class WordImpl implements Word {
     this.text = text;
     this.pos = pos;
     this.end = end;
-    this.#source = source ?? "";
+    this.#source = source;
     this.#resolver = resolver ?? WordImpl._resolveWord;
     this.#depth = depth;
     this.#parts = source !== undefined ? null : undefined;
@@ -83,12 +83,16 @@ export class WordImpl implements Word {
 
   get parts(): WordPart[] | undefined {
     if (this.#parts === null) {
-      this.#parts = this.#resolver(this.#source, this, this.#depth) ?? undefined;
+      this.#parts = this.#resolver(this.#source ?? "", this, this.#depth) ?? undefined;
     }
     return this.#parts;
   }
   set parts(v: WordPart[] | undefined) {
     this.#parts = v ?? undefined;
+  }
+
+  sourceText(): string | undefined {
+    return this.#source?.slice(this.pos, this.end);
   }
 
   toJSON() {

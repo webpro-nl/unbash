@@ -24,6 +24,7 @@ import type {
   While,
   Word,
 } from "./types.ts";
+import { WordImpl } from "./word.ts";
 
 export function print(script: Script): string {
   let out = "";
@@ -70,13 +71,7 @@ function heredocBody(r: Redirect): string {
 }
 
 function delimName(r: Redirect): string {
-  if (!r.target) return "";
-  const text = wd(r.target);
-  if ((text[0] === "'" && text[text.length - 1] === "'") || (text[0] === '"' && text[text.length - 1] === '"')) {
-    return text.slice(1, -1);
-  }
-  if (text.includes("\\")) return text.replaceAll("\\", "");
-  return text;
+  return r.target?.value ?? "";
 }
 
 function printNode(n: Node, indent: number): string {
@@ -421,6 +416,25 @@ function selectNode(n: Select, indent: number): string {
   return out;
 }
 
+// Partless redirect targets carry decoded text (quotes and escapes removed), so
+// tokenization-breaking characters must be requoted from the value. Glob and
+// expansion characters stay verbatim — quoting them would change meaning.
+const UNSAFE_TARGET = /[\s"'\\|&;<>()]/;
+
+function singleQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
+function redirectTarget(r: Redirect): string {
+  const w = r.target!;
+  if ((r.operator === "<<" || r.operator === "<<-") && r.heredocQuoted) return singleQuote(w.value);
+  if (w.parts) return wd(w);
+  const sourceText = w instanceof WordImpl ? w.sourceText() : undefined;
+  if (sourceText !== undefined && sourceText !== w.text) return singleQuote(w.value);
+  if (!UNSAFE_TARGET.test(w.text)) return w.text;
+  return singleQuote(w.value);
+}
+
 function redir(r: Redirect): string {
   let out = "";
   if (r.fileDescriptor != null) out += r.fileDescriptor;
@@ -428,7 +442,7 @@ function redir(r: Redirect): string {
   out += r.operator;
   if (r.target) {
     if (r.operator !== "<&" && r.operator !== ">&") out += " ";
-    out += wd(r.target);
+    out += redirectTarget(r);
   }
   return out;
 }

@@ -254,6 +254,74 @@ test("heredoc", () => {
   assert.equal(fmt(src), "cat << EOF\nhello\nworld\nEOF");
 });
 
+test("escaped redirect target is requoted", () => {
+  assert.equal(fmt("echo hi > fi\\ le"), "echo hi > 'fi le'");
+  const command = parse(fmt("echo hi > fi\\ le")).commands[0].command as any;
+  assert.equal(command.redirects[0].target?.value, "fi le");
+  assert.equal(command.suffix.length, 1);
+});
+
+test("single quote inside decoded redirect target is escaped", () => {
+  const printed = fmt("echo hi > a\\'b");
+  assert.equal(printed, "echo hi > 'a'\\''b'");
+  const command = parse(printed).commands[0].command as any;
+  assert.equal(command.redirects[0].target?.value, "a'b");
+});
+
+test("glob redirect target stays unquoted", () => {
+  assert.equal(fmt("echo hi > fi*"), "echo hi > fi*");
+});
+
+test("escaped redirect syntax stays literal", () => {
+  for (const [target, value] of [
+    ["fi\\*", "fi*"],
+    ["\\$HOME", "$HOME"],
+    ["\\~", "~"],
+    ["\\#file", "#file"],
+  ] as const) {
+    const printed = fmt(`echo hi > ${target}`);
+    const command = parse(printed).commands[0].command as any;
+    const reparsed = command.redirects[0].target;
+    assert.equal(reparsed?.value, value, target);
+    assert.equal(
+      reparsed?.parts?.some((part: any) =>
+        ["SimpleExpansion", "ParameterExpansion", "CommandExpansion", "ArithmeticExpansion"].includes(part.type),
+      ) ?? false,
+      false,
+      target,
+    );
+  }
+});
+
+test("escaped heredoc delimiter prints requoted", () => {
+  const printed = fmt("cat <<E\\ OF\nline $HOME\nE OF");
+  assert.equal(printed, "cat << 'E OF'\nline $HOME\nE OF");
+  const redirect = (parse(printed).commands[0].command as any).redirects[0];
+  assert.equal(redirect.heredocQuoted, true);
+});
+
+test("quoted heredoc delimiter with space round-trips", () => {
+  const printed = fmt("cat <<'E OF'\nline $HOME\nE OF");
+  assert.equal(printed, "cat << 'E OF'\nline $HOME\nE OF");
+  const redirect = (parse(printed).commands[0].command as any).redirects[0];
+  assert.equal(redirect.heredocQuoted, true);
+});
+
+test("mixed-quoted heredoc delimiters print their decoded closing line", () => {
+  const printed = fmt('cat <<E"O"F\nbody\nEOF');
+  assert.equal(printed, "cat << 'EOF'\nbody\nEOF");
+  const redirect = (parse(printed).commands[0].command as any).redirects[0];
+  assert.equal(redirect.target?.value, "EOF");
+  assert.equal(redirect.heredocQuoted, true);
+});
+
+test("escaped heredoc delimiters stay quoted after printing", () => {
+  const printed = fmt("cat <<E\\OF\nbody\nEOF");
+  assert.equal(printed, "cat << 'EOF'\nbody\nEOF");
+  const redirect = (parse(printed).commands[0].command as any).redirects[0];
+  assert.equal(redirect.heredocQuoted, true);
+});
+
 // --- Re-parse validity ---
 // Print then re-parse — the output should parse without errors
 
