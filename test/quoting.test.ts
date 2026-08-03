@@ -93,6 +93,51 @@ test("partially quoted words join without boundary", () => {
   assert.equal(c.suffix[0].text, "TEST1' TEST2 'TEST3");
 });
 
+test("empty quotes and close-escape-reopen preserve one word", () => {
+  const source = String.raw`echo '\' '\' 'a'\''b' '' "" ''a''`;
+  const words = getCmd(parse(source)).suffix;
+
+  assert.deepEqual(
+    words.map((word) => word.value),
+    ["\\", "\\", "a'b", "", "", "a"],
+  );
+  assert.deepEqual(
+    words.map((word) => word.text),
+    ["'\\'", "'\\'", String.raw`'a'\''b'`, "''", '""', "''a''"],
+  );
+  assert.deepEqual(
+    words[2].parts?.map((part) => part.type),
+    ["SingleQuoted", "Literal", "SingleQuoted"],
+  );
+});
+
+test("unquoted escapes suppress parameter and backtick expansion", () => {
+  const words = getCmd(parse("echo ab\\${x}def bo\\`op")).suffix;
+
+  assert.deepEqual(
+    words.map((word) => word.value),
+    ["ab${x}def", "bo`op"],
+  );
+  assert.equal(words[0].parts, undefined);
+  assert.equal(words[1].parts, undefined);
+});
+
+test("dollar before a closing double quote is literal", () => {
+  const ast = parse('grep "xy$"');
+  const word = getCmd(ast).suffix[0];
+
+  assert.equal(word.text, '"xy$"');
+  assert.equal(word.value, "xy$");
+  assert.deepEqual(word.parts, [
+    {
+      type: "DoubleQuoted",
+      text: '"xy$"',
+      parts: [{ type: "Literal", value: "xy$", text: "xy$" }],
+    },
+  ]);
+  assert.equal(ast.errors, undefined);
+});
+
 // ── $'...' ANSI-C quoting ───────────────────────────────────────────
 
 test("$'\\n' produces newline", () => {

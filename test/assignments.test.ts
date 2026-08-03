@@ -300,3 +300,70 @@ test("multiple assignments before command", () => {
   assert.equal(c.prefix.filter((p) => p.type === "Assignment").length, 2);
   assert.equal(c.name?.text, "cmd");
 });
+
+test("quoted assignment name or equals is a command word", () => {
+  for (const [source, raw, value] of [
+    [String.raw`X\=1 true`, String.raw`X\=1`, "X=1"],
+    ['X"="1 true', 'X"="1', "X=1"],
+    ['"X"=1 true', '"X"=1', "X=1"],
+    ['"array"[key]=value true', '"array"[key]=value', "array[key]=value"],
+    [String.raw`array\[key]=value true`, String.raw`array\[key]=value`, "array[key]=value"],
+  ]) {
+    const c = parse(source).commands[0].command as Command;
+    assert.equal(c.prefix.length, 0, source);
+    assert.equal(c.name?.text, raw, source);
+    assert.equal(c.name?.value, value, source);
+    assert.deepEqual(
+      c.suffix.map((word) => word.text),
+      ["true"],
+      source,
+    );
+  }
+});
+
+test("quotes and escapes after an unquoted assignment operator remain assignment syntax", () => {
+  for (const source of [String.raw`X=a\ b true`, 'X="a b" true', 'array["key"]=value true', 'X\\\n="v" true']) {
+    const c = parse(source).commands[0].command as Command;
+    assert.equal(c.prefix.length, 1, source);
+    assert.equal(c.prefix[0].type, "Assignment", source);
+    assert.equal(c.name?.text, "true", source);
+  }
+});
+
+test("nested and expanded array indexes remain assignment syntax", () => {
+  for (const [source, index] of [
+    ["array[nested[0]]=value true", "nested[0]"],
+    ["array[i=0]=value true", "i=0"],
+    ["array[$((nested[0]))]=value true", "$((nested[0]))"],
+    ["array[`echo ]`]=value true", "`echo ]`"],
+    ["array[$(echo ] >/dev/null; printf 0)]=value true", "$(echo ] >/dev/null; printf 0)"],
+  ]) {
+    const c = parse(source).commands[0].command as Command;
+    assert.equal(c.prefix.length, 1, source);
+    assert.equal(c.prefix[0].type, "Assignment", source);
+    if (c.prefix[0].type === "Assignment") {
+      assert.equal(c.prefix[0].name, "array", source);
+      assert.equal(c.prefix[0].index, index, source);
+      assert.equal(c.prefix[0].value?.text, "value", source);
+    }
+    assert.equal(c.name?.text, "true", source);
+  }
+});
+
+test("line continuations around append assignment operators are ignored", () => {
+  for (const [source, index] of [
+    ["X\\\n+=value true", undefined],
+    ["X+\\\n=value true", undefined],
+    ["array[nested[0]]+\\\n=value true", "nested[0]"],
+  ]) {
+    const c = parse(source).commands[0].command as Command;
+    assert.equal(c.prefix[0].type, "Assignment", source);
+    if (c.prefix[0].type === "Assignment") {
+      assert.equal(c.prefix[0].name, index === undefined ? "X" : "array", source);
+      assert.equal(c.prefix[0].index, index, source);
+      assert.equal(c.prefix[0].append, true, source);
+      assert.equal(c.prefix[0].value?.text, "value", source);
+    }
+    assert.equal(c.name?.text, "true", source);
+  }
+});

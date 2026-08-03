@@ -130,6 +130,38 @@ test("unclosed process substitution collects error", () => {
   assert.ok(ast.errors.some((e) => e.message.includes("unterminated process substitution")));
 });
 
+test("unclosed parameter expansion collects error and preserves the partial word", () => {
+  const ast = parse("echo ${");
+  const command = ast.commands[0].command;
+
+  assert.equal(command.type, "Command");
+  assert.equal(command.suffix[0].text, "${");
+  assert.deepEqual(ast.errors, [{ message: "unterminated parameter expansion", pos: 5 }]);
+});
+
+test("unclosed parameter expansion preserves its complete partial structure", () => {
+  const source = "echo pre${name";
+  const ast = parse(source);
+  const command = ast.commands[0].command;
+
+  assert.equal(command.type, "Command");
+  const word = command.suffix[0];
+  assert.equal(word.text, "pre${name");
+  assert.deepEqual(
+    word.parts?.map((part) => part.type),
+    ["Literal", "ParameterExpansion"],
+  );
+  const expansion = word.parts?.[1];
+  assert.equal(expansion?.type, "ParameterExpansion");
+  if (expansion?.type === "ParameterExpansion") assert.equal(expansion.parameter, "name");
+  assert.deepEqual(ast.errors, [{ message: "unterminated parameter expansion", pos: source.indexOf("$") }]);
+});
+
+test("closed and empty parameter expansions do not report parse errors", () => {
+  assert.equal(parse("echo ${name}").errors, undefined);
+  assert.equal(parse("echo ${}").errors, undefined);
+});
+
 test("unclosed command substitution keeps the inner command name intact", () => {
   const ast = parse("curl $(foo");
   const word = ast.commands[0].command.suffix[0];

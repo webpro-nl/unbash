@@ -1139,8 +1139,7 @@ class Parser {
       array: undefined,
     };
 
-    // Find the = sign, accounting for name, name[index], and += variants
-    const eqIdx = text.indexOf("=");
+    const eqIdx = tok.assignmentOperatorPos - tokPos;
     if (eqIdx <= 0) return result;
 
     let nameEnd = eqIdx;
@@ -1148,22 +1147,26 @@ class Parser {
     let index: string | undefined;
 
     // Check for += (append)
-    if (text.charCodeAt(eqIdx - 1) === 0x2b /* + */) {
+    let appendPos = eqIdx;
+    while (appendPos >= 2 && text.charCodeAt(appendPos - 2) === 0x5c && text.charCodeAt(appendPos - 1) === 0x0a)
+      appendPos -= 2;
+    if (text.charCodeAt(appendPos - 1) === 0x2b /* + */) {
       append = true;
-      nameEnd = eqIdx - 1;
+      nameEnd = appendPos - 1;
     }
 
     // Check for [index] before = or +=
     const bracketIdx = text.indexOf("[");
     if (bracketIdx > 0 && bracketIdx < nameEnd) {
-      const rbracketIdx = text.indexOf("]", bracketIdx);
-      if (rbracketIdx > bracketIdx && rbracketIdx + 1 === nameEnd) {
+      const rbracketIdx = text.lastIndexOf("]", eqIdx);
+      if (rbracketIdx > bracketIdx) {
         index = text.slice(bracketIdx + 1, rbracketIdx);
         nameEnd = bracketIdx;
       }
     }
 
-    const name = text.slice(0, nameEnd);
+    const rawName = text.slice(0, nameEnd);
+    const name = rawName.includes("\\\n") ? rawName.split("\\\n").join("") : rawName;
     result.name = name;
     if (append) result.append = true;
     if (index !== undefined) result.index = index;
