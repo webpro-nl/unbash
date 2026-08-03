@@ -638,6 +638,19 @@ test("$(( )) is arithmetic expansion in word", () => {
   assert.equal(c.suffix[0].text, "$((1+2))");
 });
 
+test("arithmetic expansion keeps grouped closing parentheses", () => {
+  for (const source of ["$((1 >> (3 << 2)))", "$((-(1)))", "$((a <= (1 || 2)))", "$(((1+2)))"]) {
+    const word = getCmd(parse(`echo ${source}`)).suffix[0];
+    assert.equal(word.parts?.[0].text, source);
+  }
+
+  for (const nested of ["$(((1 + $((2)) + 3)))", "$(((1 + $(((2 + $((3)) + 4))) + 5)))"]) {
+    const command = getCmd(parse(`echo ${nested} tail`));
+    assert.equal(command.suffix[0].parts?.[0].text, nested);
+    assert.equal(command.suffix[1].text, "tail");
+  }
+});
+
 test("( is subshell", () => {
   const ast = parse("(echo hello)");
   assert.equal(ast.commands[0].command.type, "Subshell");

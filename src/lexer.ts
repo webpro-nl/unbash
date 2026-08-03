@@ -2670,6 +2670,9 @@ export class Lexer {
   private scanArithmeticBody(): string {
     this.pos += 2;
     let depth = 1;
+    let parenDepth = 0;
+    let parentParenDepth = 0;
+    let parenDepths: number[] | undefined;
     let expansions = 0;
     let reported = false;
     const src = this.src;
@@ -2708,22 +2711,34 @@ export class Lexer {
       } else if ((c === CH_LT || c === CH_GT) && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
         this.pos += 2;
         this.extractBalanced();
-      } else if (c === CH_LPAREN && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
-        depth++;
-        // Nested $((...)) — count it against the shared budget (the expansion this scan
-        // belongs to is level one, hence >=) so over-deep chains surface a parse error.
-        if (src.charCodeAt(this.pos - 1) === CH_DOLLAR && ++expansions + this._nestingDepth >= MAX_SYNTAX_NESTING) {
-          if (!reported) {
-            this.errors.push({ message: "maximum arithmetic expansion nesting depth exceeded", pos: this.pos - 1 });
-            reported = true;
+      } else if (c === CH_LPAREN) {
+        if (src.charCodeAt(this.pos - 1) === CH_DOLLAR && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
+          if (depth === 1) parentParenDepth = parenDepth;
+          else (parenDepths ??= []).push(parenDepth);
+          depth++;
+          parenDepth = 0;
+          // Nested $((...)) — count it against the shared budget (the expansion this scan
+          // belongs to is level one, hence >=) so over-deep chains surface a parse error.
+          if (++expansions + this._nestingDepth >= MAX_SYNTAX_NESTING) {
+            if (!reported) {
+              this.errors.push({ message: "maximum arithmetic expansion nesting depth exceeded", pos: this.pos - 1 });
+              reported = true;
+            }
           }
+          this.pos += 2;
+        } else {
+          parenDepth++;
+          this.pos++;
         }
-        this.pos += 2;
+      } else if (c === CH_RPAREN && parenDepth > 0) {
+        parenDepth--;
+        this.pos++;
       } else if (c === CH_RPAREN && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_RPAREN) {
         if (--depth === 0) {
           this.pos += 2;
           break;
         }
+        parenDepth = depth === 1 ? parentParenDepth : parenDepths!.pop()!;
         this.pos += 2;
       } else {
         this.pos++;
