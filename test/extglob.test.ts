@@ -121,6 +121,15 @@ test("nested extglob preserved", () => {
   );
 });
 
+test("case is literal inside an extended glob", () => {
+  const src = "echo @(case|foo) tail";
+  const c = getCmd(parse(src));
+  assert.deepEqual(
+    c.suffix.map((word) => word.text),
+    ["@(case|foo)", "tail"],
+  );
+});
+
 // ── Tokenizer disambiguation ─────────────────────────────────────────
 
 test("extglob @() not confused with subshell", () => {
@@ -150,4 +159,66 @@ test("nested extglob in tokenizer", () => {
 test("extglob in [[ ]] condition", () => {
   const ast = parse("[[ ${f} != */@(default).vim ]]");
   assert.ok(ast.commands.length > 0);
+});
+
+test("command substitutions inside extended globs remain structured", () => {
+  const src = "echo @($(one)|safe$(two))";
+  const c = getCmd(parse(src));
+  const part = wp(src, c.suffix[0])![0];
+  assert.equal(part.type, "ExtendedGlob");
+  if (part.type !== "ExtendedGlob") return;
+  const expansions = part.parts?.filter((child) => child.type === "CommandExpansion") ?? [];
+  assert.deepEqual(
+    expansions.map((expansion) => {
+      if (expansion.type !== "CommandExpansion") return undefined;
+      const command = expansion.script?.commands[0].command;
+      return command?.type === "Command" ? command.name?.value : undefined;
+    }),
+    ["one", "two"],
+  );
+});
+
+test("process substitutions inside extended globs remain structured", () => {
+  const src = "echo @(<(danger)|safe)";
+  const c = getCmd(parse(src));
+  const part = wp(src, c.suffix[0])![0];
+  assert.equal(part.type, "ExtendedGlob");
+  if (part.type !== "ExtendedGlob") return;
+  const expansion = part.parts?.find((child) => child.type === "ProcessSubstitution");
+  assert.equal(expansion?.type, "ProcessSubstitution");
+  if (expansion?.type !== "ProcessSubstitution") return;
+  const command = expansion.script?.commands[0].command;
+  assert.equal(command?.type, "Command");
+  if (command?.type === "Command") assert.equal(command.name?.value, "danger");
+});
+
+test("closing parentheses inside substitutions do not truncate extended globs", () => {
+  const src = 'echo @($(printf ")")|safe)';
+  const c = getCmd(parse(src));
+  const part = wp(src, c.suffix[0])![0];
+  assert.equal(part.type, "ExtendedGlob");
+  if (part.type !== "ExtendedGlob") return;
+  assert.equal(part.pattern, '$(printf ")")|safe');
+  const expansion = part.parts?.find((child) => child.type === "CommandExpansion");
+  assert.equal(expansion?.type, "CommandExpansion");
+  if (expansion?.type !== "CommandExpansion") return;
+  const command = expansion.script?.commands[0].command;
+  assert.equal(command?.type, "Command");
+  if (command?.type === "Command") assert.equal(command.name?.value, "printf");
+});
+
+test("unterminated extended globs report an error without truncating nested substitutions", () => {
+  const src = "echo @(safe|$(danger)";
+  const ast = parse(src);
+  const c = getCmd(ast);
+  const part = wp(src, c.suffix[0])![0];
+  assert.equal(part.type, "ExtendedGlob");
+  if (part.type !== "ExtendedGlob") return;
+  const expansion = part.parts?.find((child) => child.type === "CommandExpansion");
+  assert.equal(expansion?.type, "CommandExpansion");
+  if (expansion?.type !== "CommandExpansion") return;
+  const command = expansion.script?.commands[0].command;
+  assert.equal(command?.type, "Command");
+  if (command?.type === "Command") assert.equal(command.name?.value, "danger");
+  assert.ok(ast.errors?.some((error) => error.message === "unterminated extended glob"));
 });

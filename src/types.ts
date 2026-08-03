@@ -46,6 +46,7 @@ export interface ParameterExpansionPart {
   text: string;
   parameter: string;
   index: string | undefined;
+  indexParts?: WordPart[];
   indirect: boolean | undefined;
   length: boolean | undefined;
   operator: string | undefined;
@@ -57,7 +58,7 @@ export interface ParameterExpansionPart {
 export interface CommandExpansionPart {
   type: "CommandExpansion";
   text: string;
-  script: Script | undefined;
+  script: ParsedScript | undefined;
   inner: string | undefined;
   /** Internal: absolute offset of `inner` in the original source; cleared after resolution. */
   innerStart?: number;
@@ -73,7 +74,7 @@ export interface ProcessSubstitutionPart {
   type: "ProcessSubstitution";
   text: string;
   operator: "<" | ">";
-  script: Script | undefined;
+  script: ParsedScript | undefined;
   inner: string | undefined;
   /** Internal: absolute offset of `inner` in the original source; cleared after resolution. */
   innerStart?: number;
@@ -86,11 +87,13 @@ export interface ExtendedGlobPart {
   text: string;
   operator: ExtGlobOperator;
   pattern: string;
+  parts?: WordPart[];
 }
 
 export interface BraceExpansionPart {
   type: "BraceExpansion";
   text: string;
+  parts?: WordPart[];
 }
 
 export type ArithmeticExpression =
@@ -140,6 +143,7 @@ export interface ArithmeticWord {
   pos: number;
   end: number;
   value: string;
+  parts?: WordPart[];
 }
 
 export interface ArithmeticCommandExpansion {
@@ -148,7 +152,7 @@ export interface ArithmeticCommandExpansion {
   end: number;
   text: string; // e.g., "$(cmd)"
   inner: string | undefined; // e.g., "cmd" - cleared after resolution
-  script: Script | undefined; // set after resolution
+  script: ParsedScript | undefined; // set after resolution
   innerStart?: number; // internal: absolute offset of `inner`; cleared after resolution
 }
 
@@ -182,6 +186,7 @@ export interface AssignmentPrefix {
   value: Word | undefined;
   append: boolean | undefined;
   index: string | undefined;
+  indexParts?: WordPart[];
   array: Word[] | undefined;
 }
 
@@ -433,6 +438,17 @@ export interface Script {
   end: number;
   shebang: string | undefined;
   commands: Statement[];
+}
+
+export interface ParsedScript extends Script {
+  /**
+   * Present only on scripts parsed from a rebuilt string (decoded escaped-backtick
+   * substitutions), whose positions index this decoded string instead of the
+   * caller's source. Absent everywhere else: positions already index the string
+   * the caller parsed. Non-enumerable when present.
+   */
+  readonly source?: string;
+  errors?: ParseError[];
 }
 
 export interface ParseError {

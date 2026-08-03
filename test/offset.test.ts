@@ -55,6 +55,11 @@ const CORPUS = [
   'echo ${x/foo/$(repl)}',
   'echo ${x:$(off):$(len)}',
   'echo ${a:-${b:-$(deep)}}',
+  'echo {safe,$(brace)}',
+  'echo @($(extglob)|<(process))',
+  'echo ${array[$(parameter)]}',
+  'array[$(assignment)]=value true',
+  'echo $((array[$(arithmetic)]))',
 ];
 
 for (const command of CORPUS) {
@@ -72,6 +77,9 @@ test("nested command source slices from the original string", () => {
   const rm = sub.script.commands[0].command;
   assert.strictEqual(command.slice(rm.pos, rm.end), "rm -rf /tmp/z");
   assert.strictEqual(command.slice(rm.name.pos, rm.name.end), "rm");
+  // Ordinary scripts index the caller's string directly and carry no `source` of their own.
+  assert.strictEqual(Object.hasOwn(sub.script, "source"), false);
+  assert.strictEqual(sub.script.source, undefined);
 });
 
 function suffixPart(command: string, type: string): any {
@@ -114,6 +122,46 @@ test("arithmetic-command substitution offsets are absolute", () => {
   assert.strictEqual(command.slice(cmd.name.pos, cmd.name.end), "id");
 });
 
+test("arithmetic expansion does not consume a command substitution's closing parenthesis", () => {
+  const command = `echo $((1 + $(danger)))`;
+  const word = (parse(command).commands[0].command as any).suffix[0];
+  assert.strictEqual(word.text, "$((1 + $(danger)))");
+
+  const arith = word.parts.find((part: any) => part.type === "ArithmeticExpansion");
+  const substitution = arith.expression.right;
+  assert.strictEqual(substitution.text, "$(danger)");
+  const nested = substitution.script.commands[0].command;
+  assert.strictEqual(command.slice(nested.pos, nested.end), "danger");
+});
+
+test("arithmetic command and for substitutions have absolute script offsets", () => {
+  const cases = [
+    [`((x=$(danger)))`, ["danger"]],
+    [`for (( i = $(init); i < $(limit); i++ )); do echo "$i"; done`, ["init", "limit"]],
+  ] as const;
+
+  for (const [command, expected] of cases) {
+    const script = parse(command);
+    const root = script.commands[0].command as any;
+    const expressions =
+      root.type === "ArithmeticCommand" ? [root.expression] : [root.initialize, root.test, root.update];
+    const actual: string[] = [];
+
+    for (const expression of expressions) {
+      (function walk(node: any) {
+        if (!node || typeof node !== "object") return;
+        if (node.type === "ArithmeticCommandExpansion") {
+          const nested = node.script.commands[0].command;
+          actual.push(command.slice(nested.pos, nested.end));
+        }
+        for (const value of Object.values(node)) walk(value);
+      })(expression);
+    }
+
+    assert.deepStrictEqual(actual, expected);
+  }
+});
+
 // A command substitution inside a parameter-expansion sub-field resolves to an absolute
 // script — including across a nested ${...}.
 test("command substitution inside parameter-expansion operand is absolute", () => {
@@ -137,13 +185,42 @@ test("command substitution inside parameter-expansion operand is absolute", () =
   }
 });
 
-// Escaped backticks rebuild their inner with the escapes removed, so it is no longer a
-// verbatim substring of the source and cannot carry absolute offsets — the single documented
-// exception. The outer part text still spans the source; only the inner script stays relative.
-test("escaped backticks are the documented relative exception", () => {
+test("escaped backtick scripts retain their decoded source context", () => {
   const command = "echo `outer \\`inner cmd\\` tail`";
   const sub = suffixPart(command, "CommandExpansion");
-  assert.strictEqual(command.slice(sub.pos ?? 0, sub.end ?? 0) || sub.text, sub.text); // outer text intact
-  // inner script exists but its offsets are relative to the rebuilt inner (not the source)
-  assert.ok(sub.script, "escaped backtick still parses an inner script");
+  assert.ok(sub.script);
+  assert.equal(sub.script.source.slice(sub.script.pos, sub.script.end), "outer `inner cmd` tail");
+  assert.equal(Object.getPrototypeOf(sub.script), Object.prototype);
+  assert.equal(Object.hasOwn(sub.script, "source"), true);
+  assert.equal(Object.keys(sub.script).includes("source"), false);
+  assert.equal("source" in structuredClone(sub.script), false);
+  const outer = sub.script.commands[0].command;
+  assert.equal(outer.type, "Command");
+  if (outer.type !== "Command") return;
+  const nested = outer.suffix[0].parts?.[0];
+  assert.equal(nested?.type, "CommandExpansion");
+  if (nested?.type !== "CommandExpansion" || !nested.script) return;
+  const inner = nested.script.commands[0].command;
+  assert.equal(inner.type, "Command");
+  // The nested script is parsed in place from the decoded string, so it has no
+  // `source` of its own — its positions index the owning script's `source`.
+  assert.equal(Object.hasOwn(nested.script, "source"), false);
+  assert.equal(sub.script.source.slice(inner.pos, inner.end), "inner cmd");
+});
+
+test("escaped backtick scripts decode removed escapes", () => {
+  const command = "echo `printf \\$HOME`";
+  const sub = suffixPart(command, "CommandExpansion");
+  assert.ok(sub.script);
+  const nested = sub.script.commands[0].command;
+  assert.equal(nested.type, "Command");
+  if (nested.type !== "Command") return;
+  const argument = nested.suffix[0];
+  assert.equal(sub.script.source, "printf $HOME");
+  assert.equal(sub.script.source.slice(argument.pos, argument.end), "$HOME");
+});
+
+test("expansion depth bookkeeping stays out of the public AST", () => {
+  const expansion = suffixPart("echo $(nested)", "CommandExpansion");
+  assert.equal(Object.hasOwn(expansion, "innerDepth"), false);
 });

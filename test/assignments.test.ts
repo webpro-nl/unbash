@@ -350,6 +350,20 @@ test("nested and expanded array indexes remain assignment syntax", () => {
   }
 });
 
+test("indexed assignments keep command substitutions in the index structured", () => {
+  const assignment = getAssign("array[1+$(danger)]=value true");
+  assert.equal(Object.getPrototypeOf(assignment), Object.prototype);
+  assert.equal(assignment.index, "1+$(danger)");
+  const expansion = assignment.indexParts?.find((part) => part.type === "CommandExpansion");
+  assert.equal(expansion?.type, "CommandExpansion");
+  if (expansion?.type !== "CommandExpansion") return;
+  const command = expansion.script?.commands[0].command;
+  assert.equal(command?.type, "Command");
+  if (command?.type === "Command") assert.equal(command.name?.value, "danger");
+  const serialized = JSON.parse(JSON.stringify(assignment));
+  assert.ok(serialized.indexParts.some((part: { type: string }) => part.type === "CommandExpansion"));
+});
+
 test("line continuations around append assignment operators are ignored", () => {
   for (const [source, index] of [
     ["X\\\n+=value true", undefined],

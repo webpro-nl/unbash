@@ -1,4 +1,4 @@
-import type { ArithmeticCommandExpansion, ArithmeticExpression } from "./types.ts";
+import type { ArithmeticCommandExpansion, ArithmeticExpression, ArithmeticWord } from "./types.ts";
 import {
   CH_TAB,
   CH_NL,
@@ -30,8 +30,8 @@ import {
   CH_a,
   CH_z,
   CH_LBRACE,
-  CH_PIPE,
   CH_RBRACE,
+  CH_PIPE,
   CH_TILDE,
 } from "./chars.ts";
 
@@ -106,18 +106,39 @@ function opRightAssoc(op: string): boolean {
   }
 }
 
-let pendingArithCmdExps: ArithmeticCommandExpansion[] | null = null;
-
-export function drainArithCmdExps(): ArithmeticCommandExpansion[] | null {
-  const out = pendingArithCmdExps;
-  pendingArithCmdExps = null;
-  return out;
+export interface ArithmeticParseCollector {
+  commandExpansions: ArithmeticCommandExpansion[];
+  embeddedWords: ArithmeticWord[];
+  findClosingBracket?: (start: number, end: number) => number;
+  // Embedded `$(`, `${`, and `$((` require the lexer's shell-aware delimiter scanners;
+  // bodies parsed without a collector cannot contain them (see hasEmbeddedWordStructure).
+  findClosingBrace: (start: number, end: number) => number;
+  findClosingParenthesis: (start: number, end: number) => number;
+  findArithmeticExpansionEnd: (start: number, end: number) => number;
+  findArithmeticWordEnd?: (start: number, end: number) => number;
 }
 
-export function parseArithmeticExpression(src: string, offset: number = 0): ArithmeticExpression | null {
-  pendingArithCmdExps = null;
+export function parseArithmeticExpression(
+  src: string,
+  offset: number = 0,
+  collector?: ArithmeticParseCollector,
+): ArithmeticExpression | null {
   let pos = 0;
   const len = src.length;
+  const initialCommandCount = collector?.commandExpansions.length ?? 0;
+  const initialWordCount = collector?.embeddedWords.length ?? 0;
+
+  function makeWord(start: number, end: number, embedded = false): ArithmeticWord {
+    const node: ArithmeticWord = {
+      type: "ArithmeticWord",
+      pos: start + offset,
+      end: end + offset,
+      value: src.slice(start, end),
+      parts: undefined,
+    };
+    if (embedded) collector?.embeddedWords.push(node);
+    return node;
+  }
 
   function skipWS(): void {
     while (pos < len) {
@@ -299,7 +320,7 @@ export function parseArithmeticExpression(src: string, offset: number = 0): Arit
 
   function parseUnaryExpr(): ArithmeticExpression {
     skipWS();
-    if (pos >= len) return { type: "ArithmeticWord", pos: pos + offset, end: pos + offset, value: "" };
+    if (pos >= len) return makeWord(pos, pos);
 
     const start = pos;
     const c = src.charCodeAt(pos);
@@ -362,7 +383,7 @@ export function parseArithmeticExpression(src: string, offset: number = 0): Arit
 
   function parseAtom(): ArithmeticExpression {
     skipWS();
-    if (pos >= len) return { type: "ArithmeticWord", pos: pos + offset, end: pos + offset, value: "" };
+    if (pos >= len) return makeWord(pos, pos);
 
     const c = src.charCodeAt(pos);
 
@@ -378,44 +399,82 @@ export function parseArithmeticExpression(src: string, offset: number = 0): Arit
 
     // Dollar expansion
     if (c === CH_DOLLAR) {
-      return readDollarAtom();
+      const start = pos;
+      const commandCount = collector?.commandExpansions.length ?? 0;
+      const wordCount = collector?.embeddedWords.length ?? 0;
+      const atom = readDollarAtom();
+      const wordEnd = collector?.findArithmeticWordEnd?.(start + offset, offset + len) ?? pos + offset;
+      if (wordEnd > pos + offset) {
+        if (collector) {
+          collector.commandExpansions.length = commandCount;
+          collector.embeddedWords.length = wordCount;
+        }
+        pos = wordEnd - offset;
+        return makeWord(start, pos, true);
+      }
+      return atom;
+    }
+
+    if (c === 0x60 /* ` */ || c === 0x22 /* " */ || c === 0x27 /* ' */) {
+      const start = pos;
+      pos = (collector?.findArithmeticWordEnd?.(start + offset, offset + len) ?? start + offset + 1) - offset;
+      return makeWord(start, pos, true);
     }
 
     // Number or variable name
-    return readWordAtom();
+    const start = pos;
+    const wordCount = collector?.embeddedWords.length ?? 0;
+    const atom = readWordAtom();
+    const wordEnd = collector?.findArithmeticWordEnd?.(start + offset, offset + len) ?? pos + offset;
+    if (wordEnd > pos + offset) {
+      if (collector) collector.embeddedWords.length = wordCount;
+      pos = wordEnd - offset;
+      return makeWord(start, pos, true);
+    }
+    return atom;
   }
 
   function readDollarAtom(): ArithmeticExpression {
     const start = pos;
     pos++; // skip $
-    if (pos >= len) return { type: "ArithmeticWord", pos: start + offset, end: pos + offset, value: "$" };
+    if (pos >= len) return makeWord(start, pos);
 
     const c = src.charCodeAt(pos);
 
     if (c === CH_LPAREN) {
       if (pos + 1 < len && src.charCodeAt(pos + 1) === CH_LPAREN) {
         // $(( nested arithmetic ))
-        pos += 2;
-        let depth = 1;
-        while (pos < len && depth > 0) {
-          if (src.charCodeAt(pos) === CH_LPAREN && pos + 1 < len && src.charCodeAt(pos + 1) === CH_LPAREN) {
-            depth++;
-            pos += 2;
-          } else if (src.charCodeAt(pos) === CH_RPAREN && pos + 1 < len && src.charCodeAt(pos + 1) === CH_RPAREN) {
-            depth--;
-            if (depth > 0) pos += 2;
-            else pos += 2;
-          } else pos++;
+        const expansionEnd = collector?.findArithmeticExpansionEnd(start + offset, offset + len) ?? -1;
+        if (expansionEnd !== -1) {
+          pos = expansionEnd - offset;
+        } else {
+          pos += 2;
+          let depth = 1;
+          while (pos < len && depth > 0) {
+            if (src.charCodeAt(pos) === CH_LPAREN && src.charCodeAt(pos + 1) === CH_LPAREN) {
+              depth++;
+              pos += 2;
+            } else if (src.charCodeAt(pos) === CH_RPAREN && src.charCodeAt(pos + 1) === CH_RPAREN) {
+              depth--;
+              pos += 2;
+            } else {
+              pos++;
+            }
+          }
         }
       } else {
         // $( command substitution )
         pos++; // skip (
-        let depth = 1;
-        while (pos < len && depth > 0) {
-          const ch = src.charCodeAt(pos);
-          if (ch === CH_LPAREN) depth++;
-          else if (ch === CH_RPAREN) depth--;
-          pos++;
+        const close = collector?.findClosingParenthesis(pos + offset, offset + len) ?? -1;
+        if (close !== -1) {
+          pos = close - offset + 1;
+        } else {
+          let depth = 1;
+          while (pos < len && depth > 0) {
+            const ch = src.charCodeAt(pos++);
+            if (ch === CH_LPAREN) depth++;
+            else if (ch === CH_RPAREN) depth--;
+          }
         }
         const text = src.slice(start, pos);
         const inner = text.slice(2, -1); // remove "$(" and ")"
@@ -427,18 +486,22 @@ export function parseArithmeticExpression(src: string, offset: number = 0): Arit
           inner,
           script: undefined,
         };
-        (pendingArithCmdExps ??= []).push(node);
+        collector?.commandExpansions.push(node);
         return node;
       }
     } else if (c === CH_LBRACE) {
       // ${ parameter expansion }
-      pos++;
-      let depth = 1;
-      while (pos < len && depth > 0) {
-        const ch = src.charCodeAt(pos);
-        if (ch === CH_LBRACE) depth++;
-        else if (ch === CH_RBRACE) depth--;
+      const close = collector?.findClosingBrace(pos + offset + 1, offset + len) ?? -1;
+      if (close !== -1) {
+        pos = close - offset + 1;
+      } else {
         pos++;
+        let depth = 1;
+        while (pos < len && depth > 0) {
+          const ch = src.charCodeAt(pos++);
+          if (ch === CH_LBRACE) depth++;
+          else if (ch === CH_RBRACE) depth--;
+        }
       }
     } else {
       // $var
@@ -455,7 +518,7 @@ export function parseArithmeticExpression(src: string, offset: number = 0): Arit
       }
     }
 
-    return { type: "ArithmeticWord", pos: start + offset, end: pos + offset, value: src.slice(start, pos) };
+    return makeWord(start, pos, c === CH_LPAREN || c === CH_LBRACE);
   }
 
   function readWordAtom(): ArithmeticExpression {
@@ -476,23 +539,29 @@ export function parseArithmeticExpression(src: string, offset: number = 0): Arit
 
     // Array subscript: var[expr]
     if (pos > start && pos < len && src.charCodeAt(pos) === CH_LBRACKET) {
-      pos++;
-      let depth = 1;
-      while (pos < len && depth > 0) {
-        const c = src.charCodeAt(pos);
-        if (c === CH_LBRACKET) depth++;
-        else if (c === CH_RBRACKET) depth--;
+      const close = collector?.findClosingBracket?.(pos + offset + 1, offset + len) ?? -1;
+      if (close !== -1) {
+        pos = close - offset + 1;
+      } else {
         pos++;
+        let depth = 1;
+        while (pos < len && depth > 0) {
+          const c = src.charCodeAt(pos);
+          if (c === CH_LBRACKET) depth++;
+          else if (c === CH_RBRACKET) depth--;
+          pos++;
+        }
       }
+      return makeWord(start, pos, true);
     }
 
     if (pos === start) {
       // Unknown character — advance to prevent infinite loop
       pos++;
-      return { type: "ArithmeticWord", pos: start + offset, end: pos + offset, value: src.slice(start, pos) };
+      return makeWord(start, pos);
     }
 
-    return { type: "ArithmeticWord", pos: start + offset, end: pos + offset, value: src.slice(start, pos) };
+    return makeWord(start, pos);
   }
 
   skipWS();
@@ -500,5 +569,10 @@ export function parseArithmeticExpression(src: string, offset: number = 0): Arit
   const result = parseBinExpr(0);
   // Check there's nothing important remaining
   skipWS();
+  if (pos < len && collector) {
+    collector.commandExpansions.length = initialCommandCount;
+    collector.embeddedWords.length = initialWordCount;
+    return makeWord(0, len, true);
+  }
   return result;
 }

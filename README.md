@@ -68,6 +68,31 @@ for (const statement of script.commands) {
 // $(mktemp)
 ```
 
+Word-like fields that can execute nested shell syntax expose the same structure.
+`BraceExpansion`, `ExtendedGlob`, and `ArithmeticWord` use `parts`; parameter and
+assignment array indexes use `indexParts`.
+
+Positions index the source owned by the nearest `ParsedScript`. Root scripts and
+verbatim nested substitutions share the caller's source, so their `pos`/`end`
+slice that source directly:
+
+```js
+const nested = word.parts.find((part) => part.type === "CommandExpansion").script;
+const command = nested.commands[0].command;
+
+source.slice(command.pos, command.end); // exact nested command source
+```
+
+A legacy backtick script whose body contains backslash escapes owns its decoded
+string as a non-enumerable `source` property. Ordinary scripts nested inside it
+index that decoded source. Object spread and `structuredClone` omit `source`
+because it is non-enumerable.
+
+Parse errors inside a lazily parsed script surface on that script, not on the
+root: check `errors` on every nested `script` while traversing. A consumer that
+only reads the root `errors` array cannot tell that a substitution body failed
+to parse.
+
 ### Print
 
 Basic opinionated printer, does not preserve whitespace or comments (except

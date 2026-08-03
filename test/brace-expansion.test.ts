@@ -76,3 +76,31 @@ test("multiple brace expansions in word", () => {
   const parts = wp(src, c.suffix[0])!;
   assert.equal(parts.filter((p) => p.type === "BraceExpansion").length, 2);
 });
+
+test("command substitutions inside brace expansions remain structured", () => {
+  const src = "echo {safe,$(danger)}";
+  const c = getCmd(parse(src));
+  const part = wp(src, c.suffix[0])![0];
+  assert.equal(part.type, "BraceExpansion");
+  if (part.type !== "BraceExpansion") return;
+  const expansion = part.parts?.find((child) => child.type === "CommandExpansion");
+  assert.equal(expansion?.type, "CommandExpansion");
+  if (expansion?.type !== "CommandExpansion") return;
+  const command = expansion.script?.commands[0].command;
+  assert.equal(command?.type, "Command");
+  if (command?.type === "Command") assert.equal(command.name?.value, "danger");
+});
+
+test("process substitutions inside brace expansions remain structured", () => {
+  const src = "echo {safe,<(danger)}";
+  const c = getCmd(parse(src));
+  const part = wp(src, c.suffix[0])![0];
+  assert.equal(part.type, "BraceExpansion");
+  if (part.type !== "BraceExpansion") return;
+  const expansion = part.parts?.find((child) => child.type === "ProcessSubstitution");
+  assert.equal(expansion?.type, "ProcessSubstitution");
+  if (expansion?.type !== "ProcessSubstitution") return;
+  const command = expansion.script?.commands[0].command;
+  assert.equal(command?.type, "Command");
+  if (command?.type === "Command") assert.equal(command.name?.value, "danger");
+});

@@ -8,7 +8,7 @@ import type {
   Word,
   WordPart,
 } from "./types.ts";
-import { parseArithmeticExpression, drainArithCmdExps } from "./arithmetic.ts";
+import { parseArithmeticExpression } from "./arithmetic.ts";
 import { WordImpl } from "./word.ts";
 import {
   CH_TAB,
@@ -51,6 +51,16 @@ import {
   CH_PIPE,
   CH_RBRACE,
 } from "./chars.ts";
+
+// Shared nesting budget for compound syntax and for structure materialized on demand
+// (sub-field words, nested substitution scripts). 256 nested levels stay lossless; past
+// that the lexer stops descending instead of overflowing the stack: deeper sub-fields
+// keep their raw text without parts, and substitution scripts stay unresolved past one
+// boundary script flagged with "maximum substitution nesting depth exceeded". The
+// iterative scanners additionally report the depth error where their counters can see
+// it (nested `${`, `$((`, and `$(`); cut-offs those counters cannot see (e.g. chains
+// interleaved with double quotes) degrade to plain text without an error.
+export const MAX_SYNTAX_NESTING = 256;
 
 export const Token = {
   Word: 0,
@@ -173,6 +183,49 @@ charType[CH_DQUOTE] = 2;
 charType[CH_DOLLAR] = 2;
 charType[CH_BACKTICK] = 2;
 charType[CH_LBRACE] = 2;
+
+const arithmeticWordDelimiter = new Uint8Array(128);
+for (const ch of [
+  CH_TAB,
+  CH_NL,
+  CH_SPACE,
+  CH_BANG,
+  CH_PERCENT,
+  CH_AMP,
+  CH_LPAREN,
+  CH_RPAREN,
+  CH_STAR,
+  CH_PLUS,
+  CH_COMMA,
+  CH_DASH,
+  CH_SLASH,
+  CH_COLON,
+  CH_LT,
+  CH_EQ,
+  CH_GT,
+  CH_QUESTION,
+  CH_CARET,
+  CH_PIPE,
+]) {
+  arithmeticWordDelimiter[ch] = 1;
+}
+
+export function hasEmbeddedWordStructure(source: string, start: number, end: number): boolean {
+  for (let pos = start; pos < end; pos++) {
+    const ch = source.charCodeAt(pos);
+    if (
+      ch === CH_BACKSLASH ||
+      ch === CH_SQUOTE ||
+      ch === CH_DQUOTE ||
+      ch === CH_DOLLAR ||
+      ch === CH_BACKTICK ||
+      ((ch === CH_LT || ch === CH_GT) && pos + 1 < end && source.charCodeAt(pos + 1) === CH_LPAREN)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function findUnnested(s: string, target: number): number {
   let depth = 0;
@@ -346,9 +399,12 @@ export class Lexer {
   private nextState: TokenValue;
   private hasPeek: boolean;
   private pendingHereDocs: PendingHereDoc[];
-  private collectedExpansions: DeferredCommandExpansion[];
+  private collectedExpansions: [DeferredCommandExpansion, number][];
   _errors: ParseError[] | null = null;
   _buildParts = false;
+  // Nesting depth of the window being lexed (enclosing sub-fields plus substitution
+  // scripts), sharing the MAX_SYNTAX_NESTING budget across lazily created lexers.
+  _nestingDepth = 0;
 
   // `start`/`end` bound the lexer to a window of `src` so substitution scripts can be
   // parsed in place against the original source — every position is then absolute, with
@@ -377,12 +433,173 @@ export class Lexer {
     return this._errors ?? (this._errors = []);
   }
 
-  getCollectedExpansions(): DeferredCommandExpansion[] {
+  getCollectedExpansions(): [DeferredCommandExpansion, number][] {
     return this.collectedExpansions;
+  }
+
+  // Collected expansions resolve after the enclosing scan unwinds, so each records the
+  // depth it was found at; resolveCollected charges that depth against the shared budget.
+  private collect(part: DeferredCommandExpansion): void {
+    this.collectedExpansions.push([part, this._nestingDepth]);
   }
 
   getPos(): number {
     return this.pos;
+  }
+
+  /** Find the closing bracket for a shell subscript, ignoring brackets inside nested shell syntax. */
+  findClosingBracket(start: number, end: number = this.srcEnd): number {
+    return this.findClosingShellDelimiter(start, end, CH_RBRACKET);
+  }
+
+  /** Find the closing brace for a parameter expansion, ignoring braces inside nested shell syntax. */
+  findClosingBrace(start: number, end: number = this.srcEnd): number {
+    return this.findClosingShellDelimiter(start, end, CH_RBRACE);
+  }
+
+  /** Find the closing parenthesis for a shell substitution using the command-aware scanner. */
+  findClosingParenthesis(start: number, end: number = this.srcEnd): number {
+    const savedPos = this.pos;
+    const savedEnd = this.srcEnd;
+    const savedUnbalanced = this._unbalanced;
+    this.pos = start;
+    this.srcEnd = Math.min(end, this.srcEnd);
+    this.extractBalanced();
+    const close = this._unbalanced ? -1 : this.pos - 1;
+    this.pos = savedPos;
+    this.srcEnd = savedEnd;
+    this._unbalanced = savedUnbalanced;
+    return close;
+  }
+
+  /** Find the end of one arithmetic expansion using the canonical lexer scanner. */
+  findArithmeticExpansionEnd(start: number, end: number = this.srcEnd): number {
+    const scanner = new Lexer(this.src, start, end);
+    scanner.pos = start + 1;
+    scanner.scanArithmeticBody();
+    return scanner.pos;
+  }
+
+  /** Find the end of one shell-expanded arithmetic word using the canonical lexer scanners. */
+  findArithmeticWordEnd(start: number, end: number = this.srcEnd): number {
+    const scanner = new Lexer(this.src, start, end);
+    scanner.pos = start;
+    return scanner.scanArithmeticWordEnd();
+  }
+
+  private scanArithmeticWordEnd(): number {
+    while (this.pos < this.srcEnd) {
+      const ch = this.src.charCodeAt(this.pos);
+      if (ch === CH_DOLLAR) {
+        this.readDollar();
+        continue;
+      }
+      if (ch === CH_BACKTICK) {
+        this.readBacktickExpansion();
+        continue;
+      }
+      if (ch === CH_SQUOTE) {
+        this.pos++;
+        this.skipSQ();
+        continue;
+      }
+      if (ch === CH_DQUOTE) {
+        this.pos++;
+        this.skipDQ();
+        continue;
+      }
+      if (ch === CH_BACKSLASH) {
+        this.pos += 2;
+        continue;
+      }
+      if (ch === CH_LBRACKET) {
+        const close = this.findClosingBracket(this.pos + 1);
+        if (close !== -1) {
+          this.pos = close + 1;
+          continue;
+        }
+      }
+      if ((ch === CH_LT || ch === CH_GT) && this.src.charCodeAt(this.pos + 1) === CH_LPAREN) {
+        this.pos += 2;
+        this.extractBalanced();
+        continue;
+      }
+      if (ch < 128 && arithmeticWordDelimiter[ch]) break;
+      this.pos++;
+    }
+    return this.pos;
+  }
+
+  private findClosingShellDelimiter(start: number, end: number, closing: number): number {
+    const savedPos = this.pos;
+    const savedEnd = this.srcEnd;
+    const savedUnbalanced = this._unbalanced;
+    this.srcEnd = Math.min(end, this.srcEnd);
+    const delimiters = [closing];
+    let pos = start;
+
+    while (pos < this.srcEnd) {
+      const ch = this.src.charCodeAt(pos);
+      if (ch === CH_BACKSLASH) {
+        pos += 2;
+        continue;
+      }
+      if (ch === CH_SQUOTE) {
+        this.pos = pos + 1;
+        this.skipSQ();
+        pos = this.pos;
+        continue;
+      }
+      if (ch === CH_DQUOTE) {
+        this.pos = pos + 1;
+        this.skipDQ();
+        pos = this.pos;
+        continue;
+      }
+      if (ch === CH_BACKTICK) {
+        pos++;
+        while (pos < this.srcEnd && this.src.charCodeAt(pos) !== CH_BACKTICK) {
+          if (this.src.charCodeAt(pos) === CH_BACKSLASH) pos++;
+          pos++;
+        }
+        if (pos < this.srcEnd) pos++;
+        continue;
+      }
+      if (
+        (ch === CH_DOLLAR && pos + 1 < this.srcEnd && this.src.charCodeAt(pos + 1) === CH_LPAREN) ||
+        ((ch === CH_LT || ch === CH_GT) && pos + 1 < this.srcEnd && this.src.charCodeAt(pos + 1) === CH_LPAREN)
+      ) {
+        this.pos = pos + 2;
+        this.extractBalanced();
+        pos = this.pos;
+        continue;
+      }
+      const expected = delimiters[delimiters.length - 1];
+      if (ch === CH_DOLLAR && pos + 1 < this.srcEnd && this.src.charCodeAt(pos + 1) === CH_LBRACE) {
+        delimiters.push(CH_RBRACE);
+        pos += 2;
+        continue;
+      }
+      if (expected === CH_RBRACKET && ch === CH_LBRACKET) {
+        delimiters.push(CH_RBRACKET);
+      } else if (expected === CH_RPAREN && ch === CH_LPAREN) {
+        delimiters.push(CH_RPAREN);
+      } else if (ch === expected) {
+        delimiters.pop();
+        if (delimiters.length === 0) {
+          this.pos = savedPos;
+          this.srcEnd = savedEnd;
+          this._unbalanced = savedUnbalanced;
+          return pos;
+        }
+      }
+      pos++;
+    }
+
+    this.pos = savedPos;
+    this.srcEnd = savedEnd;
+    this._unbalanced = savedUnbalanced;
+    return -1;
   }
 
   skipSubshellBody(): number {
@@ -639,7 +856,7 @@ export class Lexer {
         inner: inner ?? undefined,
         innerStart: startPos + 2,
       };
-      this.collectedExpansions.push(part);
+      this.collect(part);
       // Continue reading any trailing word text (e.g., suffix after proc sub)
       if (this.pos < this.srcEnd) {
         this.readWordText();
@@ -654,6 +871,14 @@ export class Lexer {
     } else {
       this.readWordText();
     }
+    return this._wordParts;
+  }
+
+  /** Scan a bounded word-like span without treating shell operators or whitespace as terminators. */
+  buildEmbeddedWordParts(startPos: number): WordPart[] | null {
+    this._buildParts = true;
+    this.pos = startPos;
+    this.readInnerWordText();
     return this._wordParts;
   }
 
@@ -1222,7 +1447,7 @@ export class Lexer {
       if (c === CH_BACKSLASH) i++; // skip escaped char
     }
     if (!hasExpansion) return null;
-    return new WordImpl(body, bodyPos, bodyPos + body.length, this.src, WordImpl._resolveHeredocBody);
+    return new WordImpl(body, bodyPos, bodyPos + body.length, this.src, WordImpl._resolveHeredocBody, this._nestingDepth);
   }
 
   private _wordText = "";
@@ -1375,14 +1600,11 @@ export class Lexer {
           const prefixChar = text.charCodeAt(text.length - 1);
           pos++;
           const innerStart = pos;
-          let depth = 1;
-          while (pos < len && depth > 0) {
-            const c = src.charCodeAt(pos);
-            if (c === CH_LPAREN) depth++;
-            else if (c === CH_RPAREN) depth--;
-            pos++;
-          }
-          const pattern = src.slice(innerStart, pos - 1); // without closing )
+          const close = this.findClosingShellDelimiter(innerStart, len, CH_RPAREN);
+          const patternEnd = close === -1 ? len : close;
+          const pattern = src.slice(innerStart, patternEnd);
+          pos = close === -1 ? len : close + 1;
+          if (close === -1) this.errors.push({ message: "unterminated extended glob", pos: innerStart - 2 });
           const eg = "(" + src.slice(innerStart, pos);
           text += eg;
           // Create ExtendedGlob part for real extglob operators (not = which is array assignment)
@@ -1395,7 +1617,15 @@ export class Lexer {
             }
             const op = extglobOp[prefixChar];
             const fullText = op + eg;
-            parts!.push({ type: "ExtendedGlob", text: fullText, operator: op, pattern });
+            parts!.push({
+              type: "ExtendedGlob",
+              text: fullText,
+              operator: op,
+              pattern,
+              parts: hasEmbeddedWordStructure(src, innerStart, patternEnd)
+                ? this.parseSubFieldWord(innerStart, patternEnd).parts
+                : undefined,
+            });
             litStart = pos;
           } else if (bp) {
             litBuf += eg;
@@ -1522,7 +1752,13 @@ export class Lexer {
               parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, pos) });
               litBuf = "";
             }
-            parts!.push({ type: "BraceExpansion", text: braceText });
+            parts!.push({
+              type: "BraceExpansion",
+              text: braceText,
+              parts: hasEmbeddedWordStructure(src, pos + 1, braceEnd - 1)
+                ? this.parseSubFieldWord(pos + 1, braceEnd - 1).parts
+                : undefined,
+            });
             litStart = braceEnd;
           }
           pos = braceEnd;
@@ -1662,6 +1898,33 @@ export class Lexer {
         continue;
       }
 
+      if ((ch === CH_LT || ch === CH_GT) && pos + 1 < len && src.charCodeAt(pos + 1) === CH_LPAREN) {
+        const psStart = pos;
+        this.pos = pos + 2;
+        const inner = this.extractBalanced();
+        pos = this.pos;
+        const raw = src.slice(psStart, pos);
+        text += raw;
+        if (bp) {
+          if (litBuf) {
+            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, psStart) });
+            litBuf = "";
+          }
+          const part: import("./types.ts").ProcessSubstitutionPart = {
+            type: "ProcessSubstitution",
+            text: raw,
+            operator: ch === CH_LT ? "<" : ">",
+            script: undefined,
+            inner,
+            innerStart: psStart + 2,
+          };
+          parts!.push(part);
+          this.collect(part);
+          litStart = pos;
+        }
+        continue;
+      }
+
       text += src[pos];
       if (bp) litBuf += src[pos];
       pos++;
@@ -1685,6 +1948,10 @@ export class Lexer {
   // source, so every sub-field offset maps straight back.
   private parseSubFieldWord(start: number, end: number): Word {
     if (start >= end) return new WordImpl("", start, start);
+    // Sub-fields nest through readInnerWordText (nested expansions, arithmetic embedded
+    // words); once the shared budget is spent, keep the raw span as an unstructured word.
+    if (this._nestingDepth >= MAX_SYNTAX_NESTING) return new WordImpl(this.src.slice(start, end), start, end);
+    this._nestingDepth++;
     const savedEnd = this.srcEnd;
     const savedPos = this.pos;
     const savedText = this._wordText;
@@ -1707,6 +1974,7 @@ export class Lexer {
     this._wordText = savedText;
     this._wordParts = savedParts;
     this._wordQuoted = savedQuoted;
+    this._nestingDepth--;
     return word;
   }
 
@@ -2039,13 +2307,54 @@ export class Lexer {
   private scanArithmeticBody(): string {
     this.pos += 2;
     let depth = 1;
+    let expansions = 0;
+    let reported = false;
     const src = this.src;
     const len = this.srcEnd;
     const start = this.pos;
     while (this.pos < len && depth > 0) {
       const c = src.charCodeAt(this.pos);
-      if (c === CH_LPAREN && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
+      if (c === CH_BACKSLASH) {
+        this.pos += 2;
+      } else if (c === CH_SQUOTE) {
+        this.pos++;
+        this.skipSQ();
+      } else if (c === CH_DQUOTE) {
+        this.pos++;
+        this.skipDQ();
+      } else if (c === CH_BACKTICK) {
+        this.pos++;
+        while (this.pos < len && src.charCodeAt(this.pos) !== CH_BACKTICK) {
+          if (src.charCodeAt(this.pos) === CH_BACKSLASH) this.pos++;
+          this.pos++;
+        }
+        if (this.pos < len) this.pos++;
+      } else if (
+        c === CH_DOLLAR &&
+        this.pos + 2 < len &&
+        src.charCodeAt(this.pos + 1) === CH_LPAREN &&
+        src.charCodeAt(this.pos + 2) !== CH_LPAREN
+      ) {
+        const dollarPos = this.pos;
+        this.pos += 2;
+        this.extractBalanced();
+        if (this._unbalanced) this.errors.push({ message: "unterminated command substitution", pos: dollarPos });
+      } else if (c === CH_DOLLAR && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LBRACE) {
+        const close = this.findClosingBrace(this.pos + 2, len);
+        this.pos = close === -1 ? len : close + 1;
+      } else if ((c === CH_LT || c === CH_GT) && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
+        this.pos += 2;
+        this.extractBalanced();
+      } else if (c === CH_LPAREN && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
         depth++;
+        // Nested $((...)) — count it against the shared budget (the expansion this scan
+        // belongs to is level one, hence >=) so over-deep chains surface a parse error.
+        if (src.charCodeAt(this.pos - 1) === CH_DOLLAR && ++expansions + this._nestingDepth >= MAX_SYNTAX_NESTING) {
+          if (!reported) {
+            this.errors.push({ message: "maximum arithmetic expansion nesting depth exceeded", pos: this.pos - 1 });
+            reported = true;
+          }
+        }
         this.pos += 2;
       } else if (c === CH_RPAREN && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_RPAREN) {
         if (--depth === 0) {
@@ -2070,11 +2379,27 @@ export class Lexer {
       // Pass the absolute body offset so arithmetic nodes index the original source
       // directly (no re-basing). Nested $(...) command subs inside the arithmetic get
       // an absolute innerStart so resolveCollected parses their window in place.
-      const expr = parseArithmeticExpression(body, bodyStart) ?? undefined;
-      const drained = drainArithCmdExps();
-      if (drained) for (const node of drained) {
-        node.innerStart = node.pos + 2;
-        this.collectedExpansions.push(node);
+      let expr: import("./types.ts").ArithmeticExpression | undefined;
+      if (hasEmbeddedWordStructure(this.src, bodyStart, bodyStart + body.length)) {
+        const commandExpansions: import("./types.ts").ArithmeticCommandExpansion[] = [];
+        const embeddedWords: import("./types.ts").ArithmeticWord[] = [];
+        expr =
+          parseArithmeticExpression(body, bodyStart, {
+            commandExpansions,
+            embeddedWords,
+            findClosingBracket: (start, end) => this.findClosingBracket(start, end),
+            findClosingBrace: (start, end) => this.findClosingBrace(start, end),
+            findClosingParenthesis: (start, end) => this.findClosingParenthesis(start, end),
+            findArithmeticExpansionEnd: (start, end) => this.findArithmeticExpansionEnd(start, end),
+            findArithmeticWordEnd: (start, end) => this.findArithmeticWordEnd(start, end),
+          }) ?? undefined;
+        for (const node of commandExpansions) {
+          node.innerStart = node.pos + 2;
+          this.collect(node);
+        }
+        for (const node of embeddedWords) node.parts = this.parseSubFieldWord(node.pos, node.end).parts;
+      } else {
+        expr = parseArithmeticExpression(body, bodyStart) ?? undefined;
       }
       this._resultPart = { type: "ArithmeticExpansion", text, expression: expr };
     } else {
@@ -2099,7 +2424,7 @@ export class Lexer {
     this._resultHasExpansion = true;
     if (this._buildParts) {
       this._resultPart = { type: "CommandExpansion", text, script: undefined, inner, innerStart: dollarPos + 2 };
-      this.collectedExpansions.push(this._resultPart);
+      this.collect(this._resultPart);
     } else {
       this._resultPart = undefined;
     }
@@ -2146,7 +2471,7 @@ export class Lexer {
     if (this._buildParts) {
       const innerStart = start + (rawInner.length - rawInner.trimStart().length);
       this._resultPart = { type: "CommandExpansion", text, script: undefined, inner, innerStart };
-      this.collectedExpansions.push(this._resultPart);
+      this.collect(this._resultPart);
     } else {
       this._resultPart = undefined;
     }
@@ -2211,7 +2536,7 @@ export class Lexer {
         inner,
         innerStart: hasEscapes ? undefined : start,
       };
-      this.collectedExpansions.push(this._resultPart);
+      this.collect(this._resultPart);
     } else {
       this._resultPart = undefined;
     }
@@ -2223,10 +2548,16 @@ export class Lexer {
     const start = this.pos; // at {
     this.pos++;
     let depth = 1;
+    let reported = false;
     while (this.pos < len && depth > 0) {
       const ch = src.charCodeAt(this.pos);
-      if (ch === CH_LBRACE && this.pos > 0 && src.charCodeAt(this.pos - 1) === CH_DOLLAR) depth++;
-      else if (ch === CH_RBRACE) {
+      if (ch === CH_LBRACE && this.pos > 0 && src.charCodeAt(this.pos - 1) === CH_DOLLAR) {
+        depth++;
+        if (this._nestingDepth + depth > MAX_SYNTAX_NESTING && !reported) {
+          this.errors.push({ message: "maximum parameter expansion nesting depth exceeded", pos: this.pos - 1 });
+          reported = true;
+        }
+      } else if (ch === CH_RBRACE) {
         if (--depth === 0) {
           this.pos++;
           break;
@@ -2267,6 +2598,7 @@ export class Lexer {
       text,
       parameter: "",
       index: undefined,
+      indexParts: undefined,
       indirect: undefined,
       length: undefined,
       operator: undefined,
@@ -2277,6 +2609,10 @@ export class Lexer {
     const ilen = inner.length;
     if (ilen === 0) return result;
     const sub = (a: number, b: number): Word => this.parseSubFieldWord(innerStart + a, innerStart + b);
+    const closeBracket = (start: number): number => {
+      const close = this.findClosingBracket(innerStart + start, innerStart + ilen);
+      return close === -1 ? -1 : close - innerStart;
+    };
 
     let i = 0;
 
@@ -2303,7 +2639,7 @@ export class Lexer {
         if (tryI > 1) {
           let endI = tryI;
           if (endI < ilen && inner.charCodeAt(endI) === CH_LBRACKET) {
-            const closeB = this.findCloseBracket(inner, endI + 1);
+            const closeB = closeBracket(endI + 1);
             if (closeB !== -1) endI = closeB + 1;
           }
           if (endI >= ilen) {
@@ -2311,8 +2647,11 @@ export class Lexer {
             result.length = true;
             result.parameter = inner.slice(1, tryI);
             if (tryI < ilen && inner.charCodeAt(tryI) === CH_LBRACKET) {
-              const closeB = this.findCloseBracket(inner, tryI + 1);
-              if (closeB !== -1) result.index = inner.slice(tryI + 1, closeB);
+              const closeB = closeBracket(tryI + 1);
+              if (closeB !== -1) {
+                result.index = inner.slice(tryI + 1, closeB);
+                result.indexParts = sub(tryI + 1, closeB).parts;
+              }
             }
             return result;
           }
@@ -2332,9 +2671,10 @@ export class Lexer {
 
     // Check for [index]
     if (i < ilen && inner.charCodeAt(i) === CH_LBRACKET) {
-      const closeB = this.findCloseBracket(inner, i + 1);
+      const closeB = closeBracket(i + 1);
       if (closeB !== -1) {
         result.index = inner.slice(i + 1, closeB);
+        result.indexParts = sub(i + 1, closeB).parts;
         i = closeB + 1;
       }
     }
@@ -2509,18 +2849,6 @@ export class Lexer {
     return i;
   }
 
-  private findCloseBracket(s: string, start: number): number {
-    let depth = 1;
-    for (let i = start; i < s.length; i++) {
-      const c = s.charCodeAt(i);
-      if (c === CH_LBRACKET) depth++;
-      else if (c === CH_RBRACKET) {
-        if (--depth === 0) return i;
-      }
-    }
-    return -1;
-  }
-
   private readAnsiCQuoted(): string {
     const src = this.src;
     const len = this.srcEnd;
@@ -2633,6 +2961,8 @@ export class Lexer {
     let caseDepth = 0;
     let pendingDelims: { delimiter: string; strip: boolean }[] | null = null;
     let arithBase = -1;
+    let substitutions = 0;
+    let reported = false;
 
     while (this.pos < len && depth > 0) {
       const ch = src.charCodeAt(this.pos);
@@ -2641,6 +2971,14 @@ export class Lexer {
         // rebalance so shift operators inside aren't mistaken for heredocs
         if (arithBase < 0 && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
           arithBase = depth;
+        }
+        // Nested $( — count it against the shared budget (the substitution being
+        // scanned is level one, hence >=) so over-deep chains surface a parse error.
+        if (src.charCodeAt(this.pos - 1) === CH_DOLLAR && ++substitutions + this._nestingDepth >= MAX_SYNTAX_NESTING) {
+          if (!reported) {
+            this.errors.push({ message: "maximum command substitution nesting depth exceeded", pos: this.pos - 1 });
+            reported = true;
+          }
         }
         depth++;
         this.pos++;

@@ -1,6 +1,6 @@
 import type { DoubleQuotedChild, Word, WordPart } from "./types.ts";
 
-export type PartsResolver = (source: string, word: Word) => WordPart[] | undefined;
+export type PartsResolver = (source: string, word: Word, depth: number) => WordPart[] | undefined;
 
 function dequoteValue(parts: DoubleQuotedChild[]): string {
   let s = "";
@@ -38,15 +38,17 @@ export class WordImpl implements Word {
   end: number;
   #source: string;
   #resolver: PartsResolver;
+  #depth: number;
   #parts: WordPart[] | undefined | null;
   #value: string | null = null;
 
-  constructor(text: string, pos: number, end: number, source?: string, resolver?: PartsResolver) {
+  constructor(text: string, pos: number, end: number, source?: string, resolver?: PartsResolver, depth = 0) {
     this.text = text;
     this.pos = pos;
     this.end = end;
     this.#source = source ?? "";
     this.#resolver = resolver ?? WordImpl._resolveWord;
+    this.#depth = depth;
     this.#parts = source !== undefined ? null : undefined;
   }
 
@@ -81,7 +83,7 @@ export class WordImpl implements Word {
 
   get parts(): WordPart[] | undefined {
     if (this.#parts === null) {
-      this.#parts = this.#resolver(this.#source, this) ?? undefined;
+      this.#parts = this.#resolver(this.#source, this, this.#depth) ?? undefined;
     }
     return this.#parts;
   }

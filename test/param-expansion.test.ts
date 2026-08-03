@@ -321,6 +321,43 @@ test("${arr[0]} array index", () => {
   assert.equal(p.index, "0");
 });
 
+test("${arr[index]} keeps command substitutions in the index structured", () => {
+  const p = getPart("echo ${arr[1+$(danger)]}");
+  assert.equal(p.index, "1+$(danger)");
+  const expansion = p.indexParts?.find((part) => part.type === "CommandExpansion");
+  assert.equal(expansion?.type, "CommandExpansion");
+  if (expansion?.type !== "CommandExpansion") return;
+  const command = expansion.script?.commands[0].command;
+  assert.equal(command?.type, "Command");
+  if (command?.type === "Command") assert.equal(command.name?.value, "danger");
+});
+
+test("${arr[index]} keeps nested parameter expansions inside the index", () => {
+  const p = getPart("echo ${arr[${x:-]}+$(danger)]}");
+  assert.equal(p.index, "${x:-]}+$(danger)");
+  assert.deepEqual(
+    p.indexParts?.map((part) => part.type),
+    ["ParameterExpansion", "Literal", "CommandExpansion"],
+  );
+  const expansion = p.indexParts?.find((part) => part.type === "CommandExpansion");
+  assert.equal(expansion?.type, "CommandExpansion");
+  if (expansion?.type !== "CommandExpansion") return;
+  const command = expansion.script?.commands[0].command;
+  assert.equal(command?.type, "Command");
+  if (command?.type === "Command") assert.equal(command.name?.value, "danger");
+});
+
+test("${#arr[index]} keeps quoted closing brackets inside substitutions", () => {
+  const p = getPart('echo ${#arr[$(printf "]")]}');
+  assert.equal(p.index, '$(printf "]")');
+  const expansion = p.indexParts?.find((part) => part.type === "CommandExpansion");
+  assert.equal(expansion?.type, "CommandExpansion");
+  if (expansion?.type !== "CommandExpansion") return;
+  const command = expansion.script?.commands[0].command;
+  assert.equal(command?.type, "Command");
+  if (command?.type === "Command") assert.equal(command.name?.value, "printf");
+});
+
 test("${map[name]} assoc array", () => {
   const p = getPart("echo ${map[name]}");
   assert.equal(p.parameter, "map");

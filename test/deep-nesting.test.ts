@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
 import { verify } from "./verify.ts";
-import type { If, For, While } from "../src/types.ts";
+import type {
+  Command,
+  CommandExpansionPart,
+  DoubleQuotedPart,
+  If,
+  For,
+  ParameterExpansionPart,
+  ParsedScript,
+  While,
+} from "../src/types.ts";
 
 const roundtrip = (src: string) => {
   const ast = parse(src);
@@ -28,6 +37,10 @@ const nestedCaseClauses = (depth: number, body: string) =>
   "case x in x) ".repeat(depth) + body + ";; esac".repeat(depth);
 const nestedTestGroups = (depth: number, body: string) =>
   "[[ " + "( ".repeat(depth) + body + " )".repeat(depth) + " ]]";
+const nestedParamIndexes = (depth: number) => "${a[".repeat(depth) + "0" + "]}".repeat(depth);
+const nestedParamDefaults = (depth: number) => "${a:-".repeat(depth) + "x" + "}".repeat(depth);
+const nestedArithIndexes = (depth: number) => "$((a[".repeat(depth) + "0" + "]))".repeat(depth);
+const nestedAssignSubscripts = (depth: number) => "a[$(".repeat(depth) + ":" + ")]=".repeat(depth);
 
 // --- Nested parameter expansions ---
 
@@ -44,6 +57,85 @@ test("nested ${...} in replacement pattern", () => {
 test("param expansion with nested command substitution", () => {
   const src = 'echo "${var:-$(echo ${fallback:-default})}"';
   roundtrip(src);
+});
+
+test("normal expansion nesting keeps full nested structure without errors", () => {
+  const ast = parse('echo "${a:-${b:-$(x)}}"');
+  assert.equal(ast.errors, undefined);
+  const dq = (ast.commands[0].command as Command).suffix[0].parts?.[0] as DoubleQuotedPart;
+  const outer = dq.parts[0] as ParameterExpansionPart;
+  assert.equal(outer.parameter, "a");
+  const inner = outer.operand?.parts?.[0] as ParameterExpansionPart;
+  assert.equal(inner.parameter, "b");
+  const sub = inner.operand?.parts?.[0] as CommandExpansionPart;
+  assert.equal(sub.type, "CommandExpansion");
+  assert.ok(sub.script);
+  const subCommand = sub.script.commands[0].command as Command;
+  assert.equal(subCommand.type, "Command");
+  assert.equal(subCommand.name?.value, "x");
+  assert.equal(ast.errors, undefined);
+});
+
+test("parameter expansion nesting at the parser limit remains lossless", () => {
+  const src = nestedParamDefaults(256);
+  const ast = roundtrip(src);
+  assert.equal(ast.errors, undefined);
+  JSON.stringify(ast);
+  assert.equal(ast.errors, undefined);
+  let part = (ast.commands[0].command as Command).name?.parts?.[0] as ParameterExpansionPart;
+  let levels = 1;
+  while (part.operand?.parts) {
+    part = part.operand.parts[0] as ParameterExpansionPart;
+    levels++;
+  }
+  assert.equal(levels, 256);
+  assert.equal(part.operand?.text, "x");
+});
+
+test("excessive parameter expansion nesting degrades without stack overflow", () => {
+  for (const src of [nestedParamIndexes(2_000), nestedParamDefaults(2_000)]) {
+    const ast = parse(src);
+    JSON.stringify(ast);
+    assert.ok(
+      ast.errors?.some((e) => e.message === "maximum parameter expansion nesting depth exceeded"),
+      src.slice(0, 8),
+    );
+  }
+});
+
+test("excessive arithmetic expansion nesting degrades without stack overflow", () => {
+  const ast = parse(nestedArithIndexes(2_000));
+  JSON.stringify(ast);
+  assert.ok(ast.errors?.some((e) => e.message === "maximum arithmetic expansion nesting depth exceeded"));
+});
+
+test("excessive assignment subscript substitution nesting degrades without stack overflow", () => {
+  const ast = parse(nestedAssignSubscripts(2_000));
+  JSON.stringify(ast);
+  assert.ok(ast.errors?.some((e) => e.message === "maximum command substitution nesting depth exceeded"));
+});
+
+test("nested substitution scripts stop at a flagged boundary script", () => {
+  const ast = parse(nestedAssignSubscripts(2_000));
+  JSON.stringify(ast);
+  let script: ParsedScript = ast;
+  let depth = 0;
+  let boundary: ParsedScript | undefined;
+  for (;;) {
+    const command = script.commands[0]?.command;
+    const assignment = command?.type === "Command" ? command.prefix[0] : undefined;
+    const sub = assignment?.indexParts?.find((p) => p.type === "CommandExpansion");
+    if (!sub) break;
+    depth++;
+    if (sub.script === undefined) {
+      boundary = script;
+      break;
+    }
+    script = sub.script;
+  }
+  assert.ok(boundary, `expected an unresolved substitution boundary (walked ${depth} scripts)`);
+  assert.ok(depth > 250 && depth < 300, `boundary at depth ${depth}`);
+  assert.ok(boundary.errors?.some((e) => e.message === "maximum substitution nesting depth exceeded"));
 });
 
 // --- Nested command substitutions ---
