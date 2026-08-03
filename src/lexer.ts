@@ -8,6 +8,7 @@ import type {
   Word,
   WordPart,
 } from "./types.ts";
+import { decodeAnsiCQuoted } from "./ansi-c.ts";
 import { parseArithmeticExpression } from "./arithmetic.ts";
 import { WordImpl } from "./word.ts";
 import {
@@ -1539,6 +1540,8 @@ export class Lexer {
   private _dqText = "";
   private _dqHasExpansions = false;
   private _dqParts: DoubleQuotedChild[] | null = null;
+  // Content end (before the closing quote, or end of input when unterminated).
+  private _dqEnd = 0;
   private _hereDelim = "";
   private _hereQuoted = false;
 
@@ -1765,7 +1768,7 @@ export class Lexer {
           parts!.push({
             type: "DoubleQuoted",
             text: dqText,
-            parts: this._dqParts ?? [{ type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, pos - 1) }],
+            parts: this._dqParts ?? [{ type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, this._dqEnd) }],
           });
           litStart = pos;
         }
@@ -1926,7 +1929,7 @@ export class Lexer {
           parts!.push({
             type: "DoubleQuoted",
             text: dqText,
-            parts: this._dqParts ?? [{ type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, pos - 1) }],
+            parts: this._dqParts ?? [{ type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, this._dqEnd) }],
           });
           litStart = pos;
         }
@@ -2057,11 +2060,10 @@ export class Lexer {
   }
 
   private skipAnsiCQuoted(): void {
-    while (this.pos < this.srcEnd && this.src.charCodeAt(this.pos) !== CH_SQUOTE) {
-      if (this.src.charCodeAt(this.pos) === CH_BACKSLASH && this.pos + 1 < this.srcEnd) this.pos++;
-      this.pos++;
-    }
-    if (this.pos < this.srcEnd) this.pos++;
+    const quotePos = this.pos - 1;
+    const result = decodeAnsiCQuoted(this.src, this.pos, this.srcEnd);
+    this.pos = result.end;
+    if (!result.closed) this.errors.push({ message: "unterminated ANSI-C quote", pos: quotePos });
   }
 
   private skipDQ(): void {
@@ -2151,6 +2153,7 @@ export class Lexer {
         const c = src.charCodeAt(p);
         if (c === CH_DQUOTE) {
           this._dqText = src.slice(contentStart, p);
+          this._dqEnd = p;
           this.pos = p + 1;
           this._dqHasExpansions = false;
           this._dqParts = null;
@@ -2256,6 +2259,7 @@ export class Lexer {
 
     if (bp && parts && litBuf) parts.push({ type: "Literal", value: litBuf, text: src.slice(litStart, this.pos) });
 
+    this._dqEnd = this.pos;
     if (this.pos < len)
       this.pos++; // closing "
     else this.errors.push({ message: "unterminated double quote", pos: contentStart - 1 });
@@ -2323,7 +2327,7 @@ export class Lexer {
           type: "LocaleString",
           text,
           parts: this._dqParts ?? [
-            { type: "Literal", value: this._dqText, text: src.slice(dollarPos + 2, this.pos - 1) },
+            { type: "Literal", value: this._dqText, text: src.slice(dollarPos + 2, this._dqEnd) },
           ],
         };
       } else {
@@ -2923,65 +2927,11 @@ export class Lexer {
   }
 
   private readAnsiCQuoted(): string {
-    const src = this.src;
-    const len = this.srcEnd;
-    let text = "";
-    while (this.pos < len && src.charCodeAt(this.pos) !== CH_SQUOTE) {
-      if (src.charCodeAt(this.pos) === CH_BACKSLASH && this.pos + 1 < len) {
-        this.pos++;
-        const ch = src[this.pos];
-        switch (ch) {
-          case "n":
-            text += "\n";
-            break;
-          case "t":
-            text += "\t";
-            break;
-          case "r":
-            text += "\r";
-            break;
-          case "\\":
-            text += "\\";
-            break;
-          case "'":
-            text += "'";
-            break;
-          case '"':
-            text += '"';
-            break;
-          case "a":
-            text += "\x07";
-            break;
-          case "b":
-            text += "\b";
-            break;
-          case "e":
-          case "E":
-            text += "\x1B";
-            break;
-          case "f":
-            text += "\f";
-            break;
-          case "v":
-            text += "\v";
-            break;
-          default:
-            text += "\\" + ch;
-            break;
-        }
-        this.pos++;
-      } else {
-        const runStart = this.pos;
-        while (this.pos < len) {
-          const c = src.charCodeAt(this.pos);
-          if (c === CH_SQUOTE || c === CH_BACKSLASH) break;
-          this.pos++;
-        }
-        text += src.slice(runStart, this.pos);
-      }
-    }
-    if (this.pos < len) this.pos++;
-    return text;
+    const quotePos = this.pos - 1;
+    const result = decodeAnsiCQuoted(this.src, this.pos, this.srcEnd);
+    this.pos = result.end;
+    if (!result.closed) this.errors.push({ message: "unterminated ANSI-C quote", pos: quotePos });
+    return result.value;
   }
 
   // Extract balanced parens for $(...) — respects nested quotes and case..esac

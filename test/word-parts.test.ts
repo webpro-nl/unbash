@@ -118,6 +118,28 @@ test("ANSI-C quoted string", () => {
   assert.equal((parts[0] as any).text, "$'line1\\nline2'");
 });
 
+test("ANSI-C numeric and control escapes", () => {
+  const src = "$'ec\\x68o' $'\\141\\u0062\\U00000063' $'\\0123' $'\\777' $'\\cA' $'\\?' $'\\q'";
+  const c = getCmd(parse(src));
+
+  assert.equal(c.name!.value, "echo");
+  assert.deepEqual(
+    c.suffix.map((word) => word.value),
+    ["abc", "\n3", "\xff", "\x01", "?", "\\q"],
+  );
+});
+
+test("ANSI-C \\c operand edge cases", () => {
+  const src = String.raw`$'\c' $'\c\\' $'\c\'' $'AB\c' $'\c\cA' $'\c<\\' $'\c\x41' $'\cq' $'\c1' $'\c?'`;
+  const c = getCmd(parse(src));
+
+  assert.equal(c.name!.value, "\\c");
+  assert.deepEqual(
+    c.suffix.map((word) => word.value),
+    ["\x1c", "\x1c'", "AB\\c", "\x1ccA", "\x1c\\", "\x1cx41", "\x11", "\x11", "\x7f"],
+  );
+});
+
 test("mixed quoting: un'quo'ted\"mix\"$end", () => {
   const src = "echo un'quo'ted\"mix\"$end";
   const c = getCmd(parse(src));

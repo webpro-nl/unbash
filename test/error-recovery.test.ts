@@ -78,6 +78,66 @@ test("unclosed double quote collects error", () => {
   assert.ok(ast.errors.some((e) => e.message.includes("unterminated double quote")));
 });
 
+test("unclosed double quote slices its literal fully", () => {
+  const ast = parse('echo "abc');
+  const command = ast.commands[0].command;
+  assert.equal(command.type, "Command");
+  const word = command.suffix[0];
+  assert.equal(word.value, "abc");
+  const quoted = word.parts?.[0];
+  assert.equal(quoted?.type, "DoubleQuoted");
+  assert.deepEqual(quoted.parts, [{ type: "Literal", value: "abc", text: "abc" }]);
+  assert.ok(ast.errors?.some((e) => e.message.includes("unterminated double quote")));
+});
+
+test("unclosed locale string slices its literal fully", () => {
+  const ast = parse('echo $"abc');
+  const command = ast.commands[0].command;
+  assert.equal(command.type, "Command");
+  const word = command.suffix[0];
+  assert.equal(word.value, "abc");
+  const quoted = word.parts?.[0];
+  assert.equal(quoted?.type, "LocaleString");
+  assert.deepEqual(quoted.parts, [{ type: "Literal", value: "abc", text: "abc" }]);
+  assert.ok(ast.errors?.some((e) => e.message.includes("unterminated double quote")));
+});
+
+test("unclosed double quote slices its trailing literal after expansions", () => {
+  const ast = parse('echo "pre$(x) ab');
+  const command = ast.commands[0].command;
+  assert.equal(command.type, "Command");
+  const word = command.suffix[0];
+  assert.equal(word.value, "pre$(x) ab");
+  const quoted = word.parts?.[0];
+  assert.equal(quoted?.type, "DoubleQuoted");
+  assert.equal(quoted.parts.length, 3);
+  assert.deepEqual(quoted.parts[2], { type: "Literal", value: " ab", text: " ab" });
+  assert.ok(ast.errors?.some((e) => e.message.includes("unterminated double quote")));
+});
+
+test("unclosed ANSI-C quote terminates at end of input", () => {
+  const plain = parse("echo $'abc");
+  const plainCommand = plain.commands[0].command;
+  assert.equal(plainCommand.type, "Command");
+  assert.equal(plainCommand.suffix[0].value, "abc");
+  assert.deepEqual(plain.errors, [{ message: "unterminated ANSI-C quote", pos: 6 }]);
+
+  const trailing = parse("echo $'\\");
+  const command = trailing.commands[0].command;
+  assert.equal(command.type, "Command");
+  assert.equal(command.suffix[0].text, "$'\\");
+  assert.equal(command.suffix[0].value, "\\");
+  assert.deepEqual(trailing.errors, [{ message: "unterminated ANSI-C quote", pos: 6 }]);
+});
+
+test("unclosed ANSI-C quotes inside parameter expansions collect both errors", () => {
+  const ast = parse("echo ${x:-$'abc}");
+  assert.deepEqual(ast.errors, [
+    { message: "unterminated ANSI-C quote", pos: 11 },
+    { message: "unterminated parameter expansion", pos: 5 },
+  ]);
+});
+
 test("valid input has no errors", () => {
   const ast = parse("echo hello world");
   assert.equal(ast.errors, undefined);

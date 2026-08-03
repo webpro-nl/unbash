@@ -48,6 +48,30 @@ test("${var:-default}", () => {
   assert.equal(p.operand!.text, "default");
 });
 
+test("ANSI-C \\c operand ends where the skip and decode paths agree", () => {
+  const src = "echo ${u:-$'\\c'} x";
+  const c = getCmd(parse(src));
+  const p = computeWordParts(src, c.suffix[0])![0] as ParameterExpansionPart;
+  assert.equal(p.text, "${u:-$'\\c'}");
+  assert.equal(p.operand!.text, "$'\\c'");
+  assert.deepEqual(p.operand!.parts, [{ type: "AnsiCQuoted", text: "$'\\c'", value: "\\c" }]);
+  assert.equal(c.suffix[1].value, "x");
+
+  const pairSrc = "echo ${u:-$'\\c\\\\'} y";
+  const c2 = getCmd(parse(pairSrc));
+  const p2 = computeWordParts(pairSrc, c2.suffix[0])![0] as ParameterExpansionPart;
+  assert.equal(p2.text, "${u:-$'\\c\\\\'}");
+  assert.deepEqual(p2.operand!.parts, [{ type: "AnsiCQuoted", text: "$'\\c\\\\'", value: "\x1c" }]);
+  assert.equal(c2.suffix[1].value, "y");
+
+  const escapedQuoteSrc = "echo ${u:-$'\\c\\''} z";
+  const c3 = getCmd(parse(escapedQuoteSrc));
+  const p3 = computeWordParts(escapedQuoteSrc, c3.suffix[0])![0] as ParameterExpansionPart;
+  assert.equal(p3.text, "${u:-$'\\c\\''}");
+  assert.deepEqual(p3.operand!.parts, [{ type: "AnsiCQuoted", text: "$'\\c\\''", value: "\x1c'" }]);
+  assert.equal(c3.suffix[1].value, "z");
+});
+
 test("${var:=assigned}", () => {
   const p = getPart("echo ${var:=assigned}");
   assert.equal(p.parameter, "var");
