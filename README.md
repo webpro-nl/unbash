@@ -10,10 +10,9 @@ npm install unbash
 
 ## When to use unbash?
 
-Use unbash when your input is Bash syntax, such as a pasted command or a
-complete script, and you need to inspect its structure without executing it. It
-returns a typed, source-positioned AST for commands, pipelines, redirects,
-assignments, compound statements, word expansions, and nested substitutions.
+Use unbash when your input is Bash syntax. A shell command or a complete script,
+and you need to inspect its structure without executing it. It returns a typed,
+source-positioned AST.
 
 Example use cases:
 
@@ -24,6 +23,22 @@ Example use cases:
   neighboring pipelines, logical chains, redirects, and comments separate
 - Build command explanations from syntax, expansions, and source positions
 - Rewrite one syntactic element while preserving the surrounding command text
+
+## Supported syntax
+
+unbash supports commands, control flows, pipelines, redirects, assignments,
+compound statements, parameter and word expansions, process and nested
+substitutions, coproc, heredocs, herestrings, nested and generated syntax, etc.
+
+Nested commands remain structured inside parameter operands and array indexes,
+arithmetic expressions, brace expansions, extglobs, redirect targets, and
+heredoc bodies. Nodes retain source positions and words retain both raw text and
+dequoted values.
+
+Malformed and incomplete input returns a best-effort partial AST with detected,
+source-positioned errors. Recovery is bounded for deeply nested parameter and
+arithmetic expansions, substitutions, subshells, braces, conditionals, loops,
+`select`, `case`, and `[[ ]]` groups.
 
 unbash does not execute code, perform shell expansion, provide a sandbox, or
 decide whether a command is safe. Security-sensitive consumers must inspect word
@@ -144,53 +159,58 @@ fi
 
 ## unbash vs tree-sitter-bash
 
-[tree-sitter-bash][4] is an excellent choice if you need:
+[tree-sitter-bash][4] is the right choice when you need:
 
 - Incremental parsing
 - CST output preserving all tokens and punctuation
 - Granular error recovery that wraps errors in `ERROR` nodes and continues
   parsing
 
-unbash might be a good fit if you prefer:
+unbash provides:
 
-- AST output
-- A zero-dependency package that runs in any JS environment
-- A typed TypeScript API
-- Built-in parsing for command/process substitutions, coproc, Bash 5.3 `${ cmd;
-}`, `[[ ]]`, `(( ))`, and extglob
+- A typed, executable-syntax AST instead of a grammar CST
+- A synchronous, zero-dependency TypeScript package with no native addon, WASM
+  runtime, parser initialization, or query layer
+- Structured word parts, arithmetic and test-expression trees, recursively
+  parsed substitutions, and direct source positions
 - Best-effort error recovery that preserves a partial AST and collects errors
+- Also see [tree-sitter-bash gaps covered by unbash][5]
 
 ## unbash vs sh-syntax
 
-[sh-syntax][5] is a WASM wrapper around the robust [mvdan/sh][6] Go parser. It
+[sh-syntax][6] is a WASM wrapper around the robust [mvdan/sh][7] Go parser. It
 is highly recommended if you need:
 
-- Support for multiple shell dialects (bash, POSIX sh, mksh, Bats)
-- Built-in formatting and pretty-printing (`print`)
+- Support for multiple shell dialects (Bash, POSIX sh, mksh, Bats, and Zsh)
+- Mature, configurable formatting and pretty-printing
 
-unbash might be a good fit if you prefer:
+unbash provides:
 
-- A zero-dependency, synchronous API
-- A detailed AST with structured word parts, parameter expansions, arithmetic
-  expressions, and test expressions
+- A zero-dependency, synchronous TypeScript API without WASM loading
+- A smaller, JSON-friendly Bash AST with lazy structured word parts, recursively
+  parsed substitutions, and direct source positions
+- Best-effort partial ASTs for malformed or incomplete editor and user input
+- Also see [sh-syntax gaps covered by unbash][8]
 
 ## unbash vs bash-parser
 
-[bash-parser][7] (last publish: 2017) and its fork
-[@ericcornelissen/bash-parser][8] (community dependency maintenance fork ❤️ now
-archived) might be interesting if you need:
+[bash-parser][9] (last publish: 2017) and its fork
+[@ericcornelissen/bash-parser][10] (community dependency maintenance fork ❤️ now
+archived) provide:
 
 - A POSIX-only mode that rejects bash-specific syntax
 
-unbash might be a good fit if you prefer:
+unbash provides:
 
 - A zero-dependency architecture
 - A typed TypeScript API (ESM-only)
 - Best-effort error recovery that preserves a partial AST and collects errors
 - Structured AST nodes for parameter expansions, arithmetic expressions, and `[[
-]]` test expressions
-- Support for many additional syntax features (like herestrings, C-style for
-  loops, `select`, process substitution, etc. etc.)
+]]` test expressions; `bash-parser` treats `[[ ]]` as ordinary commands and
+  `(( ))` as nested subshells
+- Herestrings, C-style `for`, `select`, process substitution, `coproc`, array
+  assignments, extglob, `;&`/`;;&` case fallthrough, Bash 5.3 command
+  substitutions, and `{variable}` file-descriptor redirects
 
 ## Benchmarks
 
@@ -218,8 +238,8 @@ The parser bundle is 77KB minified and 18KB gzipped.
 
 ## Playgrounds
 
-- [unbash.statichost.page][9]
-- [ast-explorer.dev][10]
+- [unbash.statichost.page][11]
+- [ast-explorer.dev][12]
 
 ## License
 
@@ -229,9 +249,11 @@ ISC
 [2]: https://yargs.js.org/
 [3]: https://www.npmjs.com/package/citty
 [4]: https://github.com/tree-sitter/tree-sitter-bash
-[5]: https://github.com/un-ts/sh-syntax
-[6]: https://github.com/mvdan/sh
-[7]: https://github.com/vorpaljs/bash-parser
-[8]: https://github.com/ericcornelissen/bash-parser
-[9]: https://unbash.statichost.page
-[10]: https://ast-explorer.dev/#eNoVjDsKwzAQRK8yDK5CyAGS2nVAId02jixZAbFr/Kls393rbh7zeBsrn5xLqpV3jr5X/XVzcYgOKRaD8LoNzffTBqFotgkZf8XtUW14oTdRIHaLq00WYscwpRFtCO8g2psm75n3toPHCdz+Ivg=
+[5]: https://github.com/webpro-nl/unbash/issues/6
+[6]: https://github.com/un-ts/sh-syntax
+[7]: https://github.com/mvdan/sh
+[8]: https://github.com/webpro-nl/unbash/issues/7
+[9]: https://github.com/vorpaljs/bash-parser
+[10]: https://github.com/ericcornelissen/bash-parser
+[11]: https://unbash.statichost.page
+[12]: https://ast-explorer.dev/#eNoVjDsKwzAQRK8yDK5CyAGS2nVAId02jixZAbFr/Kls393rbh7zeBsrn5xLqpV3jr5X/XVzcYgOKRaD8LoNzffTBqFotgkZf8XtUW14oTdRIHaLq00WYscwpRFtCO8g2psm75n3toPHCdz+Ivg=

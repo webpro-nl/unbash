@@ -5,10 +5,15 @@
   "keywords": [
     "ast",
     "bash",
+    "bash-parser",
     "lexer",
     "parser",
     "posix",
     "scanner",
+    "shell",
+    "shell-parser",
+    "shell-script",
+    "shell-syntax",
     "tokenizer",
     "typescript"
   ],
