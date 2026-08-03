@@ -71,6 +71,13 @@ test("unary -s -L -S -b -c -p -t -v", () => {
   }
 });
 
+test("unary -o shell option", () => {
+  const t = getTest("[[ -o emacs && -v b ]]");
+  assert.equal(logical(t.expression).operator, "&&");
+  assert.equal(unary(logical(t.expression).left).operator, "-o");
+  assert.equal(unary(logical(t.expression).left).operand.text, "emacs");
+});
+
 // --- Binary tests ---
 
 test("binary ==", () => {
@@ -141,6 +148,211 @@ test("binary =~ regex with dot-star in parens", () => {
   const t = getTest("[[ $file =~ /etc/(.*) ]]");
   assert.equal(binary(t.expression).operator, "=~");
   assert.equal(binary(t.expression).right.text, "/etc/(.*)");
+});
+
+test("binary =~ regex keeps spaces inside groups", () => {
+  for (const source of ["[[ a =~ [ab](c |d) ]]", "[[ a =~ ( ]]<>;&) ]]"]) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined);
+    const t = ast.commands[0].command;
+    assert.equal(t.type, "TestCommand");
+    assert.equal(binary(t.expression).right.text, source.slice(8, -3));
+  }
+  const t = getTest("[[ 'a b' =~ (a b) ]]");
+  assert.equal(binary(t.expression).right.text, "(a b)");
+  assert.equal(binary(t.expression).right.value, "(a b)");
+});
+
+test("binary =~ parameter expansion containing spaces", () => {
+  for (const [source, text] of [
+    ["[[ x =~ ${v/ /.} ]]", "${v/ /.}"],
+    ["[[ x =~ ${v/ /.}z ]]", "${v/ /.}z"],
+    ["[[ x =~ ${v:-)} ]]", "${v:-)}"],
+  ] as const) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined);
+    const t = ast.commands[0].command as TestCommand;
+    assert.equal(t.type, "TestCommand");
+    assert.equal(binary(t.expression).right.text, text);
+    assert.equal(binary(t.expression).right.value, text);
+  }
+});
+
+test("binary =~ single-quoted backslash stays literal", () => {
+  const ast = parse("[[ ab =~ 'a\\'b ]]\necho done");
+  assert.equal(ast.errors, undefined);
+  assert.equal(ast.commands.length, 2);
+  const t = ast.commands[0].command as TestCommand;
+  assert.equal(t.type, "TestCommand");
+  assert.equal(binary(t.expression).right.text, "'a\\'b");
+  assert.equal(binary(t.expression).right.value, "a\\b");
+});
+
+test("binary =~ splits at depth-zero && into logical AND", () => {
+  const t = getTest("[[ ab =~ (a)&&(zzz) ]]");
+  assert.equal(t.expression.type, "TestLogical");
+  const l = logical(t.expression);
+  assert.equal(l.operator, "&&");
+  assert.equal(binary(l.left).operator, "=~");
+  assert.equal(binary(l.left).right.text, "(a)");
+  assert.equal(l.right.type, "TestGroup");
+  assert.equal(unary(group(l.right).expression).operand.text, "zzz");
+
+  const bare = getTest("[[ ab =~ a&&b ]]");
+  assert.equal(bare.expression.type, "TestLogical");
+  assert.equal(binary(logical(bare.expression).left).right.text, "a");
+});
+
+test("binary =~ regex ends at test group close", () => {
+  for (const [source, text] of [
+    ["[[ (ab =~ a) ]]", "a"],
+    ["[[ ( ab =~ a) ]]", "a"],
+    ["[[ ( ab =~ (a)) ]]", "(a)"],
+  ] as const) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined);
+    const t = ast.commands[0].command as TestCommand;
+    assert.equal(t.type, "TestCommand");
+    assert.equal(t.expression.type, "TestGroup");
+    assert.equal(binary(group(t.expression).expression).right.text, text);
+  }
+  const t = getTest("[[ ( abc =~ (b|c) ) && d ]]");
+  assert.equal(t.expression.type, "TestLogical");
+  assert.equal(binary(group(logical(t.expression).left).expression).right.text, "(b|c)");
+});
+
+test("binary =~ regex ends at depth-zero delimiters", () => {
+  // bash: whitespace, `)`, `;`, `&`, `<`, `>` end the operand at paren depth
+  // zero, and rejects all of these for the leftover before `]]`
+  for (const [source, text] of [
+    ["[[ ab =~ a) ]]", "a"],
+    ["[[ ab =~ (a)b) ]]", "(a)b"],
+    ["[[ 'a<b' =~ a<b ]]", "a"],
+    ["[[ 'a>b' =~ (a)>b ]]", "(a)"],
+    ["[[ x =~ a{b..c)d} ]]", "a{b..c"],
+    ["[[ x =~ a;b ]]", "a"],
+    ["[[ 'a&b' =~ (a)&(b) ]]", "(a)"],
+  ] as const) {
+    const ast = parse(source);
+    assert.notEqual(ast.errors, undefined, source);
+    const t = ast.commands[0].command as TestCommand;
+    assert.equal(t.type, "TestCommand");
+    assert.equal(binary(t.expression).right.text, text, source);
+  }
+});
+
+test("binary =~ empty operand before group close or operator", () => {
+  // bash accepts these at parse time; the empty regex fails only at run time
+  const grouped = getTest("[[ ( x =~ ) ]]");
+  assert.equal(grouped.expression.type, "TestGroup");
+  assert.equal(binary(group(grouped.expression).expression).right.text, "");
+
+  const logicalT = getTest("[[ x =~ && y ]]");
+  assert.equal(logicalT.expression.type, "TestLogical");
+  assert.equal(binary(logical(logicalT.expression).left).right.text, "");
+
+  const ast = parse("[[ x =~ ]]");
+  assert.notEqual(ast.errors, undefined);
+});
+
+test("binary =~ process substitution operands", () => {
+  for (const [source, text] of [
+    ["[[ x =~ <(y) ]]", "<(y)"],
+    ["[[ x =~ a<(b) ]]", "a<(b)"],
+    ["[[ x =~ a>(b) ]]", "a>(b)"],
+  ] as const) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined);
+    const t = ast.commands[0].command as TestCommand;
+    assert.equal(t.type, "TestCommand");
+    assert.equal(binary(t.expression).right.text, text);
+  }
+});
+
+test("binary =~ command substitution keeps case arms", () => {
+  const ast = parse("[[ x =~ $(case y in a) echo z;; esac) ]]");
+  assert.equal(ast.errors, undefined);
+  const t = ast.commands[0].command as TestCommand;
+  assert.equal(t.type, "TestCommand");
+  assert.equal(binary(t.expression).right.text, "$(case y in a) echo z;; esac)");
+});
+
+test("binary =~ group interiors keep quotes opaque", () => {
+  for (const [source, text] of [
+    ["[[ x =~ ('a)b'c) ]]", "('a)b'c)"],
+    ["[[ x =~ (`echo a)b`c) ]]", "(`echo a)b`c)"],
+    ['[[ ")" =~ (")") ]]', '(")")'],
+  ] as const) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined);
+    const t = ast.commands[0].command as TestCommand;
+    assert.equal(t.type, "TestCommand");
+    assert.equal(binary(t.expression).right.text, text);
+  }
+});
+
+test("binary =~ grouped operands preserve embedded expansions", () => {
+  const ast = parse("[[ x =~ (a $(danger) $HOME b) ]]");
+  assert.equal(ast.errors, undefined);
+  const command = ast.commands[0].command;
+  assert.equal(command.type, "TestCommand");
+  const right = binary(command.expression).right;
+  assert.ok(right.parts?.some((part) => part.type === "SimpleExpansion"));
+  const expansion = right.parts?.find((part) => part.type === "CommandExpansion");
+  assert.equal(expansion?.type, "CommandExpansion");
+  if (expansion?.type !== "CommandExpansion") return;
+  const nested = expansion.script?.commands[0].command;
+  assert.equal(nested?.type, "Command");
+  if (nested?.type === "Command") assert.equal(nested.name?.value, "danger");
+});
+
+test("binary =~ grouped operands decode ANSI-C quotes", () => {
+  const ast = parse(String.raw`[[ x =~ (a $'\n' b) ]]`);
+  assert.equal(ast.errors, undefined);
+  const command = ast.commands[0].command;
+  assert.equal(command.type, "TestCommand");
+  assert.equal(binary(command.expression).right.value, "(a \n b)");
+});
+
+test("binary =~ keeps escaped quotes opaque inside grouped ANSI-C strings", () => {
+  const source = String.raw`[[ x =~ ($'a\')b'c) ]]`;
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  const command = ast.commands[0].command;
+  assert.equal(command.type, "TestCommand");
+  assert.equal(binary(command.expression).right.text, source.slice(8, -3));
+});
+
+test("binary =~ group interiors count expansion parens naively", () => {
+  // bash closes the group at a `)` inside ${...} or $(...) nested in a group
+  for (const [source, text] of [
+    ["[[ x =~ (${v:-)}c) ]]", "(${v:-)}c"],
+    ["[[ x =~ ($(case q in w) esac)b) ]]", "($(case q in w) esac)b"],
+  ] as const) {
+    const ast = parse(source);
+    assert.notEqual(ast.errors, undefined, source);
+    const t = ast.commands[0].command as TestCommand;
+    assert.equal(t.type, "TestCommand");
+    assert.equal(binary(t.expression).right.text, text, source);
+  }
+});
+
+test("binary =~ keeps groups spanning newlines and terminators", () => {
+  const nl = getTest("[[ ' a' =~ (a\n b) ]]");
+  assert.equal(binary(nl.expression).right.text, "(a\n b)");
+
+  const ast = parse("[[ x =~ (a ]] b) ]] && echo y");
+  assert.equal(ast.errors, undefined);
+  const andOr = ast.commands[0].command;
+  assert.equal(andOr.type, "AndOr");
+  const t = (andOr as import("../src/types.ts").AndOr).commands[0] as TestCommand;
+  assert.equal(t.type, "TestCommand");
+  assert.equal(binary(t.expression).right.text, "(a ]] b)");
+});
+
+test("binary =~ unbalanced group reports an error", () => {
+  const ast = parse("[[ x =~ a(b ]]\necho done");
+  assert.notEqual(ast.errors, undefined);
 });
 
 // --- Logical operators ---

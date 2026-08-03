@@ -88,6 +88,60 @@ test("valid compound commands have no errors", () => {
   assert.equal(ast.errors, undefined);
 });
 
+test("trailing command operators collect errors", () => {
+  for (const operator of ["&&", "||", "|", "|&"]) {
+    const source = `echo ${operator}`;
+    assert.deepEqual(parse(source).errors, [{ message: `expected command after '${operator}'`, pos: source.length }]);
+  }
+});
+
+test("command operators accept a command after newlines", () => {
+  for (const operator of ["&&", "||", "|", "|&"]) {
+    assert.equal(parse(`echo ${operator}\nprintf next`).errors, undefined);
+  }
+});
+
+test("missing redirect targets collect errors", () => {
+  for (const source of [
+    "echo >",
+    "echo >>",
+    "echo <",
+    "cat <<",
+    "cat <<-",
+    "echo <<<",
+    "echo <>",
+    "echo <&",
+    "echo >&",
+    "echo >|",
+    "echo &>",
+    "echo &>>",
+    "echo 2>",
+    "echo {fd}>",
+  ]) {
+    assert.deepEqual(parse(source).errors, [{ message: "expected redirect target", pos: source.length }], source);
+  }
+});
+
+test("quoted empty redirect targets are not missing targets", () => {
+  for (const source of ['echo >""', "echo >''", 'echo <<< ""', "cat <<''"]) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    const target = (ast.commands[0].command as any).redirects[0].target;
+    assert.ok(target, source);
+    assert.equal(target.value, "", source);
+  }
+});
+
+test("comments are not redirect targets", () => {
+  for (const source of ["echo >#comment", "echo > #comment", "echo &>#comment", "echo <<<#comment", "cat <<#comment"]) {
+    assert.deepEqual(
+      parse(source).errors,
+      [{ message: "expected redirect target", pos: source.indexOf("#") }],
+      source,
+    );
+  }
+});
+
 test("multiple errors collected", () => {
   const ast = parse("if true; then (echo hello");
   assert.ok(ast.errors);

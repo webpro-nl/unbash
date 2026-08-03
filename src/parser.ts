@@ -270,6 +270,7 @@ const UNARY_TEST_OPS: Record<string, 1> = {
   "-x": 1,
   "-z": 1,
   "-n": 1,
+  "-o": 1,
   "-N": 1,
   "-S": 1,
   "-L": 1,
@@ -448,10 +449,15 @@ class Parser {
     const operators: LogicalOperator[] = [];
 
     do {
-      operators.push(this.tok.next(LexContext.Normal).token === Token.And ? "&&" : "||");
+      const operatorToken = this.tok.next(LexContext.Normal);
+      const operator = operatorToken.token === Token.And ? "&&" : "||";
       this.skipNewlines(LexContext.CommandStart);
       const next = this.pipeline();
-      if (!next) break;
+      if (!next) {
+        this.error(`expected command after '${operator}'`, operatorToken.end);
+        break;
+      }
+      operators.push(operator);
       commands.push(next);
       t = this.tok.peek(LexContext.Normal).token;
     } while (t === Token.And || t === Token.Or);
@@ -524,11 +530,16 @@ class Parser {
         commands[0] = this.makeStatement(first, firstRedirects);
         firstRedirects = [];
       }
-      const pipeVal = this.tok.next(LexContext.Normal).value;
-      operators.push(pipeVal === "|&" ? "|&" : "|");
+      const pipeToken = this.tok.next(LexContext.Normal);
+      const operator = pipeToken.value === "|&" ? "|&" : "|";
       this.skipNewlines(LexContext.CommandStart);
       const cmd = this.command();
-      if (cmd) commands.push(this.wrapCompoundRedirects(cmd));
+      if (!cmd) {
+        this.error(`expected command after '${operator}'`, pipeToken.end);
+        break;
+      }
+      operators.push(operator);
+      commands.push(this.wrapCompoundRedirects(cmd));
     }
 
     if (commands.length === 1 && !negated && !time) {
@@ -1046,8 +1057,7 @@ class Parser {
     const pos = this.tok.next(LexContext.CommandStart).pos; // consume [[
     const expr = this.parseTestOr();
     const closeEnd = this.acceptEnd(Token.DblRBracket, LexContext.TestMode);
-    if (closeEnd < 0 && this.tok.peek(LexContext.Normal).token === Token.EOF)
-      this.error("expected ']]' to close '[['", this.tok.getPos());
+    if (closeEnd < 0) this.error("expected ']]' to close '[['", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
     this._redirects = this.collectTrailingRedirects();
     return { type: "TestCommand", pos, end, expression: expr };
@@ -1176,7 +1186,15 @@ class Parser {
       const op = this.tok.next(LexContext.TestMode).value;
       let right: Word;
       if (op === "=~") {
-        right = this.toWord(this.tok.readTestRegexWord());
+        const token = this.tok.readTestRegexWord();
+        right = new WordImpl(
+          this.source.slice(token.pos, token.end),
+          token.pos,
+          token.end,
+          this.source,
+          computeEmbeddedWordParts,
+          this.depth,
+        );
       } else {
         right = this.readWord(LexContext.TestMode);
       }
@@ -1306,10 +1324,12 @@ class Parser {
       heredocQuoted: undefined,
       body: undefined,
     };
-    if (t.content != null) {
-      r.target = new WordImpl(t.content, t.targetPos, t.targetEnd, this.source, undefined, this.depth);
+    if (t.targetEnd > t.targetPos) {
+      r.target = new WordImpl(t.content ?? "", t.targetPos, t.targetEnd, this.source, undefined, this.depth);
+    } else {
+      this.error("expected redirect target", t.targetPos);
     }
-    if (t.value === "<<" || t.value === "<<-") this.tok.registerHereDocTarget(r);
+    if (r.target && (t.value === "<<" || t.value === "<<-")) this.tok.registerHereDocTarget(r);
     redirects.push(r);
     return redirects;
   }

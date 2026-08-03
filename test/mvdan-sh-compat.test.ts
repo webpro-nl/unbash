@@ -7,6 +7,14 @@ import { parse } from "../src/parser.ts";
 const fixturesDir = join(import.meta.dirname, "../fixtures/mvdan-sh");
 const source = readFileSync(join(fixturesDir, "filetests_test.go"), "utf8");
 const snapshot = readFileSync(join(fixturesDir, "filetests_snapshot.txt"), "utf8").split("\n").slice(0, -1); // drop trailing newline
+const knownInvalidInputs = new Set([
+  "select foo bar",
+  "foo |&",
+  "foo \\" + "\n\t|&",
+  "foo >!a >>|b >>!c &>|d &>!e &>>|f &>>!g",
+  "echo <->",
+  "echo <5-10>",
+]);
 
 /** Unescape a Go interpreted string literal (without outer quotes). */
 function unescapeGo(s: string): string {
@@ -142,7 +150,7 @@ for (let i = 0; i < inputs.length; i++) {
     assert.ok(Array.isArray(result.commands));
 
     // No parse errors on valid input (skip known-invalid inputs)
-    if (input !== "select foo bar") {
+    if (!knownInvalidInputs.has(input)) {
       assert.equal((result as any).errors, undefined, "unexpected parse errors");
     }
 

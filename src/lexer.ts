@@ -963,21 +963,74 @@ export class Lexer {
     }
   }
 
-  // Read the right-hand operand of =~ in [[ ]]. Parentheses and pipe are not
-  // metacharacters in regex patterns, so we temporarily clear their charType
-  // entries so that readWord's fast/slow path treats them as plain chars.
+  // Read the right-hand operand of =~ in [[ ]]. Bash ends the operand at
+  // depth-zero whitespace, `)`, `;`, `&`, `<`, or `>` (but `<(`/`>(` open a
+  // process substitution and `|` never delimits). An unquoted `(` opens a
+  // group that consumes everything — `]]`, newlines, and metacharacters
+  // included — until its matching `)`; inside a group only quotes stay opaque
+  // and expansion parens count naively, matching bash. Quotes and expansions
+  // at depth zero skip via the same readers normal words use, so their errors
+  // and spans stay identical. The token is the raw source span; value and
+  // parts resolve lazily like every other word.
   readTestRegexWord(): TokenValue {
     this.hasPeek = false;
-    const chars = [CH_LPAREN, CH_RPAREN, CH_PIPE, CH_LT, CH_GT];
-    const saved = chars.map((c) => charType[c]);
-    for (const c of chars) charType[c] = 0;
-    try {
-      this.skipSpacesAndTabs();
-      this.readWord(this.current, LexContext.Normal, this.pos);
-      return this.current;
-    } finally {
-      for (let i = 0; i < chars.length; i++) charType[chars[i]] = saved[i];
+    this.skipSpacesAndTabs();
+    const src = this.src;
+    const len = this.srcEnd;
+    const start = this.pos;
+    let depth = 0;
+    while (this.pos < len) {
+      const ch = src.charCodeAt(this.pos);
+      if (ch === CH_LPAREN) {
+        depth++;
+        this.pos++;
+        continue;
+      }
+      if (ch === CH_BACKSLASH) {
+        this.pos += this.pos + 1 < len ? 2 : 1;
+        continue;
+      }
+      if (ch === CH_SQUOTE) {
+        const quotePos = this.pos++;
+        const ansiC = quotePos > start && src.charCodeAt(quotePos - 1) === CH_DOLLAR;
+        while (this.pos < len && src.charCodeAt(this.pos) !== CH_SQUOTE) {
+          if (ansiC && src.charCodeAt(this.pos) === CH_BACKSLASH && this.pos + 1 < len) this.pos++;
+          this.pos++;
+        }
+        if (this.pos < len) this.pos++;
+        else this.errors.push({ message: ansiC ? "unterminated ANSI-C quote" : "unterminated single quote", pos: quotePos });
+        continue;
+      }
+      if (ch === CH_DQUOTE) {
+        this.pos++;
+        this.readDoubleQuoted();
+        continue;
+      }
+      if (ch === CH_BACKTICK) {
+        this.readBacktickExpansion();
+        continue;
+      }
+      if (depth > 0) {
+        if (ch === CH_RPAREN) depth--;
+        this.pos++;
+        continue;
+      }
+      if (ch === CH_DOLLAR) {
+        this.readDollar();
+        continue;
+      }
+      if ((ch === CH_LT || ch === CH_GT) && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
+        const subPos = this.pos;
+        this.pos += 2;
+        this.extractBalanced();
+        if (this._unbalanced) this.errors.push({ message: "unterminated process substitution", pos: subPos });
+        continue;
+      }
+      if (ch < 128 && charType[ch] & 1 && ch !== CH_PIPE) break;
+      this.pos++;
     }
+    setToken(this.current, Token.Word, src.slice(start, this.pos), start, this.pos);
+    return this.current;
   }
 
   // Read C-style for expressions: called after first '(' consumed by parser.
@@ -1169,9 +1222,15 @@ export class Lexer {
           const append = this.pos < this.srcEnd && src.charCodeAt(this.pos) === CH_GT;
           if (append) this.pos++;
           this.skipSpacesAndTabs();
-          this._redirectTargetPos = this.pos;
-          if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL) this.readWordText();
-          this.redirectToken(out, append ? "&>>" : "&>", tokenStart);
+          const targetPos = this.pos;
+          if (
+            this.pos < this.srcEnd &&
+            src.charCodeAt(this.pos) !== CH_NL &&
+            src.charCodeAt(this.pos) !== CH_HASH
+          ) {
+            this.readWordText();
+          }
+          this.redirectToken(out, append ? "&>>" : "&>", tokenStart, targetPos);
           return true;
         }
         this.pos++;
@@ -1212,18 +1271,30 @@ export class Lexer {
           // <<< herestring
           this.pos++;
           this.skipSpacesAndTabs();
-          this._redirectTargetPos = this.pos;
-          if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL) this.readWordText();
-          this.redirectToken(out, "<<<", tokenStart);
+          const targetPos = this.pos;
+          if (
+            this.pos < this.srcEnd &&
+            src.charCodeAt(this.pos) !== CH_NL &&
+            src.charCodeAt(this.pos) !== CH_HASH
+          ) {
+            this.readWordText();
+          }
+          this.redirectToken(out, "<<<", tokenStart, targetPos);
           return true;
         }
         const dash = third === CH_DASH;
         if (dash) this.pos++;
         this.skipSpacesAndTabs();
-        this.readHereDocDelimiter();
-        this.pendingHereDocs.push({ delimiter: this._hereDelim, strip: dash, quoted: this._hereQuoted });
+        const targetPos = this.pos;
+        if (this.pos >= this.srcEnd || src.charCodeAt(this.pos) !== CH_HASH) this.readHereDocDelimiter();
+        const hasTarget = this.pos > targetPos;
+        if (hasTarget) {
+          this.pendingHereDocs.push({ delimiter: this._hereDelim, strip: dash, quoted: this._hereQuoted });
+        }
         setToken(out, Token.Redirect, dash ? "<<-" : "<<", tokenStart, this.pos);
-        out.content = this._hereDelim;
+        out.content = hasTarget ? this._hereDelim : undefined;
+        out.targetPos = targetPos;
+        out.targetEnd = hasTarget ? this.pos : targetPos;
         return true;
       }
       if (next === CH_LPAREN) {
@@ -1275,19 +1346,22 @@ export class Lexer {
         out.targetEnd = this.pos;
         return true;
       }
-      this._redirectTargetPos = this.pos;
-      if (nc !== CH_NL) this.readWordText();
+      const targetPos = this.pos;
+      if (nc !== CH_NL && nc !== CH_HASH) this.readWordText();
+      this.redirectToken(out, op, tokenStart, targetPos);
+      return true;
     }
 
-    this.redirectToken(out, op, tokenStart);
+    this.redirectToken(out, op, tokenStart, this.pos);
     return true;
   }
 
-  private redirectToken(out: TokenValue, operator: string, tokenStart: number): void {
+  private redirectToken(out: TokenValue, operator: string, tokenStart: number, targetPos: number): void {
+    const hasTarget = this.pos > targetPos && (this._wordText.length > 0 || this._wordQuoted);
     setToken(out, Token.Redirect, operator, tokenStart, this.pos);
-    out.content = this._wordText;
-    out.targetPos = this._redirectTargetPos;
-    out.targetEnd = this.pos;
+    out.content = hasTarget ? this._wordText : undefined;
+    out.targetPos = targetPos;
+    out.targetEnd = hasTarget ? this.pos : targetPos;
   }
 
   private readProcessSubstitution(out: TokenValue, operator: "<" | ">", tokenStart: number): void {
@@ -1456,7 +1530,6 @@ export class Lexer {
   private _wordIsAssignment: boolean | undefined;
   private _wordAssignmentOperatorPos: number | undefined;
   _wordParts: WordPart[] | null = null;
-  private _redirectTargetPos = 0;
   private _resultText = "";
   private _resultHasExpansion = false;
   private _resultPart: WordPart | undefined;

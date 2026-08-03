@@ -53,6 +53,19 @@ test("redirections not in suffix", () => {
   assert.equal(c.redirects?.length, 1);
 });
 
+test("missing redirect targets do not reuse word state", () => {
+  const redirect = getCmd(parse("echo >")).redirects?.[0];
+  assert.equal(redirect?.target, undefined);
+});
+
+test("escaped and quoted hashes remain redirect targets", () => {
+  for (const source of ["echo >\\#file", "echo >'#file'", 'echo >"#file"']) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    assert.equal(getCmd(ast).redirects?.[0].target?.value, "#file", source);
+  }
+});
+
 // --- &> and &>> redirects ---
 
 test("&> redirect captured", () => {
