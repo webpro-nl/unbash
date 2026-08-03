@@ -107,7 +107,10 @@ export type Token = (typeof Token)[keyof typeof Token];
 
 export class TokenValue {
   token: Token = Token.EOF;
-  value: string = "";
+  // Materialized token value, or null for word tokens whose value has not been
+  // requested yet (computed from [pos, end) on demand via the owning lexer).
+  _value: string | null = "";
+  _owner: Lexer | null;
   pos: number = 0;
   end: number = 0;
   fileDescriptor?: number = undefined;
@@ -120,9 +123,22 @@ export class TokenValue {
   // reuse the string instead of slicing the source again.
   raw = false;
 
+  constructor(owner: Lexer | null = null) {
+    this._owner = owner;
+  }
+
+  get value(): string {
+    return (
+      this._value ?? (this._value = this._owner === null ? "" : this._owner._tokenValue(this.pos, this.end, this.raw))
+    );
+  }
+  set value(v: string) {
+    this._value = v;
+  }
+
   reset(): void {
     this.token = Token.EOF;
-    this.value = "";
+    this._value = "";
     this.pos = 0;
     this.end = 0;
     this.fileDescriptor = undefined;
@@ -136,7 +152,7 @@ export class TokenValue {
 
   copyFrom(other: TokenValue): void {
     this.token = other.token;
-    this.value = other.value;
+    this._value = other._value;
     this.pos = other.pos;
     this.end = other.end;
     this.fileDescriptor = other.fileDescriptor;
@@ -309,6 +325,14 @@ function isAllDigits(text: string): boolean {
   return text.length > 0;
 }
 
+function isAllDigitsRange(src: string, start: number, end: number): boolean {
+  for (let i = start; i < end; i++) {
+    const c = src.charCodeAt(i);
+    if (c < CH_0 || c > CH_9) return false;
+  }
+  return end > start;
+}
+
 const ASSIGNMENT_INVALID = -1;
 const ASSIGNMENT_NAME_START = 0;
 const ASSIGNMENT_NAME = 1;
@@ -359,7 +383,7 @@ const NO_EXPANSIONS: [DeferredCommandExpansion, number][] = [];
 
 function setToken(out: TokenValue, token: Token, value: string, pos: number = 0, end: number = 0): void {
   out.token = token;
-  out.value = value;
+  out._value = value;
   out.pos = pos;
   out.end = end;
   out.fileDescriptor = undefined;
@@ -367,6 +391,66 @@ function setToken(out: TokenValue, token: Token, value: string, pos: number = 0,
   out.content = undefined;
   out.assignmentOperatorPos = -1;
   out.raw = false;
+}
+
+// Word token over [pos, end) whose value materializes on first access.
+function setSpanToken(out: TokenValue, token: Token, pos: number, end: number, raw: boolean): void {
+  out.token = token;
+  out._value = null;
+  out.pos = pos;
+  out.end = end;
+  out.fileDescriptor = undefined;
+  out.variableName = undefined;
+  out.content = undefined;
+  out.assignmentOperatorPos = -1;
+  out.raw = raw;
+}
+
+// Positional reserved-word match over src[start, start+len) — no slice. Mirrors
+// RESERVED_WORDS; first-char dispatch plus length checks reject fast.
+function matchReservedWord(src: string, start: number, len: number): Token | undefined {
+  switch (src.charCodeAt(start)) {
+    case CH_BANG:
+      return len === 1 ? Token.Bang : undefined;
+    case CH_LBRACE:
+      return len === 1 ? Token.LBrace : undefined;
+    case CH_RBRACE:
+      return len === 1 ? Token.RBrace : undefined;
+    case 0x69 /* i */: {
+      if (len !== 2) return undefined;
+      const c = src.charCodeAt(start + 1);
+      return c === 0x66 /* f */ ? Token.If : c === 0x6e /* n */ ? Token.In : undefined;
+    }
+    case 0x66 /* f */:
+      if (len === 2) return src.charCodeAt(start + 1) === 0x69 /* i */ ? Token.Fi : undefined;
+      if (len === 3) return src.startsWith("for", start) ? Token.For : undefined;
+      if (len === 8) return src.startsWith("function", start) ? Token.Function : undefined;
+      return undefined;
+    case 0x74 /* t */:
+      return len === 4 && src.startsWith("then", start) ? Token.Then : undefined;
+    case 0x65 /* e */:
+      if (len !== 4) return undefined;
+      if (src.startsWith("else", start)) return Token.Else;
+      if (src.startsWith("elif", start)) return Token.Elif;
+      if (src.startsWith("esac", start)) return Token.Esac;
+      return undefined;
+    case 0x64 /* d */:
+      if (len === 2) return src.charCodeAt(start + 1) === 0x6f /* o */ ? Token.Do : undefined;
+      if (len === 4) return src.startsWith("done", start) ? Token.Done : undefined;
+      return undefined;
+    case 0x63 /* c */:
+      if (len === 4) return src.startsWith("case", start) ? Token.Case : undefined;
+      if (len === 6) return src.startsWith("coproc", start) ? Token.Coproc : undefined;
+      return undefined;
+    case 0x77 /* w */:
+      return len === 5 && src.startsWith("while", start) ? Token.While : undefined;
+    case 0x75 /* u */:
+      return len === 5 && src.startsWith("until", start) ? Token.Until : undefined;
+    case 0x73 /* s */:
+      return len === 6 && src.startsWith("select", start) ? Token.Select : undefined;
+    default:
+      return undefined;
+  }
 }
 
 export const LexContext = {
@@ -411,6 +495,10 @@ export class Lexer {
   private collectedExpansions: [DeferredCommandExpansion, number][] | null;
   _errors: ParseError[] | null = null;
   _buildParts = false;
+  // Build processed text while scanning. Off on the normal token path (values
+  // materialize lazily); on for redirect targets, heredoc delimiters, arithmetic
+  // command bodies, and bounded value re-lexes. _buildParts implies it.
+  _buildValue = false;
   // Nesting depth of the window being lexed (enclosing sub-fields plus substitution
   // scripts), sharing the MAX_SYNTAX_NESTING budget across lazily created lexers.
   _nestingDepth = 0;
@@ -422,8 +510,8 @@ export class Lexer {
     this.src = src;
     this.srcEnd = end;
     this.pos = start;
-    this.current = new TokenValue();
-    this.nextState = new TokenValue();
+    this.current = new TokenValue(this);
+    this.nextState = new TokenValue(this);
     this.hasPeek = false;
     this.pendingHereDocs = null;
     this.collectedExpansions = null;
@@ -454,6 +542,33 @@ export class Lexer {
 
   getPos(): number {
     return this.pos;
+  }
+
+  /** Materialize a word token's value: raw spans slice directly, others re-lex the span. */
+  _tokenValue(pos: number, end: number, raw: boolean): string {
+    return raw ? this.src.slice(pos, end) : this.wordValueOf(pos, end);
+  }
+
+  // Re-lex [start, end) in value mode to produce the processed word text. Bounded
+  // to the span, so every expansion the original scan consumed closes within it.
+  // Errors were already reported by the original scan; suppress duplicates.
+  private wordValueOf(start: number, end: number): string {
+    const savedPos = this.pos;
+    const savedEnd = this.srcEnd;
+    const savedBuildValue = this._buildValue;
+    const savedUnbalanced = this._unbalanced;
+    const errorCount = this._errors === null ? 0 : this._errors.length;
+    this.pos = start;
+    this.srcEnd = end;
+    this._buildValue = true;
+    this.readWordText();
+    const value = this._wordText;
+    this.pos = savedPos;
+    this.srcEnd = savedEnd;
+    this._buildValue = savedBuildValue;
+    this._unbalanced = savedUnbalanced;
+    if (this._errors !== null) this._errors.length = errorCount;
+    return value;
   }
 
   /** Find the closing bracket for a shell subscript, ignoring brackets inside nested shell syntax. */
@@ -1239,7 +1354,7 @@ export class Lexer {
           this.skipSpacesAndTabs();
           const targetPos = this.pos;
           if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL && src.charCodeAt(this.pos) !== CH_HASH) {
-            this.readWordText();
+            this.readRedirectTargetText();
           }
           this.redirectToken(out, append ? "&>>" : "&>", tokenStart, targetPos);
           return true;
@@ -1284,7 +1399,7 @@ export class Lexer {
           this.skipSpacesAndTabs();
           const targetPos = this.pos;
           if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL && src.charCodeAt(this.pos) !== CH_HASH) {
-            this.readWordText();
+            this.readRedirectTargetText();
           }
           this.redirectToken(out, "<<<", tokenStart, targetPos);
           return true;
@@ -1354,13 +1469,22 @@ export class Lexer {
         return true;
       }
       const targetPos = this.pos;
-      if (nc !== CH_NL && nc !== CH_HASH) this.readWordText();
+      if (nc !== CH_NL && nc !== CH_HASH) this.readRedirectTargetText();
       this.redirectToken(out, op, tokenStart, targetPos);
       return true;
     }
 
     this.redirectToken(out, op, tokenStart, this.pos);
     return true;
+  }
+
+  // Redirect targets keep their processed text eagerly (it becomes the target
+  // word's content), so scan them in value mode.
+  private readRedirectTargetText(): void {
+    const savedBuildValue = this._buildValue;
+    this._buildValue = true;
+    this.readWordText();
+    this._buildValue = savedBuildValue;
   }
 
   private redirectToken(out: TokenValue, operator: string, tokenStart: number, targetPos: number): void {
@@ -1385,6 +1509,8 @@ export class Lexer {
   private readHereDocDelimiter(): void {
     const src = this.src;
     const len = this.srcEnd;
+    const savedBuildValue = this._buildValue;
+    this._buildValue = true; // the delimiter is assembled from processed segments
     let delimiter = "";
     let quoted = false;
 
@@ -1437,6 +1563,7 @@ export class Lexer {
         this.pos++;
       }
     }
+    this._buildValue = savedBuildValue;
     this._hereDelim = delimiter;
     this._hereQuoted = quoted;
   }
@@ -1560,6 +1687,8 @@ export class Lexer {
   private _wordAssignmentOperatorPos: number | undefined;
   _wordParts: WordPart[] | null = null;
   private _resultText = "";
+  // True when the last $-construct's value is exactly its raw source span.
+  private _resultIsRaw = true;
   private _resultHasExpansion = false;
   private _resultPart: WordPart | undefined;
   // Set by extractBalanced when the input ended before the closing paren, so
@@ -1575,68 +1704,147 @@ export class Lexer {
 
   private readWord(out: TokenValue, ctx: LexContext, tokenStart: number = 0): void {
     this.readWordText();
-    const text = this._wordText;
+    const src = this.src;
     const raw = this._wordRaw;
     const hasExpansions = this._wordHasExpansions;
     const quoted = this._wordQuoted;
     const isAssignment = this._wordIsAssignment;
     let assignmentOpPos = this._wordAssignmentOperatorPos;
     const wordEnd = this.pos;
+    const wordLen = wordEnd - tokenStart;
+
+    // The checks below run on the raw span for raw words. The few non-raw words
+    // they could still match — keyword/]] spellings via line continuations or
+    // quote decoding (short, unquoted) and fd prefixes (followed by < or >) —
+    // materialize their processed value here.
+    let value: string | null = null;
+    if (!raw && !hasExpansions) {
+      const nextCh = wordEnd < this.srcEnd ? src.charCodeAt(wordEnd) : 0;
+      if ((!quoted && wordLen <= 16) || nextCh === CH_LT || nextCh === CH_GT) {
+        value = this.wordValueOf(tokenStart, wordEnd);
+      }
+    }
 
     if (ctx === LexContext.CommandStart) {
       if (!hasExpansions && !quoted) {
-        const fc = text.charCodeAt(0);
-        if ((fc >= CH_a && fc <= CH_z && text.length <= 8) || fc === CH_BANG || fc === CH_LBRACE || fc === CH_RBRACE) {
-          const reserved = RESERVED_WORDS.get(text);
-          if (reserved !== undefined) {
-            setToken(out, reserved, text, tokenStart, wordEnd);
+        if (raw) {
+          if (wordLen <= 8) {
+            const reserved = matchReservedWord(src, tokenStart, wordLen);
+            if (reserved !== undefined) {
+              setSpanToken(out, reserved, tokenStart, wordEnd, true);
+              return;
+            }
+          }
+          if (
+            wordLen === 2 &&
+            src.charCodeAt(tokenStart) === CH_LBRACKET &&
+            src.charCodeAt(tokenStart + 1) === CH_LBRACKET
+          ) {
+            setSpanToken(out, Token.DblLBracket, tokenStart, wordEnd, true);
+            return;
+          }
+        } else if (value !== null && value.length > 0) {
+          const fc = value.charCodeAt(0);
+          if (
+            (fc >= CH_a && fc <= CH_z && value.length <= 8) ||
+            fc === CH_BANG ||
+            fc === CH_LBRACE ||
+            fc === CH_RBRACE
+          ) {
+            const reserved = RESERVED_WORDS.get(value);
+            if (reserved !== undefined) {
+              setToken(out, reserved, value, tokenStart, wordEnd);
+              return;
+            }
+          }
+          if (fc === CH_LBRACKET && value === "[[") {
+            setToken(out, Token.DblLBracket, value, tokenStart, wordEnd);
             return;
           }
         }
-        if (fc === CH_LBRACKET && text === "[[") {
-          setToken(out, Token.DblLBracket, text, tokenStart, wordEnd);
-          return;
+      }
+      if (isAssignment === undefined) {
+        // Fast-path word (value === raw span): detect assignment positionally
+        let eq = -1;
+        for (let i = tokenStart + 1; i < wordEnd; i++) {
+          if (src.charCodeAt(i) === CH_EQ) {
+            eq = i;
+            break;
+          }
+        }
+        if (eq !== -1) {
+          const state = scanAssignmentPrefix(src, tokenStart, wordEnd, ASSIGNMENT_NAME_START);
+          if (isMatchedAssignment(state)) assignmentOpPos = assignmentOperatorPos(state);
         }
       }
-      if (isAssignment === undefined && text.indexOf("=") > 0) {
-        const state = scanAssignmentPrefix(text, 0, text.length, ASSIGNMENT_NAME_START);
-        if (isMatchedAssignment(state)) assignmentOpPos = tokenStart + assignmentOperatorPos(state);
-      }
       if (assignmentOpPos !== undefined) {
-        setToken(out, Token.Assignment, text, tokenStart, wordEnd);
-        out.raw = raw;
+        setSpanToken(out, Token.Assignment, tokenStart, wordEnd, raw);
+        if (value !== null) out._value = value;
         out.assignmentOperatorPos = assignmentOpPos;
         return;
       }
     }
-    if (!hasExpansions && !quoted && text === "]]") {
-      setToken(out, Token.DblRBracket, text, tokenStart, wordEnd);
-      return;
+    if (!hasExpansions && !quoted) {
+      if (raw) {
+        if (
+          wordLen === 2 &&
+          src.charCodeAt(tokenStart) === CH_RBRACKET &&
+          src.charCodeAt(tokenStart + 1) === CH_RBRACKET
+        ) {
+          setSpanToken(out, Token.DblRBracket, tokenStart, wordEnd, true);
+          return;
+        }
+      } else if (value === "]]") {
+        setToken(out, Token.DblRBracket, value, tokenStart, wordEnd);
+        return;
+      }
     }
 
     // FD number prefix: all-digit word followed by < or > → redirect with fd
     if (!hasExpansions && this.pos < this.srcEnd) {
-      const nc = this.src.charCodeAt(this.pos);
+      const nc = src.charCodeAt(this.pos);
       if (nc === CH_LT || nc === CH_GT) {
-        if (text.charCodeAt(0) >= CH_0 && text.charCodeAt(0) <= CH_9 && isAllDigits(text)) {
-          const fd = Number.parseInt(text, 10);
-          if (this.readRedirection(out, tokenStart)) {
-            out.fileDescriptor = fd;
-            return;
+        if (raw) {
+          const fc = src.charCodeAt(tokenStart);
+          if (fc >= CH_0 && fc <= CH_9 && isAllDigitsRange(src, tokenStart, wordEnd)) {
+            const fd = Number.parseInt(src.slice(tokenStart, wordEnd), 10);
+            if (this.readRedirection(out, tokenStart)) {
+              out.fileDescriptor = fd;
+              return;
+            }
           }
-        }
-        if (text.charCodeAt(0) === CH_LBRACE && text.charCodeAt(text.length - 1) === CH_RBRACE && text.length > 2) {
-          const varname = text.slice(1, -1);
-          if (this.readRedirection(out, tokenStart)) {
-            out.variableName = varname;
-            return;
+          if (fc === CH_LBRACE && wordLen > 2 && src.charCodeAt(wordEnd - 1) === CH_RBRACE) {
+            const varname = src.slice(tokenStart + 1, wordEnd - 1);
+            if (this.readRedirection(out, tokenStart)) {
+              out.variableName = varname;
+              return;
+            }
+          }
+        } else if (value !== null && value.length > 0) {
+          if (value.charCodeAt(0) >= CH_0 && value.charCodeAt(0) <= CH_9 && isAllDigits(value)) {
+            const fd = Number.parseInt(value, 10);
+            if (this.readRedirection(out, tokenStart)) {
+              out.fileDescriptor = fd;
+              return;
+            }
+          }
+          if (
+            value.charCodeAt(0) === CH_LBRACE &&
+            value.charCodeAt(value.length - 1) === CH_RBRACE &&
+            value.length > 2
+          ) {
+            const varname = value.slice(1, -1);
+            if (this.readRedirection(out, tokenStart)) {
+              out.variableName = varname;
+              return;
+            }
           }
         }
       }
     }
 
-    setToken(out, Token.Word, text, tokenStart, wordEnd);
-    out.raw = raw;
+    setSpanToken(out, Token.Word, tokenStart, wordEnd, raw);
+    if (value !== null) out._value = value;
   }
 
   private readWordText(): void {
@@ -1660,7 +1868,7 @@ export class Lexer {
       (charType[exitCh] & 1 && !(exitCh === CH_LPAREN && pos > fastStart && extglobPrefix[src.charCodeAt(pos - 1)]))
     ) {
       this.pos = pos;
-      this._wordText = pos > fastStart ? src.slice(fastStart, pos) : "";
+      this._wordText = (this._buildParts || this._buildValue) && pos > fastStart ? src.slice(fastStart, pos) : "";
       this._wordRaw = true;
       this._wordQuoted = false;
       this._wordHasExpansions = false;
@@ -1670,12 +1878,18 @@ export class Lexer {
       return;
     }
 
-    // Slow path: word contains quotes, expansions, escapes, etc.
-    let text = pos > fastStart ? src.slice(fastStart, pos) : "";
+    // Slow path: word contains quotes, expansions, escapes, etc. `text` (the
+    // processed value) is only assembled when building; the token path tracks
+    // positions and flags plus the last value char (for extglob prefixes) and
+    // whether the value still equals the raw span.
+    const bp = this._buildParts;
+    const bt = bp || this._buildValue;
+    let text = bt && pos > fastStart ? src.slice(fastStart, pos) : "";
     let quoted = false;
     let hasExpansions = false;
+    let valueIsRaw = true;
+    let lastValueChar = pos > fastStart ? src.charCodeAt(pos - 1) : 0;
     let assignmentState = scanAssignmentPrefix(src, fastStart, pos, ASSIGNMENT_NAME_START);
-    const bp = this._buildParts;
     let parts: WordPart[] | undefined;
     let litBuf = "";
     let litStart = 0;
@@ -1696,47 +1910,52 @@ export class Lexer {
           if (c < 128 && charType[c]) break;
           pos++;
         }
-        const chunk = src.slice(runStart, pos);
-        text += chunk;
+        lastValueChar = src.charCodeAt(pos - 1);
         assignmentState = scanAssignmentPrefix(src, runStart, pos, assignmentState);
-        if (bp) litBuf += chunk;
+        if (bt) {
+          const chunk = src.slice(runStart, pos);
+          text += chunk;
+          if (bp) litBuf += chunk;
+        }
         continue;
       }
 
       if (charType[ch] & 1) {
-        if (ch === CH_LPAREN && text.length > 0 && extglobPrefix[text.charCodeAt(text.length - 1)]) {
-          const prefixChar = text.charCodeAt(text.length - 1);
+        if (ch === CH_LPAREN && lastValueChar < 128 && extglobPrefix[lastValueChar]) {
+          const prefixChar = lastValueChar;
           pos++;
           const innerStart = pos;
           const close = this.findClosingShellDelimiter(innerStart, len, CH_RPAREN);
           const patternEnd = close === -1 ? len : close;
-          const pattern = src.slice(innerStart, patternEnd);
           pos = close === -1 ? len : close + 1;
           if (close === -1) this.errors.push({ message: "unterminated extended glob", pos: innerStart - 2 });
-          const eg = "(" + src.slice(innerStart, pos);
-          text += eg;
-          // Create ExtendedGlob part for real extglob operators (not = which is array assignment)
-          if (bp && prefixChar !== CH_EQ) {
-            // Remove the prefix char from litBuf (it was appended in the previous iteration)
-            if (litBuf.length > 0) {
-              const trimmed = litBuf.slice(0, -1);
-              if (trimmed) parts!.push({ type: "Literal", value: trimmed, text: src.slice(litStart, innerStart - 2) });
-              litBuf = "";
+          lastValueChar = src.charCodeAt(pos - 1);
+          if (bt) {
+            const eg = "(" + src.slice(innerStart, pos);
+            text += eg;
+            // Create ExtendedGlob part for real extglob operators (not = which is array assignment)
+            if (bp && prefixChar !== CH_EQ) {
+              // Remove the prefix char from litBuf (it was appended in the previous iteration)
+              if (litBuf.length > 0) {
+                const trimmed = litBuf.slice(0, -1);
+                if (trimmed)
+                  parts!.push({ type: "Literal", value: trimmed, text: src.slice(litStart, innerStart - 2) });
+                litBuf = "";
+              }
+              const op = extglobOp[prefixChar];
+              parts!.push({
+                type: "ExtendedGlob",
+                text: op + eg,
+                operator: op,
+                pattern: src.slice(innerStart, patternEnd),
+                parts: hasEmbeddedWordStructure(src, innerStart, patternEnd)
+                  ? this.parseSubFieldWord(innerStart, patternEnd).parts
+                  : undefined,
+              });
+              litStart = pos;
+            } else if (bp) {
+              litBuf += eg;
             }
-            const op = extglobOp[prefixChar];
-            const fullText = op + eg;
-            parts!.push({
-              type: "ExtendedGlob",
-              text: fullText,
-              operator: op,
-              pattern,
-              parts: hasEmbeddedWordStructure(src, innerStart, patternEnd)
-                ? this.parseSubFieldWord(innerStart, patternEnd).parts
-                : undefined,
-            });
-            litStart = pos;
-          } else if (bp) {
-            litBuf += eg;
           }
           continue;
         }
@@ -1748,12 +1967,17 @@ export class Lexer {
         if (pos < len) {
           if (src.charCodeAt(pos) === CH_NL) {
             pos++;
+            valueIsRaw = false;
           } else {
             if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
             quoted = true;
-            const escaped = src[pos++];
-            text += escaped;
-            if (bp) litBuf += escaped;
+            valueIsRaw = false;
+            lastValueChar = src.charCodeAt(pos);
+            if (bt) {
+              text += src[pos];
+              if (bp) litBuf += src[pos];
+            }
+            pos++;
           }
         }
         continue;
@@ -1763,11 +1987,13 @@ export class Lexer {
         const sqStart = pos;
         if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
         quoted = true;
+        valueIsRaw = false;
         pos++;
         const start = pos;
         while (pos < len && src.charCodeAt(pos) !== CH_SQUOTE) pos++;
-        const value = src.slice(start, pos);
-        text += value;
+        if (pos > start) lastValueChar = src.charCodeAt(pos - 1);
+        const value = bt ? src.slice(start, pos) : "";
+        if (bt) text += value;
         if (pos < len) pos++;
         else this.errors.push({ message: "unterminated single quote", pos: start - 1 });
         if (bp) {
@@ -1785,12 +2011,14 @@ export class Lexer {
         const dqStart = pos;
         if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
         quoted = true;
+        valueIsRaw = false;
         pos++;
         this.pos = pos;
         this.readDoubleQuoted();
         pos = this.pos;
-        text += this._dqText;
+        if (this._dqEnd > dqStart + 1) lastValueChar = src.charCodeAt(this._dqEnd - 1);
         if (this._dqHasExpansions) hasExpansions = true;
+        if (bt) text += this._dqText;
         if (bp) {
           if (litBuf) {
             parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, dqStart) });
@@ -1815,8 +2043,10 @@ export class Lexer {
         this.pos = pos;
         this.readDollar();
         pos = this.pos;
-        text += this._resultText;
+        if (!this._resultIsRaw) valueIsRaw = false;
+        if (pos > dollarStart) lastValueChar = src.charCodeAt(pos - 1);
         if (this._resultHasExpansion) hasExpansions = true;
+        if (bt) text += this._resultText;
         if (bp) {
           if (this._resultPart) {
             if (litBuf) {
@@ -1838,8 +2068,10 @@ export class Lexer {
         this.pos = pos;
         this.readBacktickExpansion();
         pos = this.pos;
-        text += this._resultText;
+        valueIsRaw = false;
+        lastValueChar = src.charCodeAt(pos - 1);
         hasExpansions = true;
+        if (bt) text += this._resultText;
         if (bp) {
           if (litBuf) {
             parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, btStart) });
@@ -1855,27 +2087,33 @@ export class Lexer {
         if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
         const braceEnd = scanBraceExpansion(src, pos, len);
         if (braceEnd > 0) {
-          const braceText = src.slice(pos, braceEnd);
-          text += braceText;
-          if (bp) {
-            if (litBuf) {
-              parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, pos) });
-              litBuf = "";
+          lastValueChar = src.charCodeAt(braceEnd - 1);
+          if (bt) {
+            const braceText = src.slice(pos, braceEnd);
+            text += braceText;
+            if (bp) {
+              if (litBuf) {
+                parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, pos) });
+                litBuf = "";
+              }
+              parts!.push({
+                type: "BraceExpansion",
+                text: braceText,
+                parts: hasEmbeddedWordStructure(src, pos + 1, braceEnd - 1)
+                  ? this.parseSubFieldWord(pos + 1, braceEnd - 1).parts
+                  : undefined,
+              });
+              litStart = braceEnd;
             }
-            parts!.push({
-              type: "BraceExpansion",
-              text: braceText,
-              parts: hasEmbeddedWordStructure(src, pos + 1, braceEnd - 1)
-                ? this.parseSubFieldWord(pos + 1, braceEnd - 1).parts
-                : undefined,
-            });
-            litStart = braceEnd;
           }
           pos = braceEnd;
           continue;
         }
-        text += "{";
-        if (bp) litBuf += "{";
+        lastValueChar = CH_LBRACE;
+        if (bt) {
+          text += "{";
+          if (bp) litBuf += "{";
+        }
         pos++;
         continue;
       }
@@ -1887,7 +2125,7 @@ export class Lexer {
 
     this.pos = pos;
     this._wordText = text;
-    this._wordRaw = false;
+    this._wordRaw = valueIsRaw;
     this._wordQuoted = quoted;
     this._wordHasExpansions = hasExpansions;
     this._wordIsAssignment = isMatchedAssignment(assignmentState);
@@ -2183,6 +2421,7 @@ export class Lexer {
     const contentStart = this.pos;
     let hasExpansions = false;
     const bp = this._buildParts;
+    const bt = bp || this._buildValue;
 
     // Fast path: pure literal content (no $, `, or \ — just find closing ")
     if (!bp) {
@@ -2190,7 +2429,7 @@ export class Lexer {
       while (p < len) {
         const c = src.charCodeAt(p);
         if (c === CH_DQUOTE) {
-          this._dqText = src.slice(contentStart, p);
+          this._dqText = bt ? src.slice(contentStart, p) : "";
           this._dqEnd = p;
           this.pos = p + 1;
           this._dqHasExpansions = false;
@@ -2216,7 +2455,7 @@ export class Lexer {
         if (c === CH_DQUOTE || c === CH_BACKSLASH || c === CH_DOLLAR || c === CH_BACKTICK) break;
         this.pos++;
       }
-      if (this.pos > runStart) {
+      if (bt && this.pos > runStart) {
         const chunk = src.slice(runStart, this.pos);
         text += chunk;
         if (bp) litBuf += chunk;
@@ -2234,14 +2473,16 @@ export class Lexer {
             this.pos++;
             continue;
           }
-          if (next === CH_DOLLAR || next === CH_BACKTICK || next === CH_DQUOTE || next === CH_BACKSLASH) {
-            const c = src[this.pos];
-            text += c;
-            if (bp) litBuf += c;
-          } else {
-            const pair = "\\" + src[this.pos];
-            text += pair;
-            if (bp) litBuf += pair;
+          if (bt) {
+            if (next === CH_DOLLAR || next === CH_BACKTICK || next === CH_DQUOTE || next === CH_BACKSLASH) {
+              const c = src[this.pos];
+              text += c;
+              if (bp) litBuf += c;
+            } else {
+              const pair = "\\" + src[this.pos];
+              text += pair;
+              if (bp) litBuf += pair;
+            }
           }
           this.pos++;
         }
@@ -2251,14 +2492,16 @@ export class Lexer {
       if (ch === CH_DOLLAR) {
         // $" inside double quotes is literal $ followed by closing " (not a locale string)
         if (this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_DQUOTE) {
-          text += "$";
-          if (bp) litBuf += "$";
+          if (bt) {
+            text += "$";
+            if (bp) litBuf += "$";
+          }
           this.pos++;
           continue;
         }
         const expStart = this.pos;
         this.readDollar();
-        text += this._resultText;
+        if (bt) text += this._resultText;
         if (this._resultHasExpansion) hasExpansions = true;
         if (bp) {
           const rp = this._resultPart;
@@ -2280,7 +2523,7 @@ export class Lexer {
       if (ch === CH_BACKTICK) {
         const btStart = this.pos;
         this.readBacktickExpansion();
-        text += this._resultText;
+        if (bt) text += this._resultText;
         hasExpansions = true;
         if (bp && this._resultPart && isDQChild(this._resultPart)) {
           if (!parts) parts = [];
@@ -2311,8 +2554,10 @@ export class Lexer {
     this.pos++; // skip $
     const src = this.src;
     const len = this.srcEnd;
+    const bt = this._buildParts || this._buildValue;
     if (this.pos >= len) {
       this._resultText = "$";
+      this._resultIsRaw = true;
       this._resultHasExpansion = false;
       this._resultPart = undefined;
       return;
@@ -2345,12 +2590,19 @@ export class Lexer {
 
     if (ch === CH_SQUOTE) {
       this.pos++;
-      const value = this.readAnsiCQuoted();
-      this._resultText = value;
+      if (bt) {
+        const value = this.readAnsiCQuoted();
+        this._resultText = value;
+        this._resultPart = this._buildParts
+          ? { type: "AnsiCQuoted", text: src.slice(dollarPos, this.pos), value }
+          : undefined;
+      } else {
+        this.skipAnsiCQuoted();
+        this._resultText = "";
+        this._resultPart = undefined;
+      }
+      this._resultIsRaw = false;
       this._resultHasExpansion = false;
-      this._resultPart = this._buildParts
-        ? { type: "AnsiCQuoted", text: src.slice(dollarPos, this.pos), value }
-        : undefined;
       return;
     }
 
@@ -2358,6 +2610,7 @@ export class Lexer {
       this.pos++;
       this.readDoubleQuoted();
       this._resultText = this._dqText;
+      this._resultIsRaw = false;
       this._resultHasExpansion = this._dqHasExpansions;
       if (this._buildParts) {
         const text = src.slice(dollarPos, this.pos);
@@ -2381,40 +2634,35 @@ export class Lexer {
       ch === CH_QUESTION ||
       ch === CH_DASH ||
       ch === CH_DOLLAR ||
-      ch === CH_BANG
+      ch === CH_BANG ||
+      (ch >= CH_0 && ch <= CH_9)
     ) {
       this.pos++;
-      const text = src.slice(this.pos - 2, this.pos);
+      const text = bt ? src.slice(this.pos - 2, this.pos) : "";
       this._resultText = text;
-      this._resultHasExpansion = false;
-      this._resultPart = this._buildParts ? { type: "SimpleExpansion", text } : undefined;
-      return;
-    }
-
-    if (ch >= CH_0 && ch <= CH_9) {
-      this.pos++;
-      const text = src.slice(this.pos - 2, this.pos);
-      this._resultText = text;
+      this._resultIsRaw = true;
       this._resultHasExpansion = false;
       this._resultPart = this._buildParts ? { type: "SimpleExpansion", text } : undefined;
       return;
     }
 
     if (ch < 128 && isIdChar[ch] & 1) {
-      const dollarPos = this.pos - 1;
+      const namePos = this.pos - 1;
       while (this.pos < len) {
         const c = src.charCodeAt(this.pos);
         if (c < 128 && isIdChar[c] & 2) this.pos++;
         else break;
       }
-      const text = src.slice(dollarPos, this.pos);
+      const text = bt ? src.slice(namePos, this.pos) : "";
       this._resultText = text;
+      this._resultIsRaw = true;
       this._resultHasExpansion = false;
       this._resultPart = this._buildParts ? { type: "SimpleExpansion", text } : undefined;
       return;
     }
 
     this._resultText = "$";
+    this._resultIsRaw = true;
     this._resultHasExpansion = false;
     this._resultPart = undefined;
   }
@@ -2481,14 +2729,15 @@ export class Lexer {
         this.pos++;
       }
     }
-    return src.slice(start, this.pos - 2);
+    return this._buildParts || this._buildValue ? src.slice(start, this.pos - 2) : "";
   }
 
   private readArithmeticExpansion(): void {
     const bodyStart = this.pos + 2; // absolute offset of the body, past the "((" at this.pos
     const body = this.scanArithmeticBody();
-    const text = "$((" + body + "))";
+    const text = this._buildParts || this._buildValue ? "$((" + body + "))" : "";
     this._resultText = text;
+    this._resultIsRaw = true;
     this._resultHasExpansion = false;
     if (this._buildParts) {
       // Pass the absolute body offset so arithmetic nodes index the original source
@@ -2523,7 +2772,10 @@ export class Lexer {
   }
 
   private readArithmeticCommand(out: TokenValue, tokenStart: number): void {
+    const savedBuildValue = this._buildValue;
+    this._buildValue = true;
     const body = this.scanArithmeticBody();
+    this._buildValue = savedBuildValue;
     setToken(out, Token.ArithCmd, body, tokenStart, this.pos);
   }
 
@@ -2534,8 +2786,10 @@ export class Lexer {
     // stays correct when the input ended before that paren was reached.
     const inner = this.extractBalanced();
     if (this._unbalanced) this.errors.push({ message: "unterminated command substitution", pos: dollarPos });
-    const text = this.src.slice(dollarPos, this.pos);
+    const bt = this._buildParts || this._buildValue;
+    const text = bt ? this.src.slice(dollarPos, this.pos) : "";
     this._resultText = text;
+    this._resultIsRaw = true;
     this._resultHasExpansion = true;
     if (this._buildParts) {
       this._resultPart = { type: "CommandExpansion", text, script: undefined, inner, innerStart: dollarPos + 2 };
@@ -2578,16 +2832,22 @@ export class Lexer {
       } else if (c === CH_BACKSLASH) this.pos++;
       this.pos++;
     }
-    const rawInner = src.slice(start, this.pos - 1);
-    const inner = rawInner.trim();
-    const text = prefix + inner + " }";
-    this._resultText = text;
+    this._resultIsRaw = false;
     this._resultHasExpansion = true;
-    if (this._buildParts) {
-      const innerStart = start + (rawInner.length - rawInner.trimStart().length);
-      this._resultPart = { type: "CommandExpansion", text, script: undefined, inner, innerStart };
-      this.collect(this._resultPart);
+    if (this._buildParts || this._buildValue) {
+      const rawInner = src.slice(start, this.pos - 1);
+      const inner = rawInner.trim();
+      const text = prefix + inner + " }";
+      this._resultText = text;
+      if (this._buildParts) {
+        const innerStart = start + (rawInner.length - rawInner.trimStart().length);
+        this._resultPart = { type: "CommandExpansion", text, script: undefined, inner, innerStart };
+        this.collect(this._resultPart);
+      } else {
+        this._resultPart = undefined;
+      }
     } else {
+      this._resultText = "";
       this._resultPart = undefined;
     }
   }
@@ -2596,8 +2856,21 @@ export class Lexer {
     this.pos++; // skip opening `
     const src = this.src;
     const len = this.srcEnd;
-    let inner = "";
     const start = this.pos;
+    if (!this._buildParts && !this._buildValue) {
+      while (this.pos < len && src.charCodeAt(this.pos) !== CH_BACKTICK) {
+        if (src.charCodeAt(this.pos) === CH_BACKSLASH && this.pos + 1 < len) this.pos++;
+        this.pos++;
+      }
+      if (this.pos < len) this.pos++;
+      else this.errors.push({ message: "unterminated backtick", pos: start - 1 });
+      this._resultText = "";
+      this._resultIsRaw = false;
+      this._resultHasExpansion = true;
+      this._resultPart = undefined;
+      return;
+    }
+    let inner = "";
     let hasEscapes = false;
     while (this.pos < len && src.charCodeAt(this.pos) !== CH_BACKTICK) {
       if (src.charCodeAt(this.pos) === CH_BACKSLASH) {
@@ -2693,8 +2966,9 @@ export class Lexer {
     }
     const closed = depth === 0;
     if (!closed) this.errors.push({ message: "unterminated parameter expansion", pos: start - 1 });
-    const text = src.slice(start - 1, this.pos);
+    const text = this._buildParts || this._buildValue ? src.slice(start - 1, this.pos) : "";
     this._resultText = text;
+    this._resultIsRaw = true;
     this._resultHasExpansion = false;
     if (this._buildParts) {
       const inner = src.slice(start + 1, closed ? this.pos - 1 : this.pos);
@@ -2976,6 +3250,7 @@ export class Lexer {
   private extractBalanced(): string {
     const src = this.src;
     const len = this.srcEnd;
+    const bt = this._buildParts || this._buildValue;
     let depth = 1;
     const start = this.pos;
     this._unbalanced = false;
@@ -2986,7 +3261,7 @@ export class Lexer {
       if (c === CH_RPAREN) {
         depth--;
         if (depth === 0) {
-          const result = src.slice(start, this.pos);
+          const result = bt ? src.slice(start, this.pos) : "";
           this.pos++;
           return result;
         }
@@ -3016,7 +3291,7 @@ export class Lexer {
       }
     }
 
-    if (depth === 0) return src.slice(start, this.pos);
+    if (depth === 0) return bt ? src.slice(start, this.pos) : "";
 
     // Slow path: just track position (source is copied verbatim, so slice at end)
     let caseDepth = 0;
@@ -3049,7 +3324,7 @@ export class Lexer {
         } else {
           depth--;
           if (depth === 0) {
-            const result = src.slice(start, this.pos);
+            const result = bt ? src.slice(start, this.pos) : "";
             this.pos++;
             return result;
           }
@@ -3135,6 +3410,6 @@ export class Lexer {
     }
     // Ran out of input before the closing paren.
     this._unbalanced = true;
-    return src.slice(start, this.pos);
+    return bt ? src.slice(start, this.pos) : "";
   }
 }
