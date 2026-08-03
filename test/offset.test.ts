@@ -31,35 +31,35 @@ function check(source: string, value: unknown, path: string): void {
 // NB: single-quoted — these contain ${...} which a backtick template literal would
 // interpret as JS interpolation.
 const CORPUS = [
-  'echo hello',
+  "echo hello",
   'echo "hi $(rm -rf /tmp/z)"',
   'a $(b $(c "deep"))',
-  'diff <(sort x) <(sort y)',
-  'diff <(sort <(gen a)) <(sort y)',
+  "diff <(sort x) <(sort y)",
+  "diff <(sort <(gen a)) <(sort y)",
   'echo "$(date) and $(whoami)"',
   'for f in $(ls /etc); do cat "$f"; done',
   'x=$(foo bar); echo "$x"',
   'cat "prefix $(inner /a/b) suffix"',
   'result=$(echo "$(nested cmd)")',
   'grep -r "$(cat patterns.txt)" .',
-  'echo $(a) $(b) $(c)',
+  "echo $(a) $(b) $(c)",
   'if test -f "$(which node)"; then echo ok; fi',
-  'echo ${ ls -la; }',
-  'cat <(echo $(date))tail',
+  "echo ${ ls -la; }",
+  "cat <(echo $(date))tail",
   // arithmetic, including a command sub inside arithmetic, nested in a command sub
-  'echo $((1 + 2))',
-  'x=$(echo $((1 + 2)))',
-  'echo $(( $(id -u) + 1 ))',
+  "echo $((1 + 2))",
+  "x=$(echo $((1 + 2)))",
+  "echo $(( $(id -u) + 1 ))",
   // command subs inside parameter-expansion sub-fields (operand, replacement, slice)
-  'echo ${x:-$(date)}',
-  'echo ${x/foo/$(repl)}',
-  'echo ${x:$(off):$(len)}',
-  'echo ${a:-${b:-$(deep)}}',
-  'echo {safe,$(brace)}',
-  'echo @($(extglob)|<(process))',
-  'echo ${array[$(parameter)]}',
-  'array[$(assignment)]=value true',
-  'echo $((array[$(arithmetic)]))',
+  "echo ${x:-$(date)}",
+  "echo ${x/foo/$(repl)}",
+  "echo ${x:$(off):$(len)}",
+  "echo ${a:-${b:-$(deep)}}",
+  "echo {safe,$(brace)}",
+  "echo @($(extglob)|<(process))",
+  "echo ${array[$(parameter)]}",
+  "array[$(assignment)]=value true",
+  "echo $((array[$(arithmetic)]))",
 ];
 
 for (const command of CORPUS) {
@@ -96,9 +96,9 @@ test("arithmetic expression offsets are absolute", () => {
     const at = command.indexOf("1 + 2");
     const arith = command.startsWith("echo")
       ? suffixPart(command, "ArithmeticExpansion")
-      : (parse(command).commands[0].command as any).prefix[0].value.parts.find(
-          (p: any) => p.type === "CommandExpansion",
-        ).script.commands[0].command.suffix[0].parts.find((p: any) => p.type === "ArithmeticExpansion");
+      : (parse(command).commands[0].command as any).prefix[0].value.parts
+          .find((p: any) => p.type === "CommandExpansion")
+          .script.commands[0].command.suffix[0].parts.find((p: any) => p.type === "ArithmeticExpansion");
     const bin = arith.expression; // ArithmeticBinary(left "1", "+", right "2")
     assert.strictEqual(bin.left.pos, at, command);
     assert.strictEqual(command.slice(bin.right.pos, bin.right.end), "2", command);
@@ -166,9 +166,9 @@ test("arithmetic command and for substitutions have absolute script offsets", ()
 // script — including across a nested ${...}.
 test("command substitution inside parameter-expansion operand is absolute", () => {
   for (const [command, expected] of [
-    ['echo ${x:-$(date)}', "date"],
-    ['echo ${x/foo/$(repl args)}', "repl args"],
-    ['echo ${a:-${b:-$(deep cmd)}}', "deep cmd"],
+    ["echo ${x:-$(date)}", "date"],
+    ["echo ${x/foo/$(repl args)}", "repl args"],
+    ["echo ${a:-${b:-$(deep cmd)}}", "deep cmd"],
   ] as const) {
     let cmd: any;
     (function walk(n: any) {

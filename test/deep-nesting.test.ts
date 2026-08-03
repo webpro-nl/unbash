@@ -356,12 +356,7 @@ test("compound recovery tracks ordinary separators inside case item bodies", () 
 });
 
 test("compound recovery tracks separators after bare assignments", () => {
-  for (const body of [
-    "a=1",
-    "a=(1 2 3)",
-    "x=$(case y in b) echo hi;; esac)",
-    "arr[i+1]=5",
-  ]) {
+  for (const body of ["a=1", "a=(1 2 3)", "x=$(case y in b) echo hi;; esac)", "arr[i+1]=5"]) {
     const ast = parse(`${nestedBraceGroups(2_000, body)}; echo after`);
 
     assert.deepEqual(

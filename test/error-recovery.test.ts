@@ -194,11 +194,7 @@ test("quoted empty redirect targets are not missing targets", () => {
 
 test("comments are not redirect targets", () => {
   for (const source of ["echo >#comment", "echo > #comment", "echo &>#comment", "echo <<<#comment", "cat <<#comment"]) {
-    assert.deepEqual(
-      parse(source).errors,
-      [{ message: "expected redirect target", pos: source.indexOf("#") }],
-      source,
-    );
+    assert.deepEqual(parse(source).errors, [{ message: "expected redirect target", pos: source.indexOf("#") }], source);
   }
 });
 

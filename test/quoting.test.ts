@@ -186,7 +186,10 @@ test("value on unquoted word equals text", () => {
 
 test("value strips unquoted backslash escapes", () => {
   assert.equal(getCmd(parse(String.raw`echo hello\ world`)).suffix[0].value, "hello world");
-  assert.equal(getCmd(parse(String.raw`/Applications/Visual\ Studio\ Code.app --wait`)).name?.value, "/Applications/Visual Studio Code.app");
+  assert.equal(
+    getCmd(parse(String.raw`/Applications/Visual\ Studio\ Code.app --wait`)).name?.value,
+    "/Applications/Visual Studio Code.app",
+  );
 });
 
 test("value joins adjacent quoted segments", () => {
