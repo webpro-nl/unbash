@@ -116,6 +116,9 @@ export class TokenValue {
   targetPos = 0;
   targetEnd = 0;
   assignmentOperatorPos = -1;
+  // True when `value` is exactly the raw source span [pos, end) — lets consumers
+  // reuse the string instead of slicing the source again.
+  raw = false;
 
   reset(): void {
     this.token = Token.EOF;
@@ -128,6 +131,7 @@ export class TokenValue {
     this.targetPos = 0;
     this.targetEnd = 0;
     this.assignmentOperatorPos = -1;
+    this.raw = false;
   }
 
   copyFrom(other: TokenValue): void {
@@ -141,30 +145,31 @@ export class TokenValue {
     this.targetPos = other.targetPos;
     this.targetEnd = other.targetEnd;
     this.assignmentOperatorPos = other.assignmentOperatorPos;
+    this.raw = other.raw;
   }
 }
 
-const RESERVED_WORDS: Record<string, Token> = {
-  if: Token.If,
-  then: Token.Then,
-  else: Token.Else,
-  elif: Token.Elif,
-  fi: Token.Fi,
-  do: Token.Do,
-  done: Token.Done,
-  for: Token.For,
-  while: Token.While,
-  until: Token.Until,
-  in: Token.In,
-  case: Token.Case,
-  esac: Token.Esac,
-  function: Token.Function,
-  select: Token.Select,
-  coproc: Token.Coproc,
-  "!": Token.Bang,
-  "{": Token.LBrace,
-  "}": Token.RBrace,
-};
+const RESERVED_WORDS = new Map<string, Token>([
+  ["if", Token.If],
+  ["then", Token.Then],
+  ["else", Token.Else],
+  ["elif", Token.Elif],
+  ["fi", Token.Fi],
+  ["do", Token.Do],
+  ["done", Token.Done],
+  ["for", Token.For],
+  ["while", Token.While],
+  ["until", Token.Until],
+  ["in", Token.In],
+  ["case", Token.Case],
+  ["esac", Token.Esac],
+  ["function", Token.Function],
+  ["select", Token.Select],
+  ["coproc", Token.Coproc],
+  ["!", Token.Bang],
+  ["{", Token.LBrace],
+  ["}", Token.RBrace],
+]);
 
 // Combined character type table — bit 0: metachar, bit 1: word-special
 const charType = new Uint8Array(128);
@@ -350,6 +355,8 @@ interface PendingHereDoc {
   target?: { content?: string; heredocQuoted?: boolean; body?: Word };
 }
 
+const NO_EXPANSIONS: [DeferredCommandExpansion, number][] = [];
+
 function setToken(out: TokenValue, token: Token, value: string, pos: number = 0, end: number = 0): void {
   out.token = token;
   out.value = value;
@@ -359,6 +366,7 @@ function setToken(out: TokenValue, token: Token, value: string, pos: number = 0,
   out.variableName = undefined;
   out.content = undefined;
   out.assignmentOperatorPos = -1;
+  out.raw = false;
 }
 
 export const LexContext = {
@@ -399,8 +407,8 @@ export class Lexer {
   private current: TokenValue;
   private nextState: TokenValue;
   private hasPeek: boolean;
-  private pendingHereDocs: PendingHereDoc[];
-  private collectedExpansions: [DeferredCommandExpansion, number][];
+  private pendingHereDocs: PendingHereDoc[] | null;
+  private collectedExpansions: [DeferredCommandExpansion, number][] | null;
   _errors: ParseError[] | null = null;
   _buildParts = false;
   // Nesting depth of the window being lexed (enclosing sub-fields plus substitution
@@ -417,8 +425,8 @@ export class Lexer {
     this.current = new TokenValue();
     this.nextState = new TokenValue();
     this.hasPeek = false;
-    this.pendingHereDocs = [];
-    this.collectedExpansions = [];
+    this.pendingHereDocs = null;
+    this.collectedExpansions = null;
 
     if (start === 0 && src.charCodeAt(0) === CH_HASH && src.charCodeAt(1) === CH_BANG) {
       const nl = src.indexOf("\n");
@@ -435,13 +443,13 @@ export class Lexer {
   }
 
   getCollectedExpansions(): [DeferredCommandExpansion, number][] {
-    return this.collectedExpansions;
+    return this.collectedExpansions ?? NO_EXPANSIONS;
   }
 
   // Collected expansions resolve after the enclosing scan unwinds, so each records the
   // depth it was found at; resolveCollected charges that depth against the shared budget.
   private collect(part: DeferredCommandExpansion): void {
-    this.collectedExpansions.push([part, this._nestingDepth]);
+    (this.collectedExpansions ??= []).push([part, this._nestingDepth]);
   }
 
   getPos(): number {
@@ -956,6 +964,7 @@ export class Lexer {
   }
 
   registerHereDocTarget(target: { content?: string; heredocQuoted?: boolean; body?: Word }): void {
+    if (this.pendingHereDocs === null) return;
     for (const hd of this.pendingHereDocs) {
       if (!hd.target) {
         hd.target = target;
@@ -999,7 +1008,11 @@ export class Lexer {
           this.pos++;
         }
         if (this.pos < len) this.pos++;
-        else this.errors.push({ message: ansiC ? "unterminated ANSI-C quote" : "unterminated single quote", pos: quotePos });
+        else
+          this.errors.push({
+            message: ansiC ? "unterminated ANSI-C quote" : "unterminated single quote",
+            pos: quotePos,
+          });
         continue;
       }
       if (ch === CH_DQUOTE) {
@@ -1167,7 +1180,8 @@ export class Lexer {
       return;
     }
 
-    if (this.tryReadOperator(out, ch, ctx, tokenStart)) return;
+    // Operators all start with a metachar; anything else is a word
+    if (ch < 128 && charType[ch] & 1 && this.tryReadOperator(out, ch, ctx, tokenStart)) return;
 
     this.readWord(out, ctx, tokenStart);
   }
@@ -1224,11 +1238,7 @@ export class Lexer {
           if (append) this.pos++;
           this.skipSpacesAndTabs();
           const targetPos = this.pos;
-          if (
-            this.pos < this.srcEnd &&
-            src.charCodeAt(this.pos) !== CH_NL &&
-            src.charCodeAt(this.pos) !== CH_HASH
-          ) {
+          if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL && src.charCodeAt(this.pos) !== CH_HASH) {
             this.readWordText();
           }
           this.redirectToken(out, append ? "&>>" : "&>", tokenStart, targetPos);
@@ -1273,11 +1283,7 @@ export class Lexer {
           this.pos++;
           this.skipSpacesAndTabs();
           const targetPos = this.pos;
-          if (
-            this.pos < this.srcEnd &&
-            src.charCodeAt(this.pos) !== CH_NL &&
-            src.charCodeAt(this.pos) !== CH_HASH
-          ) {
+          if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL && src.charCodeAt(this.pos) !== CH_HASH) {
             this.readWordText();
           }
           this.redirectToken(out, "<<<", tokenStart, targetPos);
@@ -1290,7 +1296,7 @@ export class Lexer {
         if (this.pos >= this.srcEnd || src.charCodeAt(this.pos) !== CH_HASH) this.readHereDocDelimiter();
         const hasTarget = this.pos > targetPos;
         if (hasTarget) {
-          this.pendingHereDocs.push({ delimiter: this._hereDelim, strip: dash, quoted: this._hereQuoted });
+          (this.pendingHereDocs ??= []).push({ delimiter: this._hereDelim, strip: dash, quoted: this._hereQuoted });
         }
         setToken(out, Token.Redirect, dash ? "<<-" : "<<", tokenStart, this.pos);
         out.content = hasTarget ? this._hereDelim : undefined;
@@ -1436,7 +1442,9 @@ export class Lexer {
   }
 
   private consumePendingHereDocs(): void {
-    for (const hd of this.pendingHereDocs) {
+    const pending = this.pendingHereDocs;
+    if (pending === null || pending.length === 0) return;
+    for (const hd of pending) {
       const bodyPos = this.pos;
       const body = this.readHereDocBody(hd.delimiter, hd.strip);
       if (hd.target) {
@@ -1449,7 +1457,7 @@ export class Lexer {
         }
       }
     }
-    this.pendingHereDocs.length = 0;
+    pending.length = 0;
   }
 
   private readHereDocBody(delimiter: string, strip: boolean): string {
@@ -1534,10 +1542,18 @@ export class Lexer {
       if (c === CH_BACKSLASH) i++; // skip escaped char
     }
     if (!hasExpansion) return null;
-    return new WordImpl(body, bodyPos, bodyPos + body.length, this.src, WordImpl._resolveHeredocBody, this._nestingDepth);
+    return new WordImpl(
+      body,
+      bodyPos,
+      bodyPos + body.length,
+      this.src,
+      WordImpl._resolveHeredocBody,
+      this._nestingDepth,
+    );
   }
 
   private _wordText = "";
+  private _wordRaw = false;
   private _wordQuoted = false;
   private _wordHasExpansions = false;
   private _wordIsAssignment: boolean | undefined;
@@ -1560,6 +1576,7 @@ export class Lexer {
   private readWord(out: TokenValue, ctx: LexContext, tokenStart: number = 0): void {
     this.readWordText();
     const text = this._wordText;
+    const raw = this._wordRaw;
     const hasExpansions = this._wordHasExpansions;
     const quoted = this._wordQuoted;
     const isAssignment = this._wordIsAssignment;
@@ -1570,11 +1587,8 @@ export class Lexer {
       if (!hasExpansions && !quoted) {
         const fc = text.charCodeAt(0);
         if ((fc >= CH_a && fc <= CH_z && text.length <= 8) || fc === CH_BANG || fc === CH_LBRACE || fc === CH_RBRACE) {
-          // Single lookup, then a typeof check — `text in RESERVED_WORDS` would also match
-          // inherited Object.prototype members, making `toString` and `valueOf` parse as
-          // keywords. Own reserved words are always numeric Token values.
-          const reserved = RESERVED_WORDS[text];
-          if (typeof reserved === "number") {
+          const reserved = RESERVED_WORDS.get(text);
+          if (reserved !== undefined) {
             setToken(out, reserved, text, tokenStart, wordEnd);
             return;
           }
@@ -1590,6 +1604,7 @@ export class Lexer {
       }
       if (assignmentOpPos !== undefined) {
         setToken(out, Token.Assignment, text, tokenStart, wordEnd);
+        out.raw = raw;
         out.assignmentOperatorPos = assignmentOpPos;
         return;
       }
@@ -1621,6 +1636,7 @@ export class Lexer {
     }
 
     setToken(out, Token.Word, text, tokenStart, wordEnd);
+    out.raw = raw;
   }
 
   private readWordText(): void {
@@ -1630,18 +1646,22 @@ export class Lexer {
 
     // Fast path: scan a single run of plain chars (covers most words)
     const fastStart = pos;
+    let exitCh = 0;
     while (pos < len) {
       const c = src.charCodeAt(pos);
-      if (c < 128 && charType[c]) break;
+      if (c < 128 && charType[c]) {
+        exitCh = c;
+        break;
+      }
       pos++;
     }
-    const exitCh = pos < len ? src.charCodeAt(pos) : 0;
     if (
       pos >= len ||
       (charType[exitCh] & 1 && !(exitCh === CH_LPAREN && pos > fastStart && extglobPrefix[src.charCodeAt(pos - 1)]))
     ) {
       this.pos = pos;
       this._wordText = pos > fastStart ? src.slice(fastStart, pos) : "";
+      this._wordRaw = true;
       this._wordQuoted = false;
       this._wordHasExpansions = false;
       this._wordIsAssignment = undefined;
@@ -1780,7 +1800,9 @@ export class Lexer {
           parts!.push({
             type: "DoubleQuoted",
             text: dqText,
-            parts: this._dqParts ?? [{ type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, this._dqEnd) }],
+            parts: this._dqParts ?? [
+              { type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, this._dqEnd) },
+            ],
           });
           litStart = pos;
         }
@@ -1865,6 +1887,7 @@ export class Lexer {
 
     this.pos = pos;
     this._wordText = text;
+    this._wordRaw = false;
     this._wordQuoted = quoted;
     this._wordHasExpansions = hasExpansions;
     this._wordIsAssignment = isMatchedAssignment(assignmentState);
@@ -1941,7 +1964,9 @@ export class Lexer {
           parts!.push({
             type: "DoubleQuoted",
             text: dqText,
-            parts: this._dqParts ?? [{ type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, this._dqEnd) }],
+            parts: this._dqParts ?? [
+              { type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, this._dqEnd) },
+            ],
           });
           litStart = pos;
         }
@@ -2022,6 +2047,7 @@ export class Lexer {
 
     this.pos = pos;
     this._wordText = text;
+    this._wordRaw = false;
     this._wordQuoted = false;
     this._wordHasExpansions = false;
     if (bp) {
