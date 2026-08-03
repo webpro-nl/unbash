@@ -58,6 +58,20 @@ test("missing redirect targets do not reuse word state", () => {
   assert.equal(redirect?.target, undefined);
 });
 
+test("redirect-only command keeps its redirects", () => {
+  const c = getCmd(parse("< input.txt"));
+  assert.equal(c.name, undefined);
+  assert.equal(c.prefix.length, 0);
+  assert.equal(c.redirects?.length, 1);
+  assert.equal(c.redirects![0].operator, "<");
+  assert.equal(c.redirects![0].target?.text, "input.txt");
+
+  const t = getCmd(parse("> out.txt"));
+  assert.equal(t.redirects?.length, 1);
+  assert.equal(t.redirects![0].operator, ">");
+  assert.equal(t.redirects![0].target?.text, "out.txt");
+});
+
 test("escaped and quoted hashes remain redirect targets", () => {
   for (const source of ["echo >\\#file", "echo >'#file'", 'echo >"#file"']) {
     const ast = parse(source);

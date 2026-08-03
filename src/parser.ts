@@ -1268,7 +1268,7 @@ class Parser {
         name: undefined,
         prefix: EMPTY_PREFIX,
         suffix: EMPTY_SUFFIX,
-        redirects: EMPTY_REDIRECTS,
+        redirects,
       } satisfies Command;
     }
 
