@@ -8,6 +8,34 @@ Fast 0-deps bash parser written in TypeScript
 npm install unbash
 ```
 
+## When to use unbash?
+
+Use unbash when your input is Bash syntax, such as a pasted command or a
+complete script, and you need to inspect its structure without executing it. It
+returns a typed, source-positioned AST for commands, pipelines, redirects,
+assignments, compound statements, word expansions, and nested substitutions.
+
+Example use cases:
+
+- Audit commands or scripts against an application-defined safety policy
+- Find and classify commands, including commands nested in substitutions
+- Surface parse errors in generated or pasted Bash, with source positions
+- Extract a command such as `curl` from pasted shell input while keeping
+  neighboring pipelines, logical chains, redirects, and comments separate
+- Build command explanations from syntax, expansions, and source positions
+- Rewrite one syntactic element while preserving the surrounding command text
+
+unbash does not execute code, perform shell expansion, provide a sandbox, or
+decide whether a command is safe. Security-sensitive consumers must inspect word
+parts, nested scripts, and errors on each parsed script. unbash is a tolerant
+parser: for malformed or incomplete input, it recovers where possible and
+returns a best-effort partial AST with source-positioned errors. It does not
+target PowerShell, `cmd.exe`, or other shell languages. Much POSIX `sh` syntax
+is also valid Bash.
+
+To parse `process.argv` (`string[]`), use Node.js [`parseArgs`][1] or a CLI
+library such as [yargs][2] or [citty][3].
+
 ## Usage
 
 ```ts
@@ -69,8 +97,8 @@ for (const statement of script.commands) {
 ```
 
 Word-like fields that can execute nested shell syntax expose the same structure.
-`BraceExpansion`, `ExtendedGlob`, and `ArithmeticWord` use `parts`; parameter and
-assignment array indexes use `indexParts`.
+`BraceExpansion`, `ExtendedGlob`, and `ArithmeticWord` use `parts`; parameter
+and assignment array indexes use `indexParts`.
 
 Positions index the source owned by the nearest `ParsedScript`. Root scripts and
 verbatim nested substitutions share the caller's source, so their `pos`/`end`
@@ -116,7 +144,7 @@ fi
 
 ## unbash vs tree-sitter-bash
 
-[tree-sitter-bash][1] is an excellent choice if you need:
+[tree-sitter-bash][4] is an excellent choice if you need:
 
 - Incremental parsing
 - CST output preserving all tokens and punctuation
@@ -130,11 +158,11 @@ unbash might be a good fit if you prefer:
 - A typed TypeScript API
 - Built-in parsing for command/process substitutions, coproc, Bash 5.3 `${ cmd;
 }`, `[[ ]]`, `(( ))`, and extglob
-- Tolerant parsing that never throws and collects parse errors
+- Best-effort error recovery that preserves a partial AST and collects errors
 
 ## unbash vs sh-syntax
 
-[sh-syntax][2] is a WASM wrapper around the robust [mvdan/sh][3] Go parser. It
+[sh-syntax][5] is a WASM wrapper around the robust [mvdan/sh][6] Go parser. It
 is highly recommended if you need:
 
 - Support for multiple shell dialects (bash, POSIX sh, mksh, Bats)
@@ -148,8 +176,8 @@ unbash might be a good fit if you prefer:
 
 ## unbash vs bash-parser
 
-[bash-parser][4] (last publish: 2017) and its fork
-[@ericcornelissen/bash-parser][5] (community dependency maintenance fork ❤️ now
+[bash-parser][7] (last publish: 2017) and its fork
+[@ericcornelissen/bash-parser][8] (community dependency maintenance fork ❤️ now
 archived) might be interesting if you need:
 
 - A POSIX-only mode that rejects bash-specific syntax
@@ -158,7 +186,7 @@ unbash might be a good fit if you prefer:
 
 - A zero-dependency architecture
 - A typed TypeScript API (ESM-only)
-- Tolerant parsing that never throws and collects parse errors
+- Best-effort error recovery that preserves a partial AST and collects errors
 - Structured AST nodes for parameter expansions, arithmetic expressions, and `[[
 ]]` test expressions
 - Support for many additional syntax features (like herestrings, C-style for
@@ -166,16 +194,16 @@ unbash might be a good fit if you prefer:
 
 ## Benchmarks
 
-Relative performance comparison (on Apple M1 Pro/32GB), unbash is x times
-faster:
+Median relative performance across three runs on Apple M1 Pro/32GB using Node.js
+22.23.2. unbash is x times faster:
 
 | Parser                       | short | advanced | medium | large |
 | ---------------------------- | ----: | -------: | -----: | ----: |
-| tree-sitter-bash (native)    |   13x |       9x |     4x |    5x |
-| tree-sitter-bash (WASM)      |   16x |      12x |     8x |    8x |
-| sh-syntax                    | 2136x |    1537x |     8x |    4x |
-| bash-parser                  |  256x |      N/A |    N/A |   N/A |
-| @ericcornelissen/bash-parser |  267x |      N/A |    N/A |   N/A |
+| tree-sitter-bash (native)    |   17x |      10x |     7x |   10x |
+| tree-sitter-bash (WASM)      |   20x |      14x |    15x |   17x |
+| sh-syntax                    | 3560x |    2370x |    15x |    9x |
+| bash-parser                  |  317x |      N/A |    N/A |   N/A |
+| @ericcornelissen/bash-parser |  335x |      N/A |    N/A |   N/A |
 
 Run the benchmarks using Node.js v22:
 
@@ -186,21 +214,24 @@ node bench/all.ts
 
 ## Size
 
-unbash is 53K minified, 13KB gzipped.
+The parser bundle is 77KB minified and 18KB gzipped.
 
 ## Playgrounds
 
-- [unbash.statichost.page][6]
-- [ast-explorer.dev][7]
+- [unbash.statichost.page][9]
+- [ast-explorer.dev][10]
 
 ## License
 
 ISC
 
-[1]: https://github.com/tree-sitter/tree-sitter-bash
-[2]: https://github.com/un-ts/sh-syntax
-[3]: https://github.com/mvdan/sh
-[4]: https://github.com/vorpaljs/bash-parser
-[5]: https://github.com/ericcornelissen/bash-parser
-[6]: https://unbash.statichost.page
-[7]: https://ast-explorer.dev/#eNoVjDsKwzAQRK8yDK5CyAGS2nVAId02jixZAbFr/Kls393rbh7zeBsrn5xLqpV3jr5X/XVzcYgOKRaD8LoNzffTBqFotgkZf8XtUW14oTdRIHaLq00WYscwpRFtCO8g2psm75n3toPHCdz+Ivg=
+[1]: https://nodejs.org/api/util.html#utilparseargsconfig
+[2]: https://yargs.js.org/
+[3]: https://www.npmjs.com/package/citty
+[4]: https://github.com/tree-sitter/tree-sitter-bash
+[5]: https://github.com/un-ts/sh-syntax
+[6]: https://github.com/mvdan/sh
+[7]: https://github.com/vorpaljs/bash-parser
+[8]: https://github.com/ericcornelissen/bash-parser
+[9]: https://unbash.statichost.page
+[10]: https://ast-explorer.dev/#eNoVjDsKwzAQRK8yDK5CyAGS2nVAId02jixZAbFr/Kls393rbh7zeBsrn5xLqpV3jr5X/XVzcYgOKRaD8LoNzffTBqFotgkZf8XtUW14oTdRIHaLq00WYscwpRFtCO8g2psm75n3toPHCdz+Ivg=
