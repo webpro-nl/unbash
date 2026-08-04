@@ -75,6 +75,10 @@ done</textarea>
       const _input = document.getElementById("input");
       const _parse = document.querySelector("output#parse");
       const _print = document.querySelector("output#print");
+      const defaultInput = _input.value;
+      const getHashInput = () => new URLSearchParams(window.location.hash.slice(1)).get("input");
+      const hashInput = getHashInput();
+      if (hashInput !== null) _input.value = hashInput;
       const update = () => {
         try {
           const src = _input.value;
@@ -86,7 +90,25 @@ done</textarea>
           _print.textContent = e.message;
         }
       };
-      _input.oninput = update;
+      let updateUrlTimeout;
+      const updateUrl = () => {
+        clearTimeout(updateUrlTimeout);
+        updateUrlTimeout = setTimeout(() => {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("input");
+          url.hash = new URLSearchParams({ input: _input.value }).toString();
+          window.history.replaceState(null, "", url);
+        }, 300);
+      };
+      _input.oninput = () => {
+        update();
+        updateUrl();
+      };
+      window.onhashchange = () => {
+        clearTimeout(updateUrlTimeout);
+        _input.value = getHashInput() ?? defaultInput;
+        update();
+      };
       update();
     </script>
   </body>
