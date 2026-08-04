@@ -2,6 +2,8 @@
 
 Fast 0-deps bash parser written in TypeScript
 
+[![NPM Version][2]][1] [![NPM Downloads][3]][1]
+
 ## Install
 
 ```sh
@@ -48,8 +50,8 @@ returns a best-effort partial AST with source-positioned errors. It does not
 target PowerShell, `cmd.exe`, or other shell languages. Much POSIX `sh` syntax
 is also valid Bash.
 
-To parse `process.argv` (`string[]`), use Node.js [`parseArgs`][1] or a CLI
-library such as [yargs][2] or [citty][3].
+To parse `process.argv` (`string[]`), use Node.js [`parseArgs`][4] or a CLI
+library such as [yargs][5] or [citty][6].
 
 ## Usage
 
@@ -74,6 +76,8 @@ Result:
   }]
 }
 ```
+
+See the full AST at [unbash.statichost.page#input=if \[ -f...][7]
 
 ### Word parts
 
@@ -120,7 +124,9 @@ verbatim nested substitutions share the caller's source, so their `pos`/`end`
 slice that source directly:
 
 ```js
-const nested = word.parts.find((part) => part.type === "CommandExpansion").script;
+const nested = word.parts.find(
+  (part) => part.type === "CommandExpansion",
+).script;
 const command = nested.commands[0].command;
 
 source.slice(command.pos, command.end); // exact nested command source
@@ -159,7 +165,7 @@ fi
 
 ## unbash vs tree-sitter-bash
 
-[tree-sitter-bash][4] is the right choice when you need:
+[tree-sitter-bash][8] is the right choice when you need:
 
 - Incremental parsing
 - CST output preserving all tokens and punctuation
@@ -174,11 +180,11 @@ unbash provides:
 - Structured word parts, arithmetic and test-expression trees, recursively
   parsed substitutions, and direct source positions
 - Best-effort error recovery that preserves a partial AST and collects errors
-- Also see [tree-sitter-bash gaps covered by unbash][5]
+- Also see [tree-sitter-bash gaps covered by unbash][9]
 
 ## unbash vs sh-syntax
 
-[sh-syntax][6] is a WASM wrapper around the robust [mvdan/sh][7] Go parser. It
+[sh-syntax][10] is a WASM wrapper around the robust [mvdan/sh][11] Go parser. It
 is highly recommended if you need:
 
 - Support for multiple shell dialects (Bash, POSIX sh, mksh, Bats, and Zsh)
@@ -190,12 +196,12 @@ unbash provides:
 - A smaller, JSON-friendly Bash AST with lazy structured word parts, recursively
   parsed substitutions, and direct source positions
 - Best-effort partial ASTs for malformed or incomplete editor and user input
-- Also see [sh-syntax gaps covered by unbash][8]
+- Also see [sh-syntax gaps covered by unbash][12]
 
 ## unbash vs bash-parser
 
-[bash-parser][9] (last publish: 2017) and its fork
-[@ericcornelissen/bash-parser][10] (community dependency maintenance fork ❤️ now
+[bash-parser][13] (last publish: 2017) and its fork
+[@ericcornelissen/bash-parser][14] (community dependency maintenance fork ❤️ now
 archived) provide:
 
 - A POSIX-only mode that rejects bash-specific syntax
@@ -238,22 +244,26 @@ The parser bundle is 77KB minified and 18KB gzipped.
 
 ## Playgrounds
 
-- [unbash.statichost.page][11]
-- [ast-explorer.dev][12]
+- [unbash.statichost.page][15]
+- [ast-explorer.dev][16]
 
 ## License
 
 ISC
 
-[1]: https://nodejs.org/api/util.html#utilparseargsconfig
-[2]: https://yargs.js.org/
-[3]: https://www.npmjs.com/package/citty
-[4]: https://github.com/tree-sitter/tree-sitter-bash
-[5]: https://github.com/webpro-nl/unbash/issues/6
-[6]: https://github.com/un-ts/sh-syntax
-[7]: https://github.com/mvdan/sh
-[8]: https://github.com/webpro-nl/unbash/issues/7
-[9]: https://github.com/vorpaljs/bash-parser
-[10]: https://github.com/ericcornelissen/bash-parser
-[11]: https://unbash.statichost.page
-[12]: https://ast-explorer.dev/#eNoVjDsKwzAQRK8yDK5CyAGS2nVAId02jixZAbFr/Kls393rbh7zeBsrn5xLqpV3jr5X/XVzcYgOKRaD8LoNzffTBqFotgkZf8XtUW14oTdRIHaLq00WYscwpRFtCO8g2psm75n3toPHCdz+Ivg=
+[1]: https://www.npmx.dev/package/unbash
+[2]: https://img.shields.io/npm/v/unbash?color=f56e0f
+[3]: https://img.shields.io/npm/dm/unbash?color=f56e0f
+[4]: https://nodejs.org/api/util.html#utilparseargsconfig
+[5]: https://yargs.js.org/
+[6]: https://www.npmjs.com/package/citty
+[7]: https://unbash.statichost.page/#input=if%20%5B%20-f%20%22%241%22%20%5D%3B%20then%20cat%20%22%241%22%3B%20fi
+[8]: https://github.com/tree-sitter/tree-sitter-bash
+[9]: https://github.com/webpro-nl/unbash/issues/6
+[10]: https://github.com/un-ts/sh-syntax
+[11]: https://github.com/mvdan/sh
+[12]: https://github.com/webpro-nl/unbash/issues/7
+[13]: https://github.com/vorpaljs/bash-parser
+[14]: https://github.com/ericcornelissen/bash-parser
+[15]: https://unbash.statichost.page
+[16]: https://ast-explorer.dev/#eNoVjDsKwzAQRK8yDK5CyAGS2nVAId02jixZAbFr/Kls393rbh7zeBsrn5xLqpV3jr5X/XVzcYgOKRaD8LoNzffTBqFotgkZf8XtUW14oTdRIHaLq00WYscwpRFtCO8g2psm75n3toPHCdz+Ivg=
