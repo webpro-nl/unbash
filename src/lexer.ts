@@ -1245,8 +1245,15 @@ export class Lexer {
     return this.nextState;
   }
 
-  get lastToken(): Token {
-    return this.current.token;
+  // Peek where the context depends on the token just consumed. peek() ignores its ctx once a
+  // token is cached, so the caller's context must only be derived when a read actually happens.
+  peekFollow(closers: Uint8Array): TokenValue {
+    if (!this.hasPeek) {
+      const ctx = closers[this.current.token] ? LexContext.CommandStart : LexContext.Normal;
+      this.readNext(this.nextState, ctx);
+      this.hasPeek = true;
+    }
+    return this.nextState;
   }
 
   next(ctx: LexContext = LexContext.Normal): TokenValue {

@@ -446,7 +446,7 @@ class Parser {
     }
 
     for (;;) {
-      t = this.tok.peek(this.followCtx()).token;
+      t = this.tok.peekFollow(compoundClosers).token;
       if (t !== Token.Semi && t !== Token.Newline && t !== Token.Amp) break;
       const isBackground = t === Token.Amp;
       const sepEnd = this.tok.next(LexContext.Normal).end;
@@ -633,14 +633,9 @@ class Parser {
     }
   }
 
-  // peek() caches, so whoever peeks first after a command ends fixes the context for it.
-  private followCtx(): LexContext {
-    return compoundClosers[this.tok.lastToken] ? LexContext.CommandStart : LexContext.Normal;
-  }
-
   private collectTrailingRedirects(): Redirect[] {
     let redirects: Redirect[] = EMPTY_REDIRECTS;
-    while (this.tok.peek(this.followCtx()).token === Token.Redirect) {
+    while (this.tok.peekFollow(compoundClosers).token === Token.Redirect) {
       redirects = this.collectRedirect(redirects, LexContext.Normal);
     }
     return redirects;
