@@ -107,6 +107,24 @@ test("ANSI-C quoted closing brackets remain an operand", () => {
   assert.equal(ast.errors, undefined);
 });
 
+// Bash negates only on an unquoted `!`; a quoted one is an ordinary operand.
+test("quoted ! in a test is an operand, not negation", () => {
+  for (const source of ["[[ '!' == x ]]", '[[ "!" == x ]]', "[[ \\! == x ]]"]) {
+    const t = getTest(source);
+    assert.equal(t.expression.type, "TestBinary", source);
+    assert.equal(binary(t.expression).operator, "==", source);
+    assert.equal(binary(t.expression).left.value, "!", source);
+    assert.equal(binary(t.expression).right.value, "x", source);
+  }
+});
+
+test("unquoted ! still negates", () => {
+  assert.equal(getTest("[[ ! -f /etc/hosts ]]").expression.type, "TestNot");
+  const doubled = getTest("[[ ! ! -f /etc/hosts ]]").expression;
+  assert.equal(doubled.type, "TestNot");
+  assert.equal(not(doubled).operand.type, "TestNot");
+});
+
 test("]] outside a test command is an ordinary word", () => {
   const echoed = parse("echo ]]");
   const cmd = echoed.commands[0].command;

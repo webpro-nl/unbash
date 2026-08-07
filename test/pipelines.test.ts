@@ -187,3 +187,22 @@ test("time on its own line followed by command", () => {
   assert.equal((ast.commands[0].command as Pipeline).time, true);
   assert.equal((ast.commands[1].command as Command).name?.text, "foo");
 });
+
+test("quoted time flags stay operands", () => {
+  // Bash runs `time '-p' echo hi` as a command named -p, so the quoted flag is not the
+  // POSIX option. The `-p` must survive as the timed pipeline's command name.
+  for (const source of ["time '-p' echo hi", 'time "-p" echo hi', "time \\-p echo hi"]) {
+    const pipeline = parse(source).commands[0].command;
+    assert.equal(pipeline.type, "Pipeline", source);
+    assert.equal(pipeline.type === "Pipeline" && pipeline.time, true, source);
+    const inner = pipeline.type === "Pipeline" ? pipeline.commands[0] : undefined;
+    assert.equal(inner?.type === "Command" && inner.name?.value, "-p", source);
+  }
+});
+
+test("unquoted time -p is still the POSIX flag", () => {
+  const pipeline = parse("time -p echo hi").commands[0].command;
+  assert.equal(pipeline.type === "Pipeline" && pipeline.time, true);
+  const inner = pipeline.type === "Pipeline" ? pipeline.commands[0] : undefined;
+  assert.equal(inner?.type === "Command" && inner.name?.value, "echo");
+});

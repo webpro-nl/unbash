@@ -808,18 +808,18 @@ export class Lexer {
         commandStart = true;
         if (frame.phase === "time-command") continue;
       } else if (frame.phase === "time-command") {
-        if (token === Token.Word && value.value === "-p") {
+        if (token === Token.Word && value.keywordEligible && value.value === "-p") {
           frame.phase = "time-command-after-p";
           continue;
         }
-        if (token === Token.Word && value.value === "--") {
+        if (token === Token.Word && value.keywordEligible && value.value === "--") {
           frame.phase = "commands";
           continue;
         }
         frame.phase = "commands";
         commandStart = true;
       } else if (frame.phase === "time-command-after-p") {
-        if (token === Token.Word && value.value === "--") {
+        if (token === Token.Word && value.keywordEligible && value.value === "--") {
           frame.phase = "commands";
           continue;
         }

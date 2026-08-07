@@ -243,6 +243,11 @@ compoundClosers[Token.Done] = 1;
 compoundClosers[Token.Esac] = 1;
 compoundClosers[Token.ArithCmd] = 1;
 
+// Inside `[[ ]]` only an unquoted `!` negates; `'!'` and `\!` are ordinary operands.
+function isTestNegation(t: TokenValue): boolean {
+  return t.token === Token.Word && t.keywordEligible && t.value === "!";
+}
+
 const commandStarts = new Uint8Array(37);
 commandStarts[Token.Word] = 1;
 commandStarts[Token.Assignment] = 1;
@@ -516,10 +521,8 @@ class Parser {
     if (firstToken.token === Token.Word && firstToken.keywordEligible && firstToken.value === "time") {
       time = true;
       pipelinePos = this.tok.next(LexContext.CommandStart).pos;
-      if (
-        this.tok.peek(LexContext.CommandStart).token === Token.Word &&
-        this.tok.peek(LexContext.CommandStart).value === "-p"
-      )
+      const flag = this.tok.peek(LexContext.CommandStart);
+      if (flag.token === Token.Word && flag.keywordEligible && flag.value === "-p")
         this.tok.next(LexContext.CommandStart);
     }
 
@@ -1135,17 +1138,17 @@ class Parser {
   // test_not := '!' test_not | test_primary
   private parseTestNot(): TestExpression {
     let t = this.tok.peek(LexContext.TestMode);
-    if (t.token !== Token.Word || t.value !== "!") return this.parseTestPrimary();
+    if (!isTestNegation(t)) return this.parseTestPrimary();
 
     const firstPos = this.tok.next(LexContext.TestMode).pos;
     t = this.tok.peek(LexContext.TestMode);
-    if (t.token !== Token.Word || t.value !== "!") {
+    if (!isTestNegation(t)) {
       const operand = this.parseTestPrimary();
       return { type: "TestNot", pos: firstPos, end: operand.end, operand } satisfies TestNotExpression;
     }
 
     const positions = [firstPos];
-    while (t.token === Token.Word && t.value === "!") {
+    while (isTestNegation(t)) {
       positions.push(this.tok.next(LexContext.TestMode).pos);
       t = this.tok.peek(LexContext.TestMode);
     }
