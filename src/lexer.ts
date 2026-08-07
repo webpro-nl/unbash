@@ -1794,7 +1794,9 @@ export class Lexer {
         return;
       }
     }
-    if (keywordEligible) {
+    // `]]` is reserved only where it can close a `[[`; operands and wordlist entries, which
+    // read Normal, are ordinary words.
+    if (ctx !== LexContext.Normal && keywordEligible) {
       if (raw) {
         if (
           wordLen === 2 &&

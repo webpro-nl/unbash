@@ -107,6 +107,32 @@ test("ANSI-C quoted closing brackets remain an operand", () => {
   assert.equal(ast.errors, undefined);
 });
 
+test("]] outside a test command is an ordinary word", () => {
+  const echoed = parse("echo ]]");
+  const cmd = echoed.commands[0].command;
+  assert.equal(cmd.type === "Command" && cmd.suffix.map((w) => w.value).join(), "]]");
+  assert.equal(echoed.errors, undefined);
+
+  const between = parse("echo a ]] b");
+  const betweenCmd = between.commands[0].command;
+  assert.equal(betweenCmd.type === "Command" && betweenCmd.suffix.map((w) => w.value).join(" "), "a ]] b");
+  assert.equal(between.errors, undefined);
+
+  const wordlist = parse("for i in ]] a; do echo $i; done");
+  assert.equal(wordlist.commands[0].command.type, "For");
+  assert.equal(wordlist.errors, undefined);
+
+  const pattern = parse("case ]] in ]]) echo m;; esac");
+  assert.equal(pattern.commands[0].command.type, "Case");
+  assert.equal(pattern.errors, undefined);
+});
+
+// Bash rejects a bare `]]` at command start, so the reserved spelling must survive there.
+test("]] at command start stays a reserved word", () => {
+  const ast = parse("]]");
+  assert.deepEqual(ast.errors, [{ message: "unexpected token ']]'", pos: 0 }]);
+});
+
 test("binary -eq -ne -lt -le -gt -ge", () => {
   for (const op of ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"]) {
     const t = getTest(`[[ $num ${op} 42 ]]`);
