@@ -58,6 +58,17 @@ test("backslash-escaped reserved word is not a keyword", () => {
   assert.equal(c.name?.text, "\\if");
 });
 
+test("dollar-quoted reserved words are not keywords", () => {
+  for (const source of ["$'if' true", '$"if" true', "i$''f true"]) {
+    const ast = parse(source);
+    const c = getCmd(ast);
+
+    assert.equal(c.name?.value, "if", source);
+    assert.equal(c.suffix[0].value, "true", source);
+    assert.equal(ast.errors, undefined, source);
+  }
+});
+
 test("single quote inside double quotes is literal", () => {
   const c = getCmd(parse(`echo "TEST1 'TEST2"`));
   assert.equal(c.suffix[0].text, '"TEST1 \'TEST2"');

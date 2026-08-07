@@ -122,6 +122,9 @@ export class TokenValue {
   // True when `value` is exactly the raw source span [pos, end) — lets consumers
   // reuse the string instead of slicing the source again.
   raw = false;
+  // True when a word contains no quoting, escaped characters, or expansions.
+  // Backslash-newline continuations preserve keyword eligibility.
+  keywordEligible = false;
 
   constructor(owner: Lexer | null = null) {
     this._owner = owner;
@@ -148,6 +151,7 @@ export class TokenValue {
     this.targetEnd = 0;
     this.assignmentOperatorPos = -1;
     this.raw = false;
+    this.keywordEligible = false;
   }
 
   copyFrom(other: TokenValue): void {
@@ -162,6 +166,7 @@ export class TokenValue {
     this.targetEnd = other.targetEnd;
     this.assignmentOperatorPos = other.assignmentOperatorPos;
     this.raw = other.raw;
+    this.keywordEligible = other.keywordEligible;
   }
 }
 
@@ -391,6 +396,7 @@ function setToken(out: TokenValue, token: Token, value: string, pos: number = 0,
   out.content = undefined;
   out.assignmentOperatorPos = -1;
   out.raw = false;
+  out.keywordEligible = false;
 }
 
 // Word token over [pos, end) whose value materializes on first access.
@@ -404,6 +410,7 @@ function setSpanToken(out: TokenValue, token: Token, pos: number, end: number, r
   out.content = undefined;
   out.assignmentOperatorPos = -1;
   out.raw = raw;
+  out.keywordEligible = false;
 }
 
 // Positional reserved-word match over src[start, start+len) — no slice. Mirrors
@@ -783,7 +790,8 @@ export class Lexer {
         commandStart = true;
       } else if (frame.phase === "coproc-body") {
         if (token === Token.Newline) continue;
-        frame.phase = token === Token.Word && value.value === "time" ? "time-command" : "commands";
+        frame.phase =
+          token === Token.Word && value.keywordEligible && value.value === "time" ? "time-command" : "commands";
         commandStart = true;
         if (frame.phase === "time-command") continue;
       } else if (frame.phase === "time-command") {
@@ -903,7 +911,7 @@ export class Lexer {
             frame.phase = "coproc-command";
             break;
           default:
-            if (token === Token.Word && value.value === "time") {
+            if (token === Token.Word && value.keywordEligible && value.value === "time") {
               frame.phase = "time-command";
               commandStart = true;
             } else {
@@ -1683,6 +1691,7 @@ export class Lexer {
   private _wordRaw = false;
   private _wordQuoted = false;
   private _wordHasExpansions = false;
+  private _wordKeywordEligible = false;
   private _wordIsAssignment: boolean | undefined;
   private _wordAssignmentOperatorPos: number | undefined;
   _wordParts: WordPart[] | null = null;
@@ -1708,6 +1717,7 @@ export class Lexer {
     const raw = this._wordRaw;
     const hasExpansions = this._wordHasExpansions;
     const quoted = this._wordQuoted;
+    const keywordEligible = this._wordKeywordEligible;
     const isAssignment = this._wordIsAssignment;
     let assignmentOpPos = this._wordAssignmentOperatorPos;
     const wordEnd = this.pos;
@@ -1726,7 +1736,7 @@ export class Lexer {
     }
 
     if (ctx === LexContext.CommandStart) {
-      if (!hasExpansions && !quoted) {
+      if (keywordEligible) {
         if (raw) {
           if (wordLen <= 8) {
             const reserved = matchReservedWord(src, tokenStart, wordLen);
@@ -1784,7 +1794,7 @@ export class Lexer {
         return;
       }
     }
-    if (!hasExpansions && !quoted) {
+    if (keywordEligible) {
       if (raw) {
         if (
           wordLen === 2 &&
@@ -1845,6 +1855,7 @@ export class Lexer {
 
     setSpanToken(out, Token.Word, tokenStart, wordEnd, raw);
     if (value !== null) out._value = value;
+    out.keywordEligible = keywordEligible;
   }
 
   private readWordText(): void {
@@ -1872,6 +1883,7 @@ export class Lexer {
       this._wordRaw = true;
       this._wordQuoted = false;
       this._wordHasExpansions = false;
+      this._wordKeywordEligible = true;
       this._wordIsAssignment = undefined;
       this._wordAssignmentOperatorPos = undefined;
       if (this._buildParts) this._wordParts = null;
@@ -1887,6 +1899,7 @@ export class Lexer {
     let text = bt && pos > fastStart ? src.slice(fastStart, pos) : "";
     let quoted = false;
     let hasExpansions = false;
+    let keywordEligible = true;
     let valueIsRaw = true;
     let lastValueChar = pos > fastStart ? src.charCodeAt(pos - 1) : 0;
     let assignmentState = scanAssignmentPrefix(src, fastStart, pos, ASSIGNMENT_NAME_START);
@@ -1922,6 +1935,7 @@ export class Lexer {
 
       if (charType[ch] & 1) {
         if (ch === CH_LPAREN && lastValueChar < 128 && extglobPrefix[lastValueChar]) {
+          keywordEligible = false;
           const prefixChar = lastValueChar;
           pos++;
           const innerStart = pos;
@@ -1971,6 +1985,7 @@ export class Lexer {
           } else {
             if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
             quoted = true;
+            keywordEligible = false;
             valueIsRaw = false;
             lastValueChar = src.charCodeAt(pos);
             if (bt) {
@@ -1987,6 +2002,7 @@ export class Lexer {
         const sqStart = pos;
         if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
         quoted = true;
+        keywordEligible = false;
         valueIsRaw = false;
         pos++;
         const start = pos;
@@ -2011,6 +2027,7 @@ export class Lexer {
         const dqStart = pos;
         if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
         quoted = true;
+        keywordEligible = false;
         valueIsRaw = false;
         pos++;
         this.pos = pos;
@@ -2038,6 +2055,7 @@ export class Lexer {
       }
 
       if (ch === CH_DOLLAR) {
+        keywordEligible = false;
         const dollarStart = pos;
         if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
         this.pos = pos;
@@ -2063,6 +2081,7 @@ export class Lexer {
       }
 
       if (ch === CH_BACKTICK) {
+        keywordEligible = false;
         const btStart = pos;
         if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
         this.pos = pos;
@@ -2087,6 +2106,7 @@ export class Lexer {
         if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
         const braceEnd = scanBraceExpansion(src, pos, len);
         if (braceEnd > 0) {
+          keywordEligible = false;
           lastValueChar = src.charCodeAt(braceEnd - 1);
           if (bt) {
             const braceText = src.slice(pos, braceEnd);
@@ -2128,6 +2148,7 @@ export class Lexer {
     this._wordRaw = valueIsRaw;
     this._wordQuoted = quoted;
     this._wordHasExpansions = hasExpansions;
+    this._wordKeywordEligible = keywordEligible;
     this._wordIsAssignment = isMatchedAssignment(assignmentState);
     this._wordAssignmentOperatorPos = this._wordIsAssignment ? assignmentOperatorPos(assignmentState) : undefined;
     if (bp) {
@@ -2288,6 +2309,7 @@ export class Lexer {
     this._wordRaw = false;
     this._wordQuoted = false;
     this._wordHasExpansions = false;
+    this._wordKeywordEligible = false;
     if (bp) {
       this._wordParts = parts!.length > 1 || (parts!.length === 1 && parts![0].type !== "Literal") ? parts! : null;
     }
@@ -2309,6 +2331,7 @@ export class Lexer {
     const savedText = this._wordText;
     const savedParts = this._wordParts;
     const savedQuoted = this._wordQuoted;
+    const savedKeywordEligible = this._wordKeywordEligible;
 
     this.srcEnd = end;
     this.pos = start;
@@ -2326,6 +2349,7 @@ export class Lexer {
     this._wordText = savedText;
     this._wordParts = savedParts;
     this._wordQuoted = savedQuoted;
+    this._wordKeywordEligible = savedKeywordEligible;
     this._nestingDepth--;
     return word;
   }

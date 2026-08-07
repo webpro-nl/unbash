@@ -98,6 +98,15 @@ test("binary =", () => {
   assert.equal(binary(t.expression).operator, "=");
 });
 
+test("ANSI-C quoted closing brackets remain an operand", () => {
+  const ast = parse("[[ value == $']]' ]]");
+  const t = ast.commands[0].command;
+
+  assert.equal(t.type, "TestCommand");
+  assert.equal(t.type === "TestCommand" && binary(t.expression).right.value, "]]");
+  assert.equal(ast.errors, undefined);
+});
+
 test("binary -eq -ne -lt -le -gt -ge", () => {
   for (const op of ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"]) {
     const t = getTest(`[[ $num ${op} 42 ]]`);

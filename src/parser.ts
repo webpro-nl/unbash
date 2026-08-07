@@ -343,6 +343,24 @@ class Parser {
       shebang = nl === -1 ? this.source : this.source.slice(0, nl);
     }
     const commands = this.list();
+    for (;;) {
+      const unexpected = this.tok.peek(LexContext.CommandStart);
+      if (unexpected.token === Token.EOF) break;
+
+      this.error(`unexpected token '${unexpected.value}'`, unexpected.pos);
+      if (!listTerminators[unexpected.token] && unexpected.token !== Token.In) break;
+
+      this.tok.next(LexContext.CommandStart);
+      let separator = this.tok.peek(LexContext.CommandStart).token;
+      if (separator !== Token.Semi && separator !== Token.Newline && separator !== Token.Amp) break;
+
+      while (separator === Token.Semi || separator === Token.Newline || separator === Token.Amp) {
+        this.tok.next(LexContext.CommandStart);
+        separator = this.tok.peek(LexContext.CommandStart).token;
+      }
+      const recovered = this.list();
+      for (let i = 0; i < recovered.length; i++) commands.push(recovered[i]);
+    }
     const lexerErrors = this.tok._errors;
     if (lexerErrors !== null && lexerErrors.length > 0) {
       const errors = (this.errors ??= []);
@@ -483,10 +501,8 @@ class Parser {
   private pipeline(): Node | null {
     let time = false;
     let pipelinePos = 0;
-    if (
-      this.tok.peek(LexContext.CommandStart).token === Token.Word &&
-      this.tok.peek(LexContext.CommandStart).value === "time"
-    ) {
+    const firstToken = this.tok.peek(LexContext.CommandStart);
+    if (firstToken.token === Token.Word && firstToken.keywordEligible && firstToken.value === "time") {
       time = true;
       pipelinePos = this.tok.next(LexContext.CommandStart).pos;
       if (
