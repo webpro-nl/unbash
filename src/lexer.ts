@@ -211,6 +211,13 @@ charType[CH_DOLLAR] = 2;
 charType[CH_BACKTICK] = 2;
 charType[CH_LBRACE] = 2;
 
+// A `#` opens a comment only at a word start: the scan start, or after a metacharacter.
+function opensComment(src: string, pos: number, start: number): boolean {
+  if (pos === start) return true;
+  const prev = src.charCodeAt(pos - 1);
+  return prev < 128 && (charType[prev] & 1) !== 0;
+}
+
 const arithmeticWordDelimiter = new Uint8Array(128);
 for (const ch of [
   CH_TAB,
@@ -661,7 +668,9 @@ export class Lexer {
     return this.pos;
   }
 
-  private findClosingShellDelimiter(start: number, end: number, closing: number): number {
+  // Only array assignment bodies take comments; extglob shares this scanner, and `#` is
+  // pattern data there.
+  private findClosingShellDelimiter(start: number, end: number, closing: number, comments = false): number {
     const savedPos = this.pos;
     const savedEnd = this.srcEnd;
     const savedUnbalanced = this._unbalanced;
@@ -673,6 +682,10 @@ export class Lexer {
       const ch = this.src.charCodeAt(pos);
       if (ch === CH_BACKSLASH) {
         pos += 2;
+        continue;
+      }
+      if (ch === CH_HASH && comments && opensComment(this.src, pos, start)) {
+        while (pos < this.srcEnd && this.src.charCodeAt(pos) !== CH_NL) pos++;
         continue;
       }
       if (ch === CH_SQUOTE) {
@@ -1941,7 +1954,7 @@ export class Lexer {
           const prefixChar = lastValueChar;
           pos++;
           const innerStart = pos;
-          const close = this.findClosingShellDelimiter(innerStart, len, CH_RPAREN);
+          const close = this.findClosingShellDelimiter(innerStart, len, CH_RPAREN, prefixChar === CH_EQ);
           const patternEnd = close === -1 ? len : close;
           pos = close === -1 ? len : close + 1;
           if (close === -1) this.errors.push({ message: "unterminated extended glob", pos: innerStart - 2 });
@@ -3409,11 +3422,7 @@ export class Lexer {
         this.pos++;
         for (const hd of pendingDelims) this.skipHereDocBody(hd.delimiter, hd.strip, true);
         pendingDelims = null;
-      } else if (
-        ch === CH_HASH &&
-        arithBase < 0 &&
-        (this.pos === start || (src.charCodeAt(this.pos - 1) < 128 && charType[src.charCodeAt(this.pos - 1)] & 1))
-      ) {
+      } else if (ch === CH_HASH && arithBase < 0 && opensComment(src, this.pos, start)) {
         // Word-boundary # opens a comment — opaque up to (not including) the
         // newline, so quotes and << inside it stay inert
         while (this.pos < len && src.charCodeAt(this.pos) !== CH_NL) this.pos++;

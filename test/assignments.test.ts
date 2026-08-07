@@ -122,6 +122,48 @@ test("array with quoted elements", () => {
   assert.equal(a.array![1].text, "'literal'");
 });
 
+test("array element comments are skipped", () => {
+  // A `#` starting a word begins a comment; an unpaired quote inside it must not
+  // swallow the closing paren.
+  for (const comment of ["# don't", '# say "hi', "# `cmd"]) {
+    const src = `x=(\n a\n ${comment}\n b\n)\necho after`;
+    const ast = parse(src);
+    assert.equal(ast.errors, undefined, src);
+    assert.equal(ast.commands.length, 2, src);
+
+    const a = getAssign(src);
+    assert.equal(a.array!.length, 2, src);
+    assert.deepEqual(
+      a.array!.map((w) => w.text),
+      ["a", "b"],
+      src,
+    );
+  }
+});
+
+test("array comment starts only at a word boundary", () => {
+  // `#` after `(` or whitespace comments; mid-word or after a quote it is literal.
+  assert.deepEqual(
+    getAssign("x=(#c\ny)").array!.map((w) => w.text),
+    ["y"],
+  );
+  assert.deepEqual(
+    getAssign("x=(a#b)").array!.map((w) => w.text),
+    ["a#b"],
+  );
+  assert.deepEqual(
+    getAssign('x=("q"#b)').array!.map((w) => w.text),
+    ['"q"#b'],
+  );
+});
+
+test("extglob patterns keep # as literal pattern data", () => {
+  // Bash matches `#b` against @(a|#b), so `#` is data here, not a comment.
+  const ast = parse('case "#b" in @(a|#b)) echo m;; esac');
+  assert.equal(ast.errors, undefined);
+  assert.equal(ast.commands[0].command.type, "Case");
+});
+
 test("array with command substitution", () => {
   const input = "x=($(seq 1 5))";
   const a = getAssign(input);
