@@ -1245,6 +1245,10 @@ export class Lexer {
     return this.nextState;
   }
 
+  get lastToken(): Token {
+    return this.current.token;
+  }
+
   next(ctx: LexContext = LexContext.Normal): TokenValue {
     if (this.hasPeek) {
       this.hasPeek = false;

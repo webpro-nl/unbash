@@ -19,6 +19,36 @@ test("brace group", () => {
   assert.equal(bg.body.commands.length, 2);
 });
 
+// Bash returns to command-start position after a compound command closes, so a reserved-word
+// terminator may follow with no `;` or newline. A simple command still needs the separator.
+test("reserved terminator follows a compound command without a separator", () => {
+  for (const source of [
+    "{ (echo a) }",
+    "{ [[ x == x ]] }",
+    "{ { echo a; } }",
+    "{ if true; then echo a; fi }",
+    "{ for i in a; do echo $i; done }",
+    "{ while false; do echo a; done }",
+    "{ case x in x) echo a;; esac }",
+    "{ ((1 + 1)) }",
+    "{ f() { echo a; } }",
+    "{ echo a | (cat) }",
+    "{ true && (echo a) }",
+    "{ ! (echo a) }",
+    "if true; then (echo a) fi",
+    "while false; do (echo a) done",
+  ]) {
+    assert.equal(parse(source).errors, undefined, source);
+  }
+});
+
+test("reserved terminator still needs a separator after a simple command", () => {
+  // Bash rejects each of these, so the terminator must stay unrecognized.
+  for (const source of ["{ echo a }", "{ (echo a) (echo b) }", "{ (echo a) echo b }", "{ (echo a) >/dev/null }"]) {
+    assert.notEqual(parse(source).errors, undefined, source);
+  }
+});
+
 test("deeply nested command substitutions", () => {
   const ast = parse("(echo $(echo $(echo deep)))");
   assert.ok(ast.commands.length > 0);

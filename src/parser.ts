@@ -232,6 +232,17 @@ listTerminators[Token.DoubleSemi] = 1;
 listTerminators[Token.SemiAmp] = 1;
 listTerminators[Token.DoubleSemiAmp] = 1;
 
+// After one of these Bash is at a command-start position, the only place a reserved-word
+// terminator may follow with no separator.
+const compoundClosers = new Uint8Array(37);
+compoundClosers[Token.RParen] = 1;
+compoundClosers[Token.RBrace] = 1;
+compoundClosers[Token.DblRBracket] = 1;
+compoundClosers[Token.Fi] = 1;
+compoundClosers[Token.Done] = 1;
+compoundClosers[Token.Esac] = 1;
+compoundClosers[Token.ArithCmd] = 1;
+
 const commandStarts = new Uint8Array(37);
 commandStarts[Token.Word] = 1;
 commandStarts[Token.Assignment] = 1;
@@ -427,7 +438,7 @@ class Parser {
     }
 
     for (;;) {
-      t = this.tok.peek(LexContext.Normal).token;
+      t = this.tok.peek(this.followCtx()).token;
       if (t !== Token.Semi && t !== Token.Newline && t !== Token.Amp) break;
       const isBackground = t === Token.Amp;
       const sepEnd = this.tok.next(LexContext.Normal).end;
@@ -616,9 +627,14 @@ class Parser {
     }
   }
 
+  // peek() caches, so whoever peeks first after a command ends fixes the context for it.
+  private followCtx(): LexContext {
+    return compoundClosers[this.tok.lastToken] ? LexContext.CommandStart : LexContext.Normal;
+  }
+
   private collectTrailingRedirects(): Redirect[] {
     let redirects: Redirect[] = EMPTY_REDIRECTS;
-    while (this.tok.peek(LexContext.Normal).token === Token.Redirect) {
+    while (this.tok.peek(this.followCtx()).token === Token.Redirect) {
       redirects = this.collectRedirect(redirects, LexContext.Normal);
     }
     return redirects;
