@@ -74,6 +74,27 @@ test("single quote inside double quotes is literal", () => {
   assert.equal(c.suffix[0].text, '"TEST1 \'TEST2"');
 });
 
+// Inside double quotes neither ANSI-C quoting nor locale strings are recognized, so `$'`
+// and `$"` are a literal dollar followed by the quote character.
+test("dollar-quote inside double quotes is literal", () => {
+  for (const [source, value] of [
+    [`echo "a$'b"`, "a$'b"],
+    [`echo "x$'y'z"`, "x$'y'z"],
+    [`echo "$'"`, "$'"],
+    [`echo "grep -E '^(a|b)$' || true"`, "grep -E '^(a|b)$' || true"],
+  ]) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    assert.equal(getCmd(ast).suffix[0].value, value, source);
+  }
+});
+
+test("ANSI-C quoting still decodes outside double quotes", () => {
+  const ast = parse("echo $'a\\tb'");
+  assert.equal(ast.errors, undefined);
+  assert.equal(getCmd(ast).suffix[0].value, "a\tb");
+});
+
 test("double quote inside single quotes is literal", () => {
   const c = getCmd(parse("echo 'TEST1 \"TEST2'"));
   assert.equal(c.suffix[0].text, "'TEST1 \"TEST2'");

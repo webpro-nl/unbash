@@ -2533,8 +2533,9 @@ export class Lexer {
       }
 
       if (ch === CH_DOLLAR) {
-        // $" inside double quotes is literal $ followed by closing " (not a locale string)
-        if (this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_DQUOTE) {
+        // Inside double quotes `$"` and `$'` are a literal $: no locale string, no ANSI-C quote.
+        const afterDollar = this.pos + 1 < len ? src.charCodeAt(this.pos + 1) : 0;
+        if (afterDollar === CH_DQUOTE || afterDollar === CH_SQUOTE) {
           if (bt) {
             text += "$";
             if (bp) litBuf += "$";
