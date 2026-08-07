@@ -27,10 +27,17 @@ import type {
 import { WordImpl } from "./word.ts";
 
 export function print(script: Script): string {
-  let out = "";
-  if (script.shebang) out += script.shebang + "\n\n";
-  out += stmts(script.commands, 0);
-  return out;
+  // Saved and restored, not cleared: a lazy getter can re-enter print(), and clearing would
+  // drop the outer call's pending heredocs.
+  const outerQueued = heredocQueue.length;
+  try {
+    let out = "";
+    if (script.shebang) out += script.shebang + "\n\n";
+    out += stmts(script.commands, 0);
+    return out;
+  } finally {
+    heredocQueue.length = outerQueued;
+  }
 }
 
 function isFunc(s: Statement): boolean {
@@ -48,26 +55,46 @@ function stmts(list: Statement[], indent: number): string {
 
 function stmt(s: Statement, indent: number): string {
   const pad = "  ".repeat(indent);
+  const queued = heredocQueue.length;
   let out = pad + printNode(s.command, indent);
   for (const r of s.redirects) out += " " + redir(r);
   if (s.background) out += " &";
-  out += heredocBodies(s);
-  return out;
+  return heredocQueue.length === queued ? out : flushHeredocs(out, queued);
 }
 
-function heredocBodies(s: Statement): string {
-  let out = "";
-  if (s.command.type === "Command") {
-    for (const r of s.command.redirects) out += heredocBody(r);
+// Bash reads a heredoc body from the line after its `<<`. `redir` marks where it printed and
+// this drains each mark at the end of its own line, so reflowing cannot misplace a body.
+const HEREDOC_MARK = "\u0000";
+const heredocQueue: Redirect[] = [];
+
+function flushHeredocs(text: string, queued: number): string {
+  if (heredocQueue.length === queued) return text;
+  const pending = heredocQueue.splice(queued);
+  if (pending.length === 1 && text.endsWith(HEREDOC_MARK)) {
+    return text.slice(0, -1) + "\n" + pending[0].content + delimName(pending[0]);
   }
-  for (const r of s.redirects) out += heredocBody(r);
-  return out;
-}
-
-function heredocBody(r: Redirect): string {
-  if (r.operator !== "<<" && r.operator !== "<<-") return "";
-  if (r.content == null) return "";
-  return "\n" + r.content + delimName(r);
+  let out = "";
+  let copied = 0;
+  let next = 0;
+  let mark = text.indexOf(HEREDOC_MARK);
+  while (mark !== -1) {
+    let lineEnd = text.indexOf("\n", mark);
+    if (lineEnd === -1) lineEnd = text.length;
+    let marks = 0;
+    while (mark !== -1 && mark < lineEnd) {
+      out += text.slice(copied, mark);
+      copied = mark + 1;
+      marks++;
+      mark = text.indexOf(HEREDOC_MARK, copied);
+    }
+    out += text.slice(copied, lineEnd);
+    copied = lineEnd;
+    // `content` already ends in a newline, so this lands the delimiter on its own line.
+    for (; marks > 0 && next < pending.length; marks--, next++) {
+      out += "\n" + pending[next].content + delimName(pending[next]);
+    }
+  }
+  return out + text.slice(copied);
 }
 
 function delimName(r: Redirect): string {
@@ -443,6 +470,10 @@ function redir(r: Redirect): string {
   if (r.target) {
     if (r.operator !== "<&" && r.operator !== ">&") out += " ";
     out += redirectTarget(r);
+  }
+  if (r.content != null && (r.operator === "<<" || r.operator === "<<-")) {
+    heredocQueue.push(r);
+    out += HEREDOC_MARK;
   }
   return out;
 }

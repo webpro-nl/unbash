@@ -351,3 +351,94 @@ reparsesClean("background", "sleep 10 &");
 reparsesClean("complex", 'if [[ -f "$file" ]]; then cat "$file" | grep pattern > out; else echo missing; fi');
 reparsesClean("arithmetic for", "for ((i=0; i<10; i++)); do echo $i; done");
 reparsesClean("coproc", "coproc myproc { echo hello; }");
+
+// --- Heredoc body placement ---
+
+// Bash reads a heredoc body from the line after the one holding `<<`, so a redirect nested in
+// a pipeline, and-or list, inline subshell or loop/if condition must still flush its body
+// before the next line starts.
+test("heredoc bodies survive nesting and print where bash expects them", () => {
+  for (const [source, expected] of [
+    ["cat <<'PY' | tr a-z A-Z\nbody\nPY", "cat << 'PY' | tr a-z A-Z\nbody\nPY"],
+    ["cat <<'PY' && echo ok\nbody\nPY", "cat << 'PY' && echo ok\nbody\nPY"],
+    ["(cat <<'PY'\nbody\nPY\n)", "(cat << 'PY')\nbody\nPY"],
+    ["if cat <<'PY'; then\nbody\nPY\n  echo ran\nfi", "if cat << 'PY'; then\nbody\nPY\n  echo ran\nfi"],
+    ["while cat <<'PY'; do\nbody\nPY\n  break\ndone", "while cat << 'PY'; do\nbody\nPY\n  break\ndone"],
+    ["until cat <<'PY'; do\nbody\nPY\n  break\ndone", "until cat << 'PY'; do\nbody\nPY\n  break\ndone"],
+  ]) {
+    assert.equal(fmt(source), expected, source);
+  }
+});
+
+test("multiple heredocs in one condition keep source order", () => {
+  assert.equal(
+    fmt("if cat <<'A' && cat <<'B'; then\naaa\nA\nbbb\nB\n  echo ran\nfi"),
+    "if cat << 'A' && cat << 'B'; then\naaa\nA\nbbb\nB\n  echo ran\nfi",
+  );
+});
+
+test("condition and body heredocs each flush at their own line", () => {
+  assert.equal(
+    fmt("if cat <<'A'; then\naaa\nA\n  cat <<'B'\nbbb\nB\nfi"),
+    "if cat << 'A'; then\naaa\nA\n  cat << 'B'\nbbb\nB\nfi",
+  );
+});
+
+test("heredoc in an elif condition flushes after its then", () => {
+  assert.equal(
+    fmt("if false; then\n  echo no\nelif cat <<'PY'; then\nbody\nPY\n  echo ran\nfi"),
+    "if false; then\n  echo no\nelif cat << 'PY'; then\nbody\nPY\n  echo ran\nfi",
+  );
+});
+
+// A multi-line compound in the same pipeline pushes the statement onto several lines, but the
+// earlier `<<` still sits on the first one; a redirect attached after that compound does not.
+test("heredoc bodies flush at the line their redirect prints on", () => {
+  assert.equal(
+    fmt("cat <<'A' | while read -r l; do echo \"$l\"; done\naaa\nA"),
+    "cat << 'A' | while read -r l; do\naaa\nA\n  echo \"$l\"\ndone",
+  );
+  assert.equal(fmt("cat <<'A' | { cat <<'B'; }\naaa\nA\nbbb\nB"), "cat << 'A' | {\naaa\nA\n  cat << 'B'\nbbb\nB\n}");
+  assert.equal(
+    fmt("while read -r l; do echo \"$l\"; done <<'A'\naaa\nA"),
+    "while read -r l; do\n  echo \"$l\"\ndone << 'A'\naaa\nA",
+  );
+  assert.equal(
+    fmt("cat <<'A' | while read -r l; do echo \"$l\"; done <<'B'\naaa\nA\nbbb\nB"),
+    "cat << 'A' | while read -r l; do\naaa\nA\n  echo \"$l\"\ndone << 'B'\nbbb\nB",
+  );
+});
+
+test("printing is idempotent for nested heredocs", () => {
+  for (const source of [
+    "cat <<'PY' | tr a-z A-Z\nbody\nPY",
+    "if cat <<'PY'; then\nbody\nPY\n  echo ran\nfi",
+    "cat <<'A' | while read -r l; do echo \"$l\"; done\naaa\nA",
+    "cat <<'A' | while read -r l; do echo \"$l\"; done <<'B'\naaa\nA\nbbb\nB",
+  ]) {
+    const once = fmt(source);
+    assert.equal(print(parse(once)), once, source);
+  }
+});
+
+// A lazy getter on a consumer-built AST can re-enter print() midway through an outer print.
+// The inner call must not consume the outer call's pending heredocs.
+test("re-entrant print does not steal pending heredoc bodies", () => {
+  const inner = parse("echo nested");
+  const outer = parse("cat <<'EOF' | tee f\nbody\nEOF");
+  const pipeline = outer.commands[0].command;
+  assert.equal(pipeline.type, "Pipeline");
+  const second = pipeline.type === "Pipeline" ? (pipeline.commands[1] as { name?: unknown }) : undefined;
+  const realName = second!.name;
+  Object.defineProperty(second!, "name", {
+    configurable: true,
+    get() {
+      print(inner);
+      return realName;
+    },
+  });
+
+  const printed = print(outer);
+  assert.equal(printed, "cat << 'EOF' | tee f\nbody\nEOF");
+  assert.ok(!printed.includes(String.fromCharCode(0)), "marker must not leak into output");
+});
