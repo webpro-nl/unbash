@@ -364,6 +364,8 @@ class Parser {
       if (unexpected.token === Token.EOF) break;
 
       this.error(`unexpected token '${unexpected.value}'`, unexpected.pos);
+      // `In` cannot join `listTerminators`: `list()` shares it, and `in` must not terminate a
+      // list inside `for`/`case`.
       if (!listTerminators[unexpected.token] && unexpected.token !== Token.In) break;
 
       this.tok.next(LexContext.CommandStart);
@@ -382,6 +384,7 @@ class Parser {
       const errors = (this.errors ??= []);
       for (let i = 0; i < lexerErrors.length; i++) errors.push(lexerErrors[i]);
     }
+    if (this.errors !== null && this.errors.length > 1) this.errors.sort((a, b) => a.pos - b.pos);
     const result = {
       type: "Script",
       pos: start,

@@ -133,8 +133,8 @@ test("unclosed ANSI-C quote terminates at end of input", () => {
 test("unclosed ANSI-C quotes inside parameter expansions collect both errors", () => {
   const ast = parse("echo ${x:-$'abc}");
   assert.deepEqual(ast.errors, [
-    { message: "unterminated ANSI-C quote", pos: 11 },
     { message: "unterminated parameter expansion", pos: 5 },
+    { message: "unterminated ANSI-C quote", pos: 11 },
   ]);
 });
 
@@ -325,4 +325,24 @@ test("unclosed command substitution keeps the inner command name intact", () => 
   const word = ast.commands[0].command.suffix[0];
   const part = word.parts.find((p) => p.type === "CommandExpansion");
   assert.equal(part.script.commands[0].command.name.text, "foo");
+});
+
+test("errors are ordered by source position", () => {
+  // Recovery and lexer errors are appended after earlier parser errors, so the list has to
+  // be sorted before it is handed to consumers.
+  const ast = parse("for i 'in' a; do echo $i; done");
+  const positions = ast.errors!.map((e) => e.pos);
+  assert.deepEqual(
+    positions,
+    [...positions].sort((a, b) => a - b),
+    JSON.stringify(ast.errors),
+  );
+
+  const mixed = parse("safe\nfi; echo ok\n;;\necho done");
+  const mixedPositions = mixed.errors!.map((e) => e.pos);
+  assert.deepEqual(
+    mixedPositions,
+    [...mixedPositions].sort((a, b) => a - b),
+    JSON.stringify(mixed.errors),
+  );
 });
