@@ -148,6 +148,42 @@ test("valid compound commands have no errors", () => {
   assert.equal(ast.errors, undefined);
 });
 
+test("unexpected root list terminators collect errors and recover", () => {
+  for (const terminator of ["then", "else", "elif", "fi", "do", "done", "in", "esac", ")", "}", ";;", ";&", ";;&"]) {
+    const source = `safe\n${terminator}; recovered`;
+    const ast = parse(source);
+
+    assert.deepEqual(
+      ast.errors,
+      [{ message: `unexpected token '${terminator}'`, pos: source.indexOf(terminator) }],
+      source,
+    );
+    assert.equal(ast.commands.length, 2, source);
+    assert.equal(ast.commands[0].command.type === "Command" && ast.commands[0].command.name?.value, "safe", source);
+    assert.equal(
+      ast.commands[1].command.type === "Command" && ast.commands[1].command.name?.value,
+      "recovered",
+      source,
+    );
+  }
+});
+
+test("valid trailing separators, comments, and whitespace reach EOF", () => {
+  for (const source of ["safe;", "safe &", "safe\n", "safe; # comment\n\n\t# final comment"]) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    assert.equal(ast.commands.length, 1, source);
+  }
+});
+
+test("root recovery appends large statement lists without exceeding the argument limit", () => {
+  const statementCount = 130_000;
+  const ast = parse("fi;\n" + "x\n".repeat(statementCount));
+
+  assert.deepEqual(ast.errors, [{ message: "unexpected token 'fi'", pos: 0 }]);
+  assert.equal(ast.commands.length, statementCount);
+});
+
 test("trailing command operators collect errors", () => {
   for (const operator of ["&&", "||", "|", "|&"]) {
     const source = `echo ${operator}`;

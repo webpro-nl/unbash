@@ -306,6 +306,8 @@ test("compound recovery tracks command prefixes before compound bodies", () => {
     "time -p ( echo timed )",
     "time -p -- { echo timed; }",
     "time coproc worker { echo coproc; }",
+    "ti\\" + "\nme -p { echo timed; }",
+    "coproc worker ti\\" + "\nme -p { echo timed; }",
   ]) {
     const ast = parse(`${nestedBraceGroups(2_000, body)}; echo after`);
 

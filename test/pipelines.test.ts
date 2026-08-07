@@ -123,6 +123,47 @@ test("time with negation", () => {
   assert.equal(p.negated, true);
 });
 
+test("time allows unquoted backslash-newline continuations", () => {
+  const cases: [string, boolean | undefined, number][] = [
+    ["ti\\" + "\nme echo", undefined, 1],
+    ["time\\" + "\n -p echo", undefined, 1],
+    ["ti\\" + "\nme ! echo", true, 1],
+    ["ti\\" + "\nme echo | cat", undefined, 2],
+  ];
+  for (const [source, negated, commandCount] of cases) {
+    const ast = parse(source);
+    const pipeline = ast.commands[0].command;
+
+    assert.equal(pipeline.type, "Pipeline", source);
+    assert.equal(pipeline.type === "Pipeline" && pipeline.time, true, source);
+    assert.equal(pipeline.type === "Pipeline" && pipeline.negated, negated, source);
+    assert.equal(pipeline.type === "Pipeline" && pipeline.commands.length, commandCount, source);
+    assert.equal(ast.errors, undefined, source);
+  }
+});
+
+test("quoted and escaped time spellings remain command names", () => {
+  for (const source of [
+    "'time' echo",
+    '"time" echo',
+    "$'time' echo",
+    '$"time" echo',
+    "ti$''me echo",
+    "\\time echo",
+    "t\\ime echo",
+    "ti'me' echo",
+    'ti"me" echo',
+  ]) {
+    const ast = parse(source);
+    const command = ast.commands[0].command;
+
+    assert.equal(command.type, "Command", source);
+    assert.equal(command.type === "Command" && command.name?.value, "time", source);
+    assert.deepEqual(command.type === "Command" && command.suffix.map((word) => word.value), ["echo"], source);
+    assert.equal(ast.errors, undefined, source);
+  }
+});
+
 test("time alone produces a node", () => {
   const ast = parse("time");
   assert.equal(ast.commands.length, 1);
