@@ -1736,7 +1736,7 @@ export class Lexer {
     }
 
     if (ctx === LexContext.CommandStart) {
-      if (!hasExpansions && !quoted) {
+      if (keywordEligible) {
         if (raw) {
           if (wordLen <= 8) {
             const reserved = matchReservedWord(src, tokenStart, wordLen);
@@ -1794,7 +1794,7 @@ export class Lexer {
         return;
       }
     }
-    if (!hasExpansions && !quoted) {
+    if (keywordEligible) {
       if (raw) {
         if (
           wordLen === 2 &&
