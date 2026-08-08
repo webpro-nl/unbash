@@ -573,6 +573,43 @@ test("[[ ]] does not eat < as redirection", () => {
   assert.equal((expr.commands[1] as import("../src/types.ts").Command).name?.text, "echo");
 });
 
+// Inside [[ ]] a bare < or > is a string comparison, but `<(` and `>(` still open a process
+// substitution. The distinction is purely lexical: bash requires the paren to be adjacent.
+test("[[ ]] reads <( and >( as process substitution", () => {
+  for (const [source, text] of [
+    ["[[ -f <(echo x) ]]", "<(echo x)"],
+    ["[[ -f >(cat) ]]", ">(cat)"],
+  ]) {
+    const tc = getTest(source);
+    assert.equal(parse(source).errors, undefined, source);
+    const operand = unary(tc.expression).operand;
+    assert.equal(operand.text, text, source);
+    assert.deepEqual(
+      computeWordParts(source, operand)?.map((p) => p.type),
+      ["ProcessSubstitution"],
+      source,
+    );
+  }
+
+  const tc = getTest("[[ <(a) == <(b) ]]");
+  assert.equal(binary(tc.expression).operator, "==");
+  assert.equal(binary(tc.expression).left.text, "<(a)");
+  assert.equal(binary(tc.expression).right.text, "<(b)");
+});
+
+test("[[ ]] keeps a non-adjacent < or > as a comparison operator", () => {
+  for (const source of ["[[ a < b ]]", "[[ a <b ]]", "[[ a > b ]]"]) {
+    const tc = getTest(source);
+    assert.equal(parse(source).errors, undefined, source);
+    assert.equal(binary(tc.expression).left.text, "a", source);
+    assert.equal(binary(tc.expression).right.text, "b", source);
+  }
+  // bash rejects both of these: an operand where an operator belongs.
+  for (const source of ["[[ a <(b) ]]", "[[ a < (b) ]]"]) {
+    assert.notEqual(parse(source).errors, undefined, source);
+  }
+});
+
 test("[[ ]] with =~ regex", () => {
   const ast = parse("[[ ${1} =~ \\.(lisp|lsp|cl)$ ]]");
   const tc = ast.commands[0].command as import("../src/types.ts").TestCommand;

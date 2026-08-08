@@ -1320,8 +1320,13 @@ export class Lexer {
       return;
     }
 
-    // In test mode (inside [[ ]]), < and > are string comparison operators, not redirects
-    if (ctx === LexContext.TestMode && (ch === CH_LT || ch === CH_GT)) {
+    // In test mode (inside [[ ]]), < and > are string comparison operators, not redirects —
+    // except for an adjacent '(', which still opens a process substitution
+    if (
+      ctx === LexContext.TestMode &&
+      (ch === CH_LT || ch === CH_GT) &&
+      !(this.pos + 1 < this.srcEnd && src.charCodeAt(this.pos + 1) === CH_LPAREN)
+    ) {
       this.pos++;
       setToken(out, Token.Word, ch === CH_LT ? "<" : ">", tokenStart, this.pos);
       return;
