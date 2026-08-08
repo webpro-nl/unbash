@@ -2717,6 +2717,25 @@ export class Lexer {
       return;
     }
 
+    // $[ expr ] is bash's deprecated spelling of $(( expr )). It runs to the matching ']',
+    // so parentheses inside belong to the expansion instead of ending the word.
+    if (ch === CH_LBRACKET) {
+      const close = this.findClosingBracket(this.pos + 1);
+      if (close !== -1) {
+        const bodyStart = this.pos + 1;
+        const body = src.slice(bodyStart, close);
+        this.pos = close + 1;
+        const text = bt ? src.slice(dollarPos, this.pos) : "";
+        this._resultText = text;
+        this._resultIsRaw = true;
+        this._resultHasExpansion = false;
+        this._resultPart = this._buildParts
+          ? { type: "ArithmeticExpansion", text, expression: this.buildArithmeticExpression(body, bodyStart) }
+          : undefined;
+        return;
+      }
+    }
+
     this._resultText = "$";
     this._resultIsRaw = true;
     this._resultHasExpansion = false;
@@ -2810,36 +2829,39 @@ export class Lexer {
     this._resultText = text;
     this._resultIsRaw = true;
     this._resultHasExpansion = false;
-    if (this._buildParts) {
-      // Pass the absolute body offset so arithmetic nodes index the original source
-      // directly (no re-basing). Nested $(...) command subs inside the arithmetic get
-      // an absolute innerStart so resolveCollected parses their window in place.
-      let expr: import("./types.ts").ArithmeticExpression | undefined;
-      if (hasEmbeddedWordStructure(this.src, bodyStart, bodyStart + body.length)) {
-        const commandExpansions: import("./types.ts").ArithmeticCommandExpansion[] = [];
-        const embeddedWords: import("./types.ts").ArithmeticWord[] = [];
-        expr =
-          parseArithmeticExpression(body, bodyStart, {
-            commandExpansions,
-            embeddedWords,
-            findClosingBracket: (start, end) => this.findClosingBracket(start, end),
-            findClosingBrace: (start, end) => this.findClosingBrace(start, end),
-            findClosingParenthesis: (start, end) => this.findClosingParenthesis(start, end),
-            findArithmeticExpansionEnd: (start, end) => this.findArithmeticExpansionEnd(start, end),
-            findArithmeticWordEnd: (start, end) => this.findArithmeticWordEnd(start, end),
-          }) ?? undefined;
-        for (const node of commandExpansions) {
-          node.innerStart = node.pos + 2;
-          this.collect(node);
-        }
-        for (const node of embeddedWords) node.parts = this.parseSubFieldWord(node.pos, node.end).parts;
-      } else {
-        expr = parseArithmeticExpression(body, bodyStart) ?? undefined;
-      }
-      this._resultPart = { type: "ArithmeticExpansion", text, expression: expr };
-    } else {
-      this._resultPart = undefined;
+    this._resultPart = this._buildParts
+      ? { type: "ArithmeticExpansion", text, expression: this.buildArithmeticExpression(body, bodyStart) }
+      : undefined;
+  }
+
+  // Pass the absolute body offset so arithmetic nodes index the original source directly
+  // (no re-basing). Nested $(...) command subs inside the arithmetic get an absolute
+  // innerStart so resolveCollected parses their window in place.
+  private buildArithmeticExpression(
+    body: string,
+    bodyStart: number,
+  ): import("./types.ts").ArithmeticExpression | undefined {
+    if (!hasEmbeddedWordStructure(this.src, bodyStart, bodyStart + body.length)) {
+      return parseArithmeticExpression(body, bodyStart) ?? undefined;
     }
+    const commandExpansions: import("./types.ts").ArithmeticCommandExpansion[] = [];
+    const embeddedWords: import("./types.ts").ArithmeticWord[] = [];
+    const expr =
+      parseArithmeticExpression(body, bodyStart, {
+        commandExpansions,
+        embeddedWords,
+        findClosingBracket: (start, end) => this.findClosingBracket(start, end),
+        findClosingBrace: (start, end) => this.findClosingBrace(start, end),
+        findClosingParenthesis: (start, end) => this.findClosingParenthesis(start, end),
+        findArithmeticExpansionEnd: (start, end) => this.findArithmeticExpansionEnd(start, end),
+        findArithmeticWordEnd: (start, end) => this.findArithmeticWordEnd(start, end),
+      }) ?? undefined;
+    for (const node of commandExpansions) {
+      node.innerStart = node.pos + 2;
+      this.collect(node);
+    }
+    for (const node of embeddedWords) node.parts = this.parseSubFieldWord(node.pos, node.end).parts;
+    return expr;
   }
 
   private readArithmeticCommand(out: TokenValue, tokenStart: number): void {

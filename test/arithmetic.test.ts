@@ -754,3 +754,28 @@ test("command substitution in arithmetic for loop", () => {
   assert.equal(testRight.type, "ArithmeticCommandExpansion");
   assert.ok(testRight.script);
 });
+
+// `$[ expr ]` is bash's deprecated spelling of `$(( expr ))`. Bash scans to the matching
+// `]`, so parentheses inside are part of the expansion rather than word delimiters.
+test("deprecated $[ ] arithmetic expansion", () => {
+  for (const source of ["echo $[1+2]", "echo $[(1+2)*3]", "echo $[((a+b)*(c-d))/e]", "echo $[ (1) ]"]) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    const word = getCmd(ast).suffix[0];
+    assert.equal(word.text, source.slice(5), source);
+    const part = computeWordParts(source, word)![0];
+    assert.equal(part.type, "ArithmeticExpansion", source);
+    assert.equal(part.type === "ArithmeticExpansion" && part.text, source.slice(5), source);
+  }
+});
+
+test("deprecated $[ ] keeps nested substitutions structured", () => {
+  const src = "echo $[$(one)+$(two)]";
+  const part = computeWordParts(src, getCmd(parse(src)).suffix[0])![0];
+  assert.equal(part.type, "ArithmeticExpansion");
+  if (part.type !== "ArithmeticExpansion") return;
+  const bin = part.expression as ArithmeticBinary;
+  assert.equal(bin.type, "ArithmeticBinary");
+  assert.equal((bin.left as ArithmeticCommandExpansion).text, "$(one)");
+  assert.equal((bin.right as ArithmeticCommandExpansion).text, "$(two)");
+});
