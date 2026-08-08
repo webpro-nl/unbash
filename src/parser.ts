@@ -862,6 +862,10 @@ class Parser {
     }
     this.skipSemi();
     this.skipNewlines(LexContext.CommandStart);
+    if (this.tok.peek(LexContext.CommandStart).token === Token.LBrace) {
+      const bg = this.braceGroup();
+      return { type: "For", pos, end: bg.end, name, wordlist, body: bg.body } satisfies For;
+    }
     if (!this.accept(Token.Do, LexContext.CommandStart)) this.error("expected 'do'", this.tok.getPos());
 
     if (this.syntaxDepth === MAX_SYNTAX_NESTING) {
@@ -1069,6 +1073,10 @@ class Parser {
     }
     this.skipSemi();
     this.skipNewlines(LexContext.CommandStart);
+    if (this.tok.peek(LexContext.CommandStart).token === Token.LBrace) {
+      const bg = this.braceGroup();
+      return { type: "Select", pos, end: bg.end, name, wordlist, body: bg.body } satisfies Select;
+    }
     if (!this.accept(Token.Do, LexContext.CommandStart)) this.error("expected 'do'", this.tok.getPos());
 
     if (this.syntaxDepth === MAX_SYNTAX_NESTING) {

@@ -86,6 +86,31 @@ test("for loop", () => {
   assert.equal(f.body.commands.length, 1);
 });
 
+// Bash accepts `{ list; }` in place of `do list done` for `for`, arithmetic `for` and
+// `select` — and only those; `while`, `until` and `if` reject it. The tree is the same as
+// the do/done form, so the brace group does not survive as a node.
+test("brace group as a loop body", () => {
+  const cases = [
+    "for x in a b; { echo $x; }",
+    "for x in a b\n{ echo $x; }",
+    "for (( i=0; i<2; i++ )); { echo $i; }",
+    "select x in a b; { echo $x; }",
+  ];
+  for (const source of cases) {
+    const ast = parse(source);
+    const command = ast.commands[0].command as For;
+    assert.equal(ast.errors, undefined, source);
+    assert.equal(command.body.commands.length, 1, source);
+    assert.equal(command.end, source.length, source);
+  }
+});
+
+test("brace group is not a loop body for while, until or if", () => {
+  for (const source of ["while true; { break; }", "until true; { break; }", "if true; { :; }"]) {
+    assert.notEqual(parse(source).errors, undefined, source);
+  }
+});
+
 test("C-style for loop produces ArithmeticFor", () => {
   const ast = parse("for (( c=1; c<=5; c++ )); do echo $c; done");
   assert.equal(ast.commands.length, 1);
