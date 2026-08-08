@@ -400,3 +400,33 @@ test("parentheses inside a case inside $() stay balanced", () => {
     verify(source, ast);
   }
 });
+
+// `$((` opens an arithmetic expansion only when the inner parenthesis pair is immediately
+// followed by `)`, the same lexical rule bash uses for a `((` command. Otherwise it is a
+// command substitution whose body happens to start with a subshell: `$((echo hi) 2>/dev/null)`
+// prints hi.
+test("$(( is a command substitution unless the inner pair closes it", () => {
+  const arithmetic = ["echo $((1+2))", "echo $(((1)))", "echo $(( (1) ))", "echo $((16#ff))"];
+  for (const source of arithmetic) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    assert.deepEqual(
+      wp(source, getCmd(ast).suffix[0])?.map((p) => p.type),
+      ["ArithmeticExpansion"],
+      source,
+    );
+  }
+
+  const substitutions: [string, string][] = [
+    ["echo $((echo hi) 2>/dev/null)", "Subshell"],
+    ["echo $((a) || (b))", "AndOr"],
+    ["echo $((a); b)", "Subshell"],
+  ];
+  for (const [source, inner] of substitutions) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    const part = wp(source, getCmd(ast).suffix[0])?.[0];
+    assert.equal(part?.type, "CommandExpansion", source);
+    assert.equal(part?.type === "CommandExpansion" && part.script?.commands[0].command.type, inner, source);
+  }
+});

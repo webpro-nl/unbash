@@ -1401,8 +1401,11 @@ export class Lexer {
         return true;
       case CH_LPAREN:
         if (ctx === LexContext.CommandStart && next === CH_LPAREN) {
+          const savedErrors = this.errors.length;
           this.readArithmeticCommand(out, tokenStart);
-          return true;
+          if (!this._notArithmetic) return true;
+          this.errors.length = savedErrors;
+          this.pos = tokenStart;
         }
         this.pos++;
         setToken(out, Token.LParen, "(", tokenStart, this.pos);
@@ -1732,6 +1735,9 @@ export class Lexer {
   // Set by extractBalanced when the input ended before the closing paren, so
   // callers can report the construct they were scanning.
   private _unbalanced = false;
+  // Set by scanArithmeticBody when the construct turns out not to be arithmetic, so the
+  // caller can re-read it as a subshell or command substitution instead.
+  private _notArithmetic = false;
   private _dqText = "";
   private _dqHasExpansions = false;
   private _dqParts: DoubleQuotedChild[] | null = null;
@@ -2623,8 +2629,12 @@ export class Lexer {
 
     if (ch === CH_LPAREN) {
       if (this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
+        const savedPos = this.pos;
+        const savedErrors = this.errors.length;
         this.readArithmeticExpansion();
-        return;
+        if (!this._notArithmetic) return;
+        this.errors.length = savedErrors;
+        this.pos = savedPos;
       }
       this.readCommandSubstitution();
       return;
@@ -2743,6 +2753,7 @@ export class Lexer {
   }
 
   private scanArithmeticBody(): string {
+    this._notArithmetic = false;
     this.pos += 2;
     let depth = 1;
     let parenDepth = 0;
@@ -2815,6 +2826,12 @@ export class Lexer {
         }
         parenDepth = depth === 1 ? parentParenDepth : parenDepths!.pop()!;
         this.pos += 2;
+      } else if (c === CH_RPAREN && depth === 1) {
+        // Bash reads `((` and `$((` as arithmetic only when the inner parenthesis pair is
+        // immediately followed by `)`. It closed without one, so `((a) )` is nested subshells
+        // and `$((a) || (b))` a command substitution; callers re-read from the start.
+        this._notArithmetic = true;
+        return "";
       } else {
         this.pos++;
       }
@@ -2825,6 +2842,7 @@ export class Lexer {
   private readArithmeticExpansion(): void {
     const bodyStart = this.pos + 2; // absolute offset of the body, past the "((" at this.pos
     const body = this.scanArithmeticBody();
+    if (this._notArithmetic) return;
     const text = this._buildParts || this._buildValue ? "$((" + body + "))" : "";
     this._resultText = text;
     this._resultIsRaw = true;

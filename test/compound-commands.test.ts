@@ -336,3 +336,36 @@ test("coproc without name — pipe goes to outer pipeline", () => {
   assert.equal(pl.commands[0].type, "Coproc");
   assert.equal((pl.commands[1] as Command).name?.text, "bar");
 });
+
+// `((` opens an arithmetic command only when the inner parenthesis pair is immediately
+// followed by `)`. Otherwise bash reads two nested subshells, so `((a) )` and
+// `((a) || (b))` are subshells while `((a))` and `(((a)))` are arithmetic.
+test("(( is arithmetic only when the inner pair closes it", () => {
+  const cases: [string, "ArithmeticCommand" | "Subshell"][] = [
+    ["((a))", "ArithmeticCommand"],
+    ["(( a ))", "ArithmeticCommand"],
+    ["(((a)))", "ArithmeticCommand"],
+    ["(( (a) ))", "ArithmeticCommand"],
+    ["((a) )", "Subshell"],
+    ["((a) || (b))", "Subshell"],
+    ["((a); b)", "Subshell"],
+    ["((a)|(b))", "Subshell"],
+    ["((echo 1); echo 2)", "Subshell"],
+  ];
+  for (const [head, type] of cases) {
+    const source = `${head}; z`;
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    assert.equal(ast.commands[0].command.type, type, source);
+    assert.equal(ast.commands[0].end, head.length, source);
+    assert.equal(ast.commands.length, 2, source);
+  }
+});
+
+test("(( subshells keep their clause boundary in a loop or conditional head", () => {
+  for (const source of ["if ((a) || (b)); then :; fi", "while ((t) ); do :; done"]) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    assert.equal(ast.commands[0].end, source.length, source);
+  }
+});
