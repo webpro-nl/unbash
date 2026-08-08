@@ -638,3 +638,30 @@ test("mixed test and [ with logical ops", () => {
   const ast = parse("test -d /tmp && [ -f /tmp/lock ] && echo locked");
   assert.ok(ast.commands.length > 0);
 });
+
+test("conditional operators are recognized only as written", () => {
+  // Bash matches [[ ]] operators against the literal word, so any quoting or expansion
+  // makes them ordinary operands: `[[ '-f' == $v ]]` compares strings, and bare
+  // `[[ -f == $v ]]` is a syntax error because -f consumes `==` as its operand.
+  for (const [source, shape] of [
+    ["[[ -f /etc/hosts ]]", "TestUnary:-f"],
+    ["[[ '-f' == $v ]]", "TestBinary:=="],
+    ['[[ "-f" == $v ]]', "TestBinary:=="],
+    ["[[ \\-f == $v ]]", "TestBinary:=="],
+    ["[[ $op == $v ]]", "TestBinary:=="],
+    ["[[ '-f' ]]", "TestUnary:-n"],
+    ["[[ a < b ]]", "TestBinary:<"],
+    ["[[ a == a ]]", "TestBinary:=="],
+    ["[[ 1 -eq 1 ]]", "TestBinary:-eq"],
+  ] as const) {
+    const command = parse(source).commands[0].command as TestCommand;
+    const expression = command.expression as TestUnaryExpression | TestBinaryExpression;
+    assert.equal(`${expression.type}:${expression.operator}`, shape, source);
+    assert.equal(parse(source).errors, undefined, source);
+  }
+});
+
+test("a quoted binary operator is not an operator", () => {
+  assert.ok(parse("[[ a '==' a ]]").errors);
+  assert.ok(parse('[[ a "-eq" a ]]').errors);
+});

@@ -1339,6 +1339,7 @@ export class Lexer {
     ) {
       this.pos++;
       setToken(out, Token.Word, ch === CH_LT ? "<" : ">", tokenStart, this.pos);
+      out.keywordEligible = true; // written unquoted, so it is the comparison operator
       return;
     }
 

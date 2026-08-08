@@ -1215,8 +1215,10 @@ class Parser {
     const firstPos = first.pos;
     const firstEnd = first.end;
 
-    // Unary test: -op word
-    if (UNARY_TEST_OPS[val] === 1) {
+    // Unary test: -op word. Conditional operators are recognized only as written, so a
+    // quoted or expanded spelling is an ordinary operand: `[[ '-f' == $var ]]` compares
+    // strings, while `[[ -f == $var ]]` is the syntax error bash reports.
+    if (first.keywordEligible && UNARY_TEST_OPS[val] === 1) {
       const nt = this.tok.peek(LexContext.TestMode).token;
       if (nt === Token.Word) {
         const operand = this.readWord(LexContext.TestMode);
@@ -1232,7 +1234,7 @@ class Parser {
 
     // Check for binary op
     const nt = this.tok.peek(LexContext.TestMode);
-    if (nt.token === Token.Word && BINARY_TEST_OPS[nt.value] === 1) {
+    if (nt.token === Token.Word && nt.keywordEligible && BINARY_TEST_OPS[nt.value] === 1) {
       const op = this.tok.next(LexContext.TestMode).value;
       let right: Word;
       if (op === "=~") {
