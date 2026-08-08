@@ -3500,8 +3500,9 @@ export class Lexer {
         break;
       } else if (
         c === 99 /* c */ &&
-        // Ensure word start boundary (not inside e.g. "lowercase")
-        (this.pos === start || (src.charCodeAt(this.pos - 1) < 128 && charType[src.charCodeAt(this.pos - 1)] !== 0)) &&
+        // Ensure word start boundary (not inside e.g. "lowercase"). Only a metacharacter
+        // ends a word — `{`, `"` and `$` do not, so `{case` is one word and not a keyword.
+        (this.pos === start || (src.charCodeAt(this.pos - 1) < 128 && charType[src.charCodeAt(this.pos - 1)] & 1)) &&
         this.pos + 3 < len &&
         src.charCodeAt(this.pos + 1) === 97 /* a */ &&
         src.charCodeAt(this.pos + 2) === 115 /* s */ &&
@@ -3607,7 +3608,11 @@ export class Lexer {
         }
         if (this.pos > wStart) {
           const wLen = this.pos - wStart;
-          if (wLen === 4) {
+          // A run only starts a word when what precedes it is a metacharacter. `{`, quotes
+          // and `$` merely broke the run, so `{case`, `"x"case` and `$xcase` are single
+          // words in which `case` is not a keyword.
+          const prev = wStart > start ? src.charCodeAt(wStart - 1) : 0;
+          if (wLen === 4 && (wStart === start || (prev < 128 && charType[prev] & 1))) {
             const c0 = src.charCodeAt(wStart);
             if (
               c0 === 99 &&

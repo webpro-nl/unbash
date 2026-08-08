@@ -430,3 +430,17 @@ test("$(( is a command substitution unless the inner pair closes it", () => {
     assert.equal(part?.type === "CommandExpansion" && part.script?.commands[0].command.type, inner, source);
   }
 });
+
+test("case is a keyword in a substitution only at a real word boundary", () => {
+  // Only a metacharacter ends a word, so `{case`, `"x"case` and `$xcase` are single words
+  // and bash reports them as command-not-found rather than opening a case statement.
+  for (const source of ['"$({case x in)"', "$({case x in)", "$(x{case x in)", "$($case x in)", '$("x"case x in)'])
+    assert.equal(parse(source).errors, undefined, source);
+
+  // A genuine case statement still tracks, so its `)` does not close the substitution.
+  for (const source of ["$(case x in a) :;; esac)", "x=$(case v in (a) b;; esac)"])
+    assert.equal(parse(source).errors, undefined, source);
+
+  // And an unterminated one is still an error, as it is in bash.
+  assert.ok(parse("$(a\ncase x in)").errors);
+});
