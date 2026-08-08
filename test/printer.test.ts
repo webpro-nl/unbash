@@ -447,8 +447,28 @@ test("re-entrant print does not steal pending heredoc bodies", () => {
 // `if() { …; }` is a syntax error — so the printer cannot always emit the POSIX form.
 test("reserved-word function names print with the function keyword", () => {
   const reserved = [
-    "if", "then", "else", "elif", "fi", "do", "done", "for", "while", "until", "in",
-    "case", "esac", "function", "select", "coproc", "!", "{", "}", "time", "[[", "]]",
+    "if",
+    "then",
+    "else",
+    "elif",
+    "fi",
+    "do",
+    "done",
+    "for",
+    "while",
+    "until",
+    "in",
+    "case",
+    "esac",
+    "function",
+    "select",
+    "coproc",
+    "!",
+    "{",
+    "}",
+    "time",
+    "[[",
+    "]]",
   ];
   for (const name of reserved) {
     const source = `function ${name} { echo shadowed; }`;

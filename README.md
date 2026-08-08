@@ -124,9 +124,7 @@ verbatim nested substitutions share the caller's source, so their `pos`/`end`
 slice that source directly:
 
 ```js
-const nested = word.parts.find(
-  (part) => part.type === "CommandExpansion",
-).script;
+const nested = word.parts.find((part) => part.type === "CommandExpansion").script;
 const command = nested.commands[0].command;
 
 source.slice(command.pos, command.end); // exact nested command source
