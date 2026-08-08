@@ -475,3 +475,51 @@ test("assignments and redirects interleave in a command prefix", () => {
     ["arg"],
   );
 });
+
+test("an array subscript in assignment position runs to its matching bracket", () => {
+  // Bash reads a[...] as a matched pair there, so metacharacters inside are ordinary
+  // text: `a[1 + 2]=7` sets index 3, not three separate words.
+  for (const [source, index, value] of [
+    ["a[1 + 2]=7", "1 + 2", "7"],
+    ["a[3|4]=8", "3|4", "8"],
+    ["a[(1+2)*3]=9", "(1+2)*3", "9"],
+    ["a[x[(1)]]=9", "x[(1)]", "9"],
+    ["a[1 && 2]=9", "1 && 2", "9"],
+    ["a[1 > 2]=9", "1 > 2", "9"],
+    ['a["x y"]=9', '"x y"', "9"],
+  ] as const) {
+    const c = parse(source).commands[0].command as Command;
+    assert.equal(c.prefix.length, 1, source);
+    assert.equal(c.prefix[0].type, "Assignment", source);
+    if (c.prefix[0].type === "Assignment") {
+      assert.equal(c.prefix[0].name, "a", source);
+      assert.equal(c.prefix[0].index, index, source);
+      assert.equal(c.prefix[0].value?.text, value, source);
+    }
+    assert.equal(c.redirects.length, 0, source);
+    assert.equal(parse(source).errors, undefined, source);
+  }
+});
+
+test("a subscript stays a matched pair after another prefix element", () => {
+  for (const source of ["x=1 a[1 + 2]=7", ">/dev/null a[1 + 2]=7"]) {
+    const c = parse(source).commands[0].command as Command;
+    const assignment = c.prefix.find((p) => p.type === "Assignment" && p.name === "a");
+    assert.equal(assignment?.type, "Assignment", source);
+    if (assignment?.type === "Assignment") assert.equal(assignment.index, "1 + 2", source);
+  }
+});
+
+test("outside assignment position a subscript is not a matched pair", () => {
+  // `echo a[3|4]=8` is a pipeline in bash, and `echo a[(1+2)*3]=9` is a syntax error.
+  const pipeline = parse("echo a[3|4]=8").commands[0].command;
+  assert.equal(pipeline.type, "Pipeline");
+  assert.equal(parse("echo a[1 + 2]=7").commands[0].command.suffix?.length, 3);
+  assert.ok(parse("echo a[(1+2)*3]=9").errors);
+});
+
+test("an unclosed subscript does not swallow the rest of the script", () => {
+  const script = parse("a[1 + 2\necho hi");
+  assert.equal(script.commands.length, 2);
+  assert.equal(script.commands[1].command.name?.text, "echo");
+});

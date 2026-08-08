@@ -1758,6 +1758,10 @@ export class Lexer {
 
   private readWord(out: TokenValue, ctx: LexContext, tokenStart: number = 0): void {
     this.readWordText();
+    this.classifyWord(out, ctx, tokenStart);
+  }
+
+  private classifyWord(out: TokenValue, ctx: LexContext, tokenStart: number): void {
     const src = this.src;
     const raw = this._wordRaw;
     const hasExpansions = this._wordHasExpansions;
@@ -1814,17 +1818,33 @@ export class Lexer {
     }
     if (ctx === LexContext.CommandStart || ctx === LexContext.CommandPrefix) {
       if (isAssignment === undefined) {
-        // Fast-path word (value === raw span): detect assignment positionally
+        // Fast-path word (value === raw span): detect assignment positionally. This scan
+        // already visits every character, so noting a `[` on the way costs nothing extra.
         let eq = -1;
+        let bracket = false;
         for (let i = tokenStart + 1; i < wordEnd; i++) {
-          if (src.charCodeAt(i) === CH_EQ) {
+          const c = src.charCodeAt(i);
+          if (c === CH_EQ) {
             eq = i;
             break;
           }
+          if (c === CH_LBRACKET) bracket = true;
         }
         if (eq !== -1) {
           const state = scanAssignmentPrefix(src, tokenStart, wordEnd, ASSIGNMENT_NAME_START);
           if (isMatchedAssignment(state)) assignmentOpPos = assignmentOperatorPos(state);
+        } else if (
+          bracket &&
+          wordEnd < this.srcEnd &&
+          scanAssignmentPrefix(src, tokenStart, wordEnd, ASSIGNMENT_NAME_START) >= ASSIGNMENT_INDEX_BASE
+        ) {
+          // The word stopped on a metacharacter inside an unfinished subscript. Bash reads
+          // `a[...]` here as a matched pair, so re-read it with that rule on. The second
+          // pass leaves the fast path, so `_wordIsAssignment` is set and this cannot recur.
+          this.pos = tokenStart;
+          this.readWordText(true);
+          this.classifyWord(out, ctx, tokenStart);
+          return;
         }
       }
       if (assignmentOpPos !== undefined) {
@@ -1900,7 +1920,12 @@ export class Lexer {
     out.keywordEligible = keywordEligible;
   }
 
-  private readWordText(): void {
+  // `subscripts` re-reads a word already known to stop inside an array subscript: bash reads
+  // `a[...]` in assignment position as a matched pair, so metacharacters inside it are
+  // ordinary text (`a[1 + 2]=7`, `a[(1+2)*3]=9`). It skips the fast path outright, because
+  // that is the path that stopped too early. `classifyWord` decides when to set it;
+  // elsewhere bash splits the word normally, so `echo a[3|4]=8` really is a pipeline.
+  private readWordText(subscripts = false): void {
     const src = this.src;
     const len = this.srcEnd;
     let pos = this.pos;
@@ -1918,7 +1943,9 @@ export class Lexer {
     }
     if (
       pos >= len ||
-      (charType[exitCh] & 1 && !(exitCh === CH_LPAREN && pos > fastStart && extglobPrefix[src.charCodeAt(pos - 1)]))
+      (charType[exitCh] & 1 &&
+        !(exitCh === CH_LPAREN && pos > fastStart && extglobPrefix[src.charCodeAt(pos - 1)]) &&
+        !subscripts)
     ) {
       this.pos = pos;
       this._wordText = (this._buildParts || this._buildValue) && pos > fastStart ? src.slice(fastStart, pos) : "";
@@ -2014,6 +2041,23 @@ export class Lexer {
             }
           }
           continue;
+        }
+        // Inside an array subscript a metacharacter is ordinary text. Jump to the matching
+        // `]`; without one the word ends here, exactly as it did before.
+        if (subscripts && assignmentState >= ASSIGNMENT_INDEX_BASE) {
+          const close = this.findClosingBracket(pos);
+          if (close !== -1) {
+            const spanEnd = close + 1;
+            assignmentState = scanAssignmentPrefix(src, pos, spanEnd, assignmentState);
+            lastValueChar = src.charCodeAt(close);
+            if (bt) {
+              const chunk = src.slice(pos, spanEnd);
+              text += chunk;
+              if (bp) litBuf += chunk;
+            }
+            pos = spanEnd;
+            continue;
+          }
         }
         break;
       }
