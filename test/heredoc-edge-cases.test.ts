@@ -299,3 +299,22 @@ test("inside a substitution a delimiter line with a later paren ends the body", 
   ])
     assert.ok(parse(source).errors, JSON.stringify(source));
 });
+
+test("a backquoted heredoc delimiter is literal, newlines and all", () => {
+  // Bash never expands a delimiter: `cat <<`x`` wants the literal delimiter `` `x` ``, and
+  // a backquoted run is taken whole, so it can span lines without being run as a command.
+  const backtick = (parse(": <<`'\n`\n\n").commands[0].command as Command).redirects[0];
+  assert.equal(backtick.target?.text, "`'\n`");
+  assert.equal(backtick.target?.value, "`'\n`");
+  assert.equal(backtick.target?.parts, undefined);
+  assert.equal(parse(": <<`'\n`\n\n").errors, undefined);
+
+  const command = (parse("cat <<`echo D`\nbody\n`echo D`\n").commands[0].command as Command).redirects[0];
+  assert.equal(command.target?.value, "`echo D`");
+  assert.equal(command.content, "body\n");
+
+  // Quote removal still applies, and it does not make the delimiter expandable.
+  const dollar = (parse("cat <<$x\nbody\n$x").commands[0].command as Command).redirects[0];
+  assert.equal(dollar.target?.value, "$x");
+  assert.equal(dollar.target?.parts, undefined);
+});

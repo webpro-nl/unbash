@@ -1626,6 +1626,18 @@ export class Lexer {
         } else {
           delimiter += "\\"; // trailing backslash escapes nothing and stays as itself
         }
+      } else if (c === CH_BACKTICK) {
+        // A backquoted run belongs to the delimiter whole, newlines included, and is never
+        // run: bash reports ``cat <<`x` `` as wanting the literal delimiter `` `x` ``. It
+        // does not make the delimiter quoted, so the body still expands.
+        const btStart = this.pos;
+        this.pos++;
+        while (this.pos < len && src.charCodeAt(this.pos) !== CH_BACKTICK) {
+          if (src.charCodeAt(this.pos) === CH_BACKSLASH) this.pos++;
+          this.pos++;
+        }
+        if (this.pos < len) this.pos++;
+        delimiter += src.slice(btStart, this.pos);
       } else if (c === CH_DOLLAR) {
         const next = this.pos + 1 < len ? src.charCodeAt(this.pos + 1) : 0;
         if (next === CH_SQUOTE || next === CH_DQUOTE) quoted = true;

@@ -41,7 +41,7 @@ import type {
 import { hasEmbeddedWordStructure, LexContext, MAX_SYNTAX_NESTING, Token, Lexer, TokenValue } from "./lexer.ts";
 import { parseArithmeticExpression } from "./arithmetic.ts";
 import { computeWordParts, computeEmbeddedWordParts, computeHereDocBodyParts } from "./parts.ts";
-import { WordImpl } from "./word.ts";
+import { WordImpl, type PartsResolver } from "./word.ts";
 
 WordImpl._resolveWord = computeWordParts;
 WordImpl._resolveHeredocBody = computeHereDocBodyParts;
@@ -311,6 +311,14 @@ const BINARY_TEST_OPS: Record<string, 1> = {
   "-ef": 1,
   "<": 1,
   ">": 1,
+};
+
+// A heredoc delimiter is only quote-removed, never expanded, so it has no expandable
+// structure. Where quote removal changed it, one literal part carries the decoded value;
+// otherwise the word needs no parts at all.
+const heredocDelimiterParts: PartsResolver = (source, word) => {
+  const raw = source.slice(word.pos, word.end);
+  return raw === word.text ? undefined : [{ type: "Literal", value: word.text, text: raw }];
 };
 
 const EMPTY_PREFIX: AssignmentPrefix[] = [];
@@ -1386,7 +1394,11 @@ class Parser {
       body: undefined,
     };
     if (t.targetEnd > t.targetPos) {
-      r.target = new WordImpl(t.content ?? "", t.targetPos, t.targetEnd, this.source, undefined, this.depth);
+      // A heredoc delimiter is only ever quote-removed, never expanded — bash reports
+      // ``cat <<`x` `` as wanting the literal `` `x` `` — so it gets no word structure.
+      const heredoc = t.value === "<<" || t.value === "<<-";
+      const resolver = heredoc ? heredocDelimiterParts : undefined;
+      r.target = new WordImpl(t.content ?? "", t.targetPos, t.targetEnd, this.source, resolver, this.depth);
     } else {
       this.error("expected redirect target", t.targetPos);
     }
