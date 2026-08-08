@@ -242,6 +242,21 @@ test("function keyword", () => {
   assert.equal(fn.name.text, "f");
 });
 
+// After `function name`, a `(` only introduces the optional empty parameter list when a `)`
+// follows immediately; otherwise it opens a subshell body, exactly as in `f() ( ... )`.
+test("parenthesized function body", () => {
+  for (const source of ["function f ( echo hi )", "function f (echo hi)", "function f () ( echo hi )"]) {
+    const ast = parse(source);
+    const fn = ast.commands[0].command as Function;
+    assert.equal(ast.errors, undefined, source);
+    assert.equal(fn.type, "Function", source);
+    assert.equal(fn.name.text, "f", source);
+    assert.equal(fn.body.type, "Subshell", source);
+    assert.equal((fn.body as Subshell).body.commands.length, 1, source);
+    assert.equal(fn.end, source.length, source);
+  }
+});
+
 test("function then call", () => {
   const ast = parse('f() { vite build "$@"; }; f');
   assert.equal(ast.commands.length, 2);

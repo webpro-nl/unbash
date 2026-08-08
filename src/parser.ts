@@ -724,8 +724,11 @@ class Parser {
 
   // subshell := '(' list ')'
   private subshell(): Subshell {
-    const pos = this.tok.next(LexContext.CommandStart).pos;
+    return this.subshellBody(this.tok.next(LexContext.CommandStart).pos);
+  }
 
+  // Continues a subshell whose '(' the caller already consumed.
+  private subshellBody(pos: number): Subshell {
     if (this.syntaxDepth === MAX_SYNTAX_NESTING) {
       this.error("maximum subshell nesting depth exceeded", pos);
       const closeEnd = this.tok.skipSubshellBody();
@@ -1265,12 +1268,22 @@ class Parser {
   private functionDef(): Function {
     const pos = this.tok.next(LexContext.CommandStart).pos;
     const name = this.readWord(LexContext.Normal);
+    let body: Node;
     if (this.tok.peek(LexContext.CommandStart).token === Token.LParen) {
-      this.tok.next(LexContext.CommandStart);
-      if (!this.accept(Token.RParen, LexContext.CommandStart)) this.error("expected ')' after '('", this.tok.getPos());
+      const openPos = this.tok.next(LexContext.CommandStart).pos;
+      // `(` is the optional empty parameter list only when `)` follows immediately;
+      // anything else opens a subshell body, as in `f() ( ... )`.
+      if (this.tok.peek(LexContext.CommandStart).token === Token.RParen) {
+        this.tok.next(LexContext.CommandStart);
+        this.skipNewlines(LexContext.CommandStart);
+        body = this.commandAsBody();
+      } else {
+        body = this.subshellBody(openPos);
+      }
+    } else {
+      this.skipNewlines(LexContext.CommandStart);
+      body = this.commandAsBody();
     }
-    this.skipNewlines(LexContext.CommandStart);
-    const body = this.commandAsBody();
     const redirects = this._redirects;
     this._redirects = EMPTY_REDIRECTS;
     const end = redirects.length > 0 ? redirects[redirects.length - 1].end : body.end;
