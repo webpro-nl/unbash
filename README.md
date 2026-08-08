@@ -219,18 +219,18 @@ unbash provides:
 ## Benchmarks
 
 Parse throughput in MB/s, higher is better, with unbash's relative speed in
-parentheses. Median of five runs on Apple M1 Pro/32GB using Node.js 22.23.2.
+parentheses. Median of eleven runs on Apple M1 Pro/32GB using Node.js 24.19.0.
 
 | Parser                       | short (1.2KB) | advanced (0.9KB) | medium (150KB) | large (965KB) |
 | ---------------------------- | ------------: | ---------------: | -------------: | ------------: |
-| **unbash**                   |      **76.7** |         **69.0** |       **99.6** |     **111.4** |
-| tree-sitter-bash (native)    |    4.60 (17x) |       6.61 (10x) |     14.97 (7x) |   11.72 (10x) |
-| tree-sitter-bash (WASM)      |    3.81 (20x) |       4.79 (14x) |     6.62 (15x) |    6.31 (18x) |
-| sh-syntax                    |  0.02 (3361x) |     0.03 (2299x) |     7.13 (14x) |    12.66 (9x) |
-| bash-parser                  |   0.24 (317x) |              n/a |            n/a |           n/a |
-| @ericcornelissen/bash-parser |   0.23 (336x) |              n/a |            n/a |           n/a |
+| **unbash**                   |      **75.7** |         **69.4** |       **97.1** |     **115.7** |
+| tree-sitter-bash (native)    |    4.59 (16x) |       6.52 (11x) |     14.90 (7x) |   11.78 (10x) |
+| tree-sitter-bash (WASM)      |    4.56 (17x) |       5.57 (12x) |     8.55 (11x) |    7.55 (15x) |
+| sh-syntax                    |  0.03 (2870x) |     0.04 (1947x) |     7.59 (13x) |    13.58 (9x) |
+| bash-parser                  |   0.28 (275x) |              n/a |            n/a |           n/a |
+| @ericcornelissen/bash-parser |   0.26 (291x) |              n/a |            n/a |           n/a |
 
-Run the benchmarks using Node.js v22, (native tree-sitter binding does not build on newer releases):
+Run the benchmarks using Node.js v22+:
 
 ```sh
 pnpm install
