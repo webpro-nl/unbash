@@ -637,3 +637,10 @@ test("array length", () => {
   const c = ast.commands[0].command as import("../src/types.ts").Command;
   assert.equal(c.name?.text, "echo");
 });
+
+test("$$ consumes its own second dollar, so a following brace is literal", () => {
+  // `${$${}` closes at the first `}` in bash: $$ is the PID and the `{` is ordinary text.
+  for (const source of ["${$${}", "${$${x}", "echo ${a[$${]}"]) assert.equal(parse(source).errors, undefined, source);
+  // A third `$` does open a nested expansion, so that one still needs its own `}`.
+  assert.ok(parse("${x:-$$${}").errors);
+});

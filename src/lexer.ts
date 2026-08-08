@@ -729,10 +729,17 @@ export class Lexer {
         continue;
       }
       const expected = delimiters[delimiters.length - 1];
-      if (ch === CH_DOLLAR && pos + 1 < this.srcEnd && this.src.charCodeAt(pos + 1) === CH_LBRACE) {
-        delimiters.push(CH_RBRACE);
-        pos += 2;
-        continue;
+      if (ch === CH_DOLLAR && pos + 1 < this.srcEnd) {
+        const after = this.src.charCodeAt(pos + 1);
+        if (after === CH_DOLLAR) {
+          pos += 2; // `$$` consumes its second `$`, so a `{` after it opens nothing
+          continue;
+        }
+        if (after === CH_LBRACE) {
+          delimiters.push(CH_RBRACE);
+          pos += 2;
+          continue;
+        }
       }
       if (expected === CH_RBRACKET && ch === CH_LBRACKET) {
         delimiters.push(CH_RBRACKET);
@@ -3114,11 +3121,23 @@ export class Lexer {
     let reported = false;
     while (this.pos < len && depth > 0) {
       const ch = src.charCodeAt(this.pos);
-      if (ch === CH_LBRACE && this.pos > 0 && src.charCodeAt(this.pos - 1) === CH_DOLLAR) {
-        depth++;
-        if (this._nestingDepth + depth > MAX_SYNTAX_NESTING && !reported) {
-          this.errors.push({ message: "maximum parameter expansion nesting depth exceeded", pos: this.pos - 1 });
-          reported = true;
+      if (ch === CH_DOLLAR) {
+        // Dispatch forward from the `$`. `$$` is the PID and consumes its own second `$`,
+        // so a `{` after it is literal text rather than a nested expansion — `${$${}`
+        // closes at the first `}`. Looking back from a `{` cannot tell the two apart.
+        const next = this.pos + 1 < len ? src.charCodeAt(this.pos + 1) : 0;
+        if (next === CH_LBRACE) {
+          depth++;
+          if (this._nestingDepth + depth > MAX_SYNTAX_NESTING && !reported) {
+            this.errors.push({ message: "maximum parameter expansion nesting depth exceeded", pos: this.pos });
+            reported = true;
+          }
+          this.pos += 2;
+          continue;
+        }
+        if (next === CH_DOLLAR) {
+          this.pos += 2;
+          continue;
         }
       } else if (ch === CH_RBRACE) {
         if (--depth === 0) {
