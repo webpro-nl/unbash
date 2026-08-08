@@ -600,6 +600,15 @@ export class Lexer {
     return this.findClosingShellDelimiter(start, end, CH_RBRACKET);
   }
 
+  /**
+   * Find the closing bracket of a `$[ … ]` arithmetic expansion. Unlike an array subscript,
+   * bash's `$[` matcher does not recurse into `${ }`, so a `]` written inside braces closes
+   * it: `$[${x-]}` is complete, while `h[${x:-]}]=1` keys the array on `]`.
+   */
+  private findClosingArithmeticBracket(start: number, end: number = this.srcEnd): number {
+    return this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, false);
+  }
+
   /** Find the closing brace for a parameter expansion, ignoring braces inside nested shell syntax. */
   findClosingBrace(start: number, end: number = this.srcEnd): number {
     return this.findClosingShellDelimiter(start, end, CH_RBRACE);
@@ -680,7 +689,13 @@ export class Lexer {
 
   // Only array assignment bodies take comments; extglob shares this scanner, and `#` is
   // pattern data there.
-  private findClosingShellDelimiter(start: number, end: number, closing: number, comments = false): number {
+  private findClosingShellDelimiter(
+    start: number,
+    end: number,
+    closing: number,
+    comments = false,
+    braces = true,
+  ): number {
     const savedPos = this.pos;
     const savedEnd = this.srcEnd;
     const savedUnbalanced = this._unbalanced;
@@ -735,7 +750,7 @@ export class Lexer {
           pos += 2; // `$$` consumes its second `$`, so a `{` after it opens nothing
           continue;
         }
-        if (after === CH_LBRACE) {
+        if (after === CH_LBRACE && braces) {
           delimiters.push(CH_RBRACE);
           pos += 2;
           continue;
@@ -2800,7 +2815,7 @@ export class Lexer {
     // $[ expr ] is bash's deprecated spelling of $(( expr )). It runs to the matching ']',
     // so parentheses inside belong to the expansion instead of ending the word.
     if (ch === CH_LBRACKET) {
-      const close = this.findClosingBracket(this.pos + 1);
+      const close = this.findClosingArithmeticBracket(this.pos + 1);
       if (close !== -1) {
         const bodyStart = this.pos + 1;
         const body = src.slice(bodyStart, close);

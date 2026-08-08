@@ -779,3 +779,21 @@ test("deprecated $[ ] keeps nested substitutions structured", () => {
   assert.equal((bin.left as ArithmeticCommandExpansion).text, "$(one)");
   assert.equal((bin.right as ArithmeticCommandExpansion).text, "$(two)");
 });
+
+test("$[ ] closes at the first unnested bracket, even inside braces", () => {
+  // Bash's `$[` matcher counts brackets and honours quotes and `$( )`, but does not
+  // recurse into `${ }` — unlike an array subscript, where `h[${x:-]}]=1` keys on `]`.
+  for (const source of [
+    "$[${]",
+    "echo $[${x-]}",
+    "echo $[${x-]}${y-]}",
+    "echo $[$(echo ])]",
+    "echo $[${x}]",
+    "echo $[${a[1]}+1]",
+  ])
+    assert.equal(parse(source).errors, undefined, source);
+
+  const subscript = parse("h[${x:-]}]=1").commands[0].command as Command;
+  assert.equal(subscript.prefix[0].type, "Assignment");
+  if (subscript.prefix[0].type === "Assignment") assert.equal(subscript.prefix[0].index, "${x:-]}");
+});
