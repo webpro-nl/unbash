@@ -45,6 +45,25 @@ test("negated pipeline", () => {
   assert.equal(p.negated, true);
 });
 
+// Bash's grammar is `pipeline_command: '!' pipeline_command`, and each `!` toggles the
+// invert flag rather than nesting, so an even number of them cancels out.
+test("repeated negation toggles like bash", () => {
+  const cases: [string, boolean | undefined][] = [
+    ["! cmd", true],
+    ["! ! cmd", undefined],
+    ["! ! ! cmd", true],
+    ["! !", undefined],
+  ];
+  for (const [source, negated] of cases) {
+    const ast = parse(source);
+    const pipeline = ast.commands[0].command;
+    assert.equal(pipeline.type, "Pipeline", source);
+    assert.equal(pipeline.type === "Pipeline" && pipeline.negated, negated, source);
+    assert.equal(pipeline.pos, 0, source);
+    assert.equal(ast.errors, undefined, source);
+  }
+});
+
 test("|& pipes both stdout and stderr", () => {
   const p = parse("cmd1 |& cmd2").commands[0].command as Pipeline;
   assert.equal(p.type, "Pipeline");

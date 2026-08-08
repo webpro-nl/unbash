@@ -529,15 +529,20 @@ class Parser {
         this.tok.next(LexContext.CommandStart);
     }
 
-    const negated = this.tok.peek(LexContext.CommandStart).token === Token.Bang;
-    if (negated) {
-      if (!time) pipelinePos = this.tok.peek(LexContext.CommandStart).pos;
+    // `pipeline_command: '!' pipeline_command` — each `!` toggles the invert flag
+    // instead of nesting, so an even number of them cancels out.
+    let bangs = 0;
+    let negated = false;
+    while (this.tok.peek(LexContext.CommandStart).token === Token.Bang) {
+      if (!time && bangs === 0) pipelinePos = this.tok.peek(LexContext.CommandStart).pos;
       this.tok.next(LexContext.CommandStart);
+      bangs++;
+      negated = !negated;
     }
 
     const first = this.command();
     if (!first) {
-      if (time || negated) {
+      if (time || bangs > 0) {
         const pipeline: Pipeline = {
           type: "Pipeline",
           pos: pipelinePos,
@@ -552,7 +557,7 @@ class Parser {
       return null;
     }
 
-    if (!time && !negated) pipelinePos = first.pos;
+    if (!time && bangs === 0) pipelinePos = first.pos;
 
     const commands: Node[] = [first];
     const operators: PipeOperator[] = [];
@@ -576,7 +581,7 @@ class Parser {
       commands.push(this.wrapCompoundRedirects(cmd));
     }
 
-    if (commands.length === 1 && !negated && !time) {
+    if (commands.length === 1 && bangs === 0 && !time) {
       // Pass redirects up for list() to consume
       this._redirects = firstRedirects;
       return commands[0];
