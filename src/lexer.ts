@@ -3373,17 +3373,15 @@ export class Lexer {
     const start = this.pos;
     this._unbalanced = false;
 
-    // Fast path: scan for simple cases with no nested quotes/parens/case
-    while (this.pos < len && depth > 0) {
+    // Fast path: scan for simple cases with no nested quotes/parens/case. Nothing here
+    // opens a paren — `(` breaks to the slow path — so depth stays 1 and the first `)`
+    // closes the construct.
+    while (this.pos < len) {
       const c = src.charCodeAt(this.pos);
       if (c === CH_RPAREN) {
-        depth--;
-        if (depth === 0) {
-          const result = bt ? src.slice(start, this.pos) : "";
-          this.pos++;
-          return result;
-        }
+        const result = bt ? src.slice(start, this.pos) : "";
         this.pos++;
+        return result;
       } else if (c === CH_LPAREN || c === CH_BACKSLASH || c === CH_SQUOTE || c === CH_DQUOTE || c === CH_BACKTICK) {
         break;
       } else if (c === CH_LT && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LT) {
@@ -3408,8 +3406,6 @@ export class Lexer {
         this.pos++;
       }
     }
-
-    if (depth === 0) return bt ? src.slice(start, this.pos) : "";
 
     // Slow path: just track position (source is copied verbatim, so slice at end)
     let caseDepth = 0;
