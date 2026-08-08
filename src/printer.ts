@@ -24,6 +24,7 @@ import type {
   While,
   Word,
 } from "./types.ts";
+import { requiresFunctionKeyword } from "./lexer.ts";
 import { WordImpl } from "./word.ts";
 
 export function print(script: Script): string {
@@ -251,7 +252,8 @@ function caseNode(n: Case, indent: number): string {
 
 function funcNode(n: Function, indent: number): string {
   const pad = "  ".repeat(indent);
-  let out = wd(n.name) + "() {\n";
+  const name = wd(n.name);
+  let out = (requiresFunctionKeyword(name) ? "function " + name + " {" : name + "() {") + "\n";
   if (n.body.type === "BraceGroup") {
     out += stmts(n.body.body.commands, indent + 1) + "\n";
   } else if (n.body.type === "CompoundList") {

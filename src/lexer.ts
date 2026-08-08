@@ -192,6 +192,12 @@ const RESERVED_WORDS = new Map<string, Token>([
   ["}", Token.RBrace],
 ]);
 
+// `name()` is a syntax error for these; `time`, `[[` and `]]` are matched positionally
+// rather than through RESERVED_WORDS.
+export function requiresFunctionKeyword(name: string): boolean {
+  return RESERVED_WORDS.has(name) || name === "time" || name === "[[" || name === "]]";
+}
+
 // Combined character type table — bit 0: metachar, bit 1: word-special
 const charType = new Uint8Array(128);
 charType[CH_PIPE] = 1;

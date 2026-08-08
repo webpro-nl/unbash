@@ -442,3 +442,21 @@ test("re-entrant print does not steal pending heredoc bodies", () => {
   assert.equal(printed, "cat << 'EOF' | tee f\nbody\nEOF");
   assert.ok(!printed.includes(String.fromCharCode(0)), "marker must not leak into output");
 });
+
+// Bash accepts a reserved word as a function name only in the `function name` form —
+// `if() { …; }` is a syntax error — so the printer cannot always emit the POSIX form.
+test("reserved-word function names print with the function keyword", () => {
+  const reserved = [
+    "if", "then", "else", "elif", "fi", "do", "done", "for", "while", "until", "in",
+    "case", "esac", "function", "select", "coproc", "!", "{", "}", "time", "[[", "]]",
+  ];
+  for (const name of reserved) {
+    const source = `function ${name} { echo shadowed; }`;
+    const printed = fmt(source);
+    assert.ok(printed.startsWith(`function ${name} {`), `${source} -> ${printed}`);
+    assert.equal(parse(printed).errors, undefined, printed);
+  }
+  // An ordinary name keeps the POSIX form.
+  assert.ok(fmt("function f { :; }").startsWith("f() {"));
+  assert.ok(fmt("f() { :; }").startsWith("f() {"));
+});
