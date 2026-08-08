@@ -273,3 +273,29 @@ test("substitution syntax remains literal in heredoc delimiters", () => {
     assert.equal(r.content, "body\n", src);
   }
 });
+
+test("inside a substitution a delimiter line with a later paren ends the body", () => {
+  // Bash ends the body at a line that starts with the delimiter and has a `)` anywhere on
+  // the same logical line, resuming right after the delimiter text. Continuations are
+  // joined first, but only when the delimiter was written unquoted.
+  for (const source of [
+    "<(<<a\na )",
+    "<(<<a\na\\\n)!",
+    "<(<<a\na\\\n[)",
+    "<(<<a\na?&\\\n)",
+    '"$(a<<X\nXb)"',
+    'echo "$(cat <<EOF\nEOF (:)\n)"',
+    'echo "$(cat <<EOF\nzz)\nEOF\n)"',
+    "<(<<abc\nab\\\nc )",
+  ])
+    assert.equal(parse(source).errors, undefined, JSON.stringify(source));
+
+  // Still rejected, exactly as bash rejects them.
+  for (const source of [
+    'echo "$(cat <<EOF\nAAA\nEOFx\nBBB)"',
+    'echo "$(cat <<EOF\nEOF (\n)"',
+    "<(<<'a'\na\\\n)",
+    "<(<<a\na\\\\\n)",
+  ])
+    assert.ok(parse(source).errors, JSON.stringify(source));
+});

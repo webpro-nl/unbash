@@ -1673,7 +1673,38 @@ export class Lexer {
   // With parenEnds (inside $(...)), a line starting with the delimiter directly
   // followed by ")" also terminates the body, resuming at the ")" — bash treats
   // the substitution's closing paren as end-of-file for its heredocs.
-  private skipHereDocBody(delimiter: string, strip: boolean, parenEnds = false): number {
+  // Match `delimiter` at `lineStart`, crossing `\`+newline pairs when it was written
+  // unquoted — bash reads continuation lines the same way it read the header, so the
+  // delimiter itself may straddle one. Returns the offset just past it, or -1.
+  private matchHereDocDelimiter(delimiter: string, lineStart: number, end: number, join: boolean): number {
+    const src = this.src;
+    let pos = lineStart;
+    for (let i = 0; i < delimiter.length;) {
+      if (join && src.charCodeAt(pos) === CH_BACKSLASH && pos + 1 < end && src.charCodeAt(pos + 1) === CH_NL) {
+        pos += 2;
+        continue;
+      }
+      if (pos >= end || src.charCodeAt(pos) !== delimiter.charCodeAt(i)) return -1;
+      pos++;
+      i++;
+    }
+    return pos;
+  }
+
+  // End of the logical line at `from`: a `\` consumes the character after it, so `\`+newline
+  // continues the line while `\\` does not.
+  private logicalLineEnd(from: number, end: number, join: boolean): number {
+    const src = this.src;
+    let pos = from;
+    while (pos < end) {
+      const c = src.charCodeAt(pos);
+      if (c === CH_NL) return pos;
+      pos += join && c === CH_BACKSLASH ? 2 : 1;
+    }
+    return end;
+  }
+
+  private skipHereDocBody(delimiter: string, strip: boolean, parenEnds = false, quoted = false): number {
     const src = this.src;
     const len = this.srcEnd;
     const dLen = delimiter.length;
@@ -1692,15 +1723,20 @@ export class Lexer {
         return bodyEnd;
       }
 
-      if (
-        parenEnds &&
-        lineEnd - lineStart > dLen &&
-        src.charCodeAt(lineStart + dLen) === CH_RPAREN &&
-        src.startsWith(delimiter, lineStart)
-      ) {
-        const bodyEnd = this.pos;
-        this.pos = lineStart + dLen;
-        return bodyEnd;
+      // Inside a substitution a line that merely *starts* with the delimiter also ends the
+      // body, provided a `)` appears anywhere later on the same logical line; scanning then
+      // resumes right after the delimiter text, mid-line. Bash finds that `)` by raw byte
+      // search, so quoting and backslashes in between do not hide it.
+      if (parenEnds) {
+        const afterDelim = this.matchHereDocDelimiter(delimiter, lineStart, len, !quoted);
+        if (afterDelim !== -1) {
+          const paren = src.indexOf(")", afterDelim);
+          if (paren !== -1 && paren < this.logicalLineEnd(lineStart, len, !quoted)) {
+            const bodyEnd = this.pos;
+            this.pos = afterDelim;
+            return bodyEnd;
+          }
+        }
       }
 
       this.pos = lineEnd < len ? lineEnd + 1 : lineEnd;
@@ -3521,7 +3557,7 @@ export class Lexer {
     // pattern when nothing is open — otherwise it closes a pattern's leading `(`, an
     // extglob group, or a subshell in the case body, and must rebalance `depth`.
     let caseParens = 0;
-    let pendingDelims: { delimiter: string; strip: boolean }[] | null = null;
+    let pendingDelims: { delimiter: string; strip: boolean; quoted: boolean }[] | null = null;
     let arithBase = -1;
     let substitutions = 0;
     let reported = false;
@@ -3588,12 +3624,12 @@ export class Lexer {
           this.readHereDocDelimiter();
           // Empty unquoted delimiter means there was no delimiter word (`<< )`)
           if (this._hereDelim || this._hereQuoted) {
-            (pendingDelims ??= []).push({ delimiter: this._hereDelim, strip });
+            (pendingDelims ??= []).push({ delimiter: this._hereDelim, strip, quoted: this._hereQuoted });
           }
         }
       } else if (ch === CH_NL && pendingDelims) {
         this.pos++;
-        for (const hd of pendingDelims) this.skipHereDocBody(hd.delimiter, hd.strip, true);
+        for (const hd of pendingDelims) this.skipHereDocBody(hd.delimiter, hd.strip, true, hd.quoted);
         pendingDelims = null;
       } else if (ch === CH_HASH && arithBase < 0 && opensComment(src, this.pos, start)) {
         // Word-boundary # opens a comment — opaque up to (not including) the
