@@ -1297,17 +1297,24 @@ class Parser {
     let cmdPos = this.tok.peek(LexContext.CommandStart).pos;
     let lastEnd = cmdPos;
 
-    while (this.tok.peek(LexContext.CommandStart).token === Token.Assignment) {
-      const t = this.tok.next(LexContext.CommandStart);
-      lastEnd = t.end;
-      if (prefix === EMPTY_PREFIX) prefix = [];
-      prefix.push(this.parseAssignment(t));
-    }
-
-    // Consume prefix redirects (e.g. "2>/dev/null cmd")
-    while (this.tok.peek(LexContext.CommandStart).token === Token.Redirect) {
-      redirects = this.collectRedirect(redirects, LexContext.CommandStart);
-      lastEnd = redirects[redirects.length - 1].end;
+    // Assignments and redirects interleave freely in a command prefix ("A=1 >f B=2 cmd"),
+    // and every element after the first reads CommandPrefix so the command name that
+    // follows is an ordinary word rather than a reserved one.
+    let ctx: LexContext = LexContext.CommandStart;
+    for (;;) {
+      const t = this.tok.peek(ctx).token;
+      if (t === Token.Assignment) {
+        const assignment = this.tok.next(ctx);
+        lastEnd = assignment.end;
+        if (prefix === EMPTY_PREFIX) prefix = [];
+        prefix.push(this.parseAssignment(assignment));
+      } else if (t === Token.Redirect) {
+        redirects = this.collectRedirect(redirects, ctx);
+        lastEnd = redirects[redirects.length - 1].end;
+      } else {
+        break;
+      }
+      ctx = LexContext.CommandPrefix;
     }
 
     if (this.tok.peek(LexContext.Normal).token !== Token.Word) {

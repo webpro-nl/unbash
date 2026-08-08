@@ -477,6 +477,10 @@ export const LexContext = {
   Normal: 0,
   CommandStart: 1,
   TestMode: 2,
+  // A prefix element (assignment or redirect) has already been consumed, so further
+  // assignments are still recognized but reserved words are not: `FOO=bar for` runs
+  // the command `for`, and `A=1 >f B=2 cmd` assigns both.
+  CommandPrefix: 3,
 } as const;
 export type LexContext = (typeof LexContext)[keyof typeof LexContext];
 
@@ -1776,44 +1780,39 @@ export class Lexer {
       }
     }
 
-    if (ctx === LexContext.CommandStart) {
-      if (keywordEligible) {
-        if (raw) {
-          if (wordLen <= 8) {
-            const reserved = matchReservedWord(src, tokenStart, wordLen);
-            if (reserved !== undefined) {
-              setSpanToken(out, reserved, tokenStart, wordEnd, true);
-              return;
-            }
-          }
-          if (
-            wordLen === 2 &&
-            src.charCodeAt(tokenStart) === CH_LBRACKET &&
-            src.charCodeAt(tokenStart + 1) === CH_LBRACKET
-          ) {
-            setSpanToken(out, Token.DblLBracket, tokenStart, wordEnd, true);
-            return;
-          }
-        } else if (value !== null && value.length > 0) {
-          const fc = value.charCodeAt(0);
-          if (
-            (fc >= CH_a && fc <= CH_z && value.length <= 8) ||
-            fc === CH_BANG ||
-            fc === CH_LBRACE ||
-            fc === CH_RBRACE
-          ) {
-            const reserved = RESERVED_WORDS.get(value);
-            if (reserved !== undefined) {
-              setToken(out, reserved, value, tokenStart, wordEnd);
-              return;
-            }
-          }
-          if (fc === CH_LBRACKET && value === "[[") {
-            setToken(out, Token.DblLBracket, value, tokenStart, wordEnd);
+    if (ctx === LexContext.CommandStart && keywordEligible) {
+      if (raw) {
+        if (wordLen <= 8) {
+          const reserved = matchReservedWord(src, tokenStart, wordLen);
+          if (reserved !== undefined) {
+            setSpanToken(out, reserved, tokenStart, wordEnd, true);
             return;
           }
         }
+        if (
+          wordLen === 2 &&
+          src.charCodeAt(tokenStart) === CH_LBRACKET &&
+          src.charCodeAt(tokenStart + 1) === CH_LBRACKET
+        ) {
+          setSpanToken(out, Token.DblLBracket, tokenStart, wordEnd, true);
+          return;
+        }
+      } else if (value !== null && value.length > 0) {
+        const fc = value.charCodeAt(0);
+        if ((fc >= CH_a && fc <= CH_z && value.length <= 8) || fc === CH_BANG || fc === CH_LBRACE || fc === CH_RBRACE) {
+          const reserved = RESERVED_WORDS.get(value);
+          if (reserved !== undefined) {
+            setToken(out, reserved, value, tokenStart, wordEnd);
+            return;
+          }
+        }
+        if (fc === CH_LBRACKET && value === "[[") {
+          setToken(out, Token.DblLBracket, value, tokenStart, wordEnd);
+          return;
+        }
       }
+    }
+    if (ctx === LexContext.CommandStart || ctx === LexContext.CommandPrefix) {
       if (isAssignment === undefined) {
         // Fast-path word (value === raw span): detect assignment positionally
         let eq = -1;
@@ -1836,8 +1835,8 @@ export class Lexer {
       }
     }
     // `]]` is reserved only where it can close a `[[`; operands and wordlist entries, which
-    // read Normal, are ordinary words.
-    if (ctx !== LexContext.Normal && keywordEligible) {
+    // read Normal, are ordinary words, and so is a `]]` demoted by a command prefix.
+    if ((ctx === LexContext.CommandStart || ctx === LexContext.TestMode) && keywordEligible) {
       if (raw) {
         if (
           wordLen === 2 &&

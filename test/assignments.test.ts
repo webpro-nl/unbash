@@ -423,3 +423,55 @@ test("line continuations around append assignment operators are ignored", () => 
     assert.equal(c.name?.text, "true", source);
   }
 });
+
+// --- Command prefixes (assignments and redirects) ---
+
+test("a command prefix demotes the reserved word that follows it", () => {
+  // Bash recognizes a reserved word only as the first word of a command, so
+  // `FOO=bar for` runs the command `for` and `>/dev/null [[` runs `[[`.
+  for (const [source, name, prefixLength, redirectCount] of [
+    ["FOO=bar for", "for", 1, 0],
+    ["FOO=bar if", "if", 1, 0],
+    ["FOO=bar [[ foo == foo ]]", "[[", 1, 0],
+    ["FOO=bar ]]", "]]", 1, 0],
+    ["FOO=bar {", "{", 1, 0],
+    ["FOO=bar time", "time", 1, 0],
+    [">/dev/null for", "for", 0, 1],
+    ["FOO=bar 2>/dev/null while", "while", 1, 1],
+  ] as const) {
+    const c = parse(source).commands[0].command as Command;
+    assert.equal(c.type, "Command", source);
+    assert.equal(c.name?.text, name, source);
+    assert.equal(c.prefix.length, prefixLength, source);
+    assert.equal(c.redirects.length, redirectCount, source);
+    assert.equal(parse(source).errors, undefined, source);
+  }
+});
+
+test("reserved words stay reserved without a prefix", () => {
+  for (const [source, type] of [
+    ["for x in a; do :; done", "For"],
+    ["[[ foo == foo ]]", "TestCommand"],
+    ["{ :; }", "BraceGroup"],
+    ["if :; then :; fi", "If"],
+    ["while false; do :; done", "While"],
+  ] as const)
+    assert.equal(parse(source).commands[0].command.type, type, source);
+});
+
+test("assignments and redirects interleave in a command prefix", () => {
+  const c = parse("A=1 >/dev/null B=2 2>&1 C=3 cmd arg").commands[0].command as Command;
+  assert.equal(c.name?.text, "cmd");
+  assert.deepEqual(
+    c.prefix.map((p) => (p.type === "Assignment" ? `${p.name}=${p.value?.text}` : p.type)),
+    ["A=1", "B=2", "C=3"],
+  );
+  assert.deepEqual(
+    c.redirects.map((r) => r.operator),
+    [">", ">&"],
+  );
+  assert.deepEqual(
+    c.suffix.map((w) => w.text),
+    ["arg"],
+  );
+});
