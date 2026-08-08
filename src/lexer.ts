@@ -3139,6 +3139,22 @@ export class Lexer {
           this.pos += 2;
           continue;
         }
+        if (next === CH_LPAREN) {
+          // `$(` and `$((`: a `}` inside the substitution body is that body's, not ours.
+          const dollarPos = this.pos;
+          this.pos += 2;
+          this.extractBalanced();
+          if (this._unbalanced) this.errors.push({ message: "unterminated command substitution", pos: dollarPos });
+          continue;
+        }
+      } else if (ch === CH_BACKTICK) {
+        this.pos++;
+        while (this.pos < len && src.charCodeAt(this.pos) !== CH_BACKTICK) {
+          if (src.charCodeAt(this.pos) === CH_BACKSLASH) this.pos++;
+          this.pos++;
+        }
+        if (this.pos < len) this.pos++;
+        continue;
       } else if (ch === CH_RBRACE) {
         if (--depth === 0) {
           this.pos++;

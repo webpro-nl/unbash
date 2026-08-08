@@ -644,3 +644,25 @@ test("$$ consumes its own second dollar, so a following brace is literal", () =>
   // A third `$` does open a nested expansion, so that one still needs its own `}`.
   assert.ok(parse("${x:-$$${}").errors);
 });
+
+test("a parameter expansion scans over nested command substitutions", () => {
+  // A `}` inside `$( )` or backticks belongs to that body, so it must not close the
+  // expansion: bash reads `${x:-$(<})}` as a read-file substitution named `}`.
+  for (const [source, text] of [
+    ["echo ${x:-$(<})}", "${x:-$(<})}"],
+    ["echo ${foo:-$({ ls /bin/ls; })}", "${foo:-$({ ls /bin/ls; })}"],
+    ["echo ${x:-$(echo })}", "${x:-$(echo })}"],
+    ["echo ${x:-`echo }`}", "${x:-`echo }`}"],
+    ["echo ${x#$({ a; })}", "${x#$({ a; })}"],
+    ["echo ${x:-$((1+2))}", "${x:-$((1+2))}"],
+  ] as const) {
+    const command = parse(source).commands[0].command as Command;
+    assert.equal(command.suffix[0].text, text, source);
+    assert.equal(computeWordParts(source, command.suffix[0])?.[0].type, "ParameterExpansion", source);
+    assert.equal(parse(source).errors, undefined, source);
+  }
+});
+
+test("an unterminated substitution inside an expansion is still reported", () => {
+  assert.ok(parse("echo ${x:-$(a}").errors);
+});
