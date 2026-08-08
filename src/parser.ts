@@ -313,9 +313,7 @@ const BINARY_TEST_OPS: Record<string, 1> = {
   ">": 1,
 };
 
-// A heredoc delimiter is only quote-removed, never expanded, so it has no expandable
-// structure. Where quote removal changed it, one literal part carries the decoded value;
-// otherwise the word needs no parts at all.
+// A heredoc delimiter is quote-removed but never expanded, so it has no expandable structure.
 const heredocDelimiterParts: PartsResolver = (source, word) => {
   const raw = source.slice(word.pos, word.end);
   return raw === word.text ? undefined : [{ type: "Literal", value: word.text, text: raw }];
@@ -1223,9 +1221,7 @@ class Parser {
     const firstPos = first.pos;
     const firstEnd = first.end;
 
-    // Unary test: -op word. Conditional operators are recognized only as written, so a
-    // quoted or expanded spelling is an ordinary operand: `[[ '-f' == $var ]]` compares
-    // strings, while `[[ -f == $var ]]` is the syntax error bash reports.
+    // Unary test: -op word, recognized only as written.
     if (first.keywordEligible && UNARY_TEST_OPS[val] === 1) {
       const nt = this.tok.peek(LexContext.TestMode).token;
       if (nt === Token.Word) {
@@ -1307,9 +1303,8 @@ class Parser {
     let cmdPos = this.tok.peek(LexContext.CommandStart).pos;
     let lastEnd = cmdPos;
 
-    // Assignments and redirects interleave freely in a command prefix ("A=1 >f B=2 cmd"),
-    // and every element after the first reads CommandPrefix so the command name that
-    // follows is an ordinary word rather than a reserved one.
+    // Assignments and redirects interleave freely; after the first element CommandPrefix
+    // keeps the following command name from being read as a reserved word.
     let ctx: LexContext = LexContext.CommandStart;
     for (;;) {
       const t = this.tok.peek(ctx).token;
@@ -1394,8 +1389,6 @@ class Parser {
       body: undefined,
     };
     if (t.targetEnd > t.targetPos) {
-      // A heredoc delimiter is only ever quote-removed, never expanded — bash reports
-      // ``cat <<`x` `` as wanting the literal `` `x` `` — so it gets no word structure.
       const heredoc = t.value === "<<" || t.value === "<<-";
       const resolver = heredoc ? heredocDelimiterParts : undefined;
       r.target = new WordImpl(t.content ?? "", t.targetPos, t.targetEnd, this.source, resolver, this.depth);

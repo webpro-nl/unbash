@@ -477,9 +477,7 @@ export const LexContext = {
   Normal: 0,
   CommandStart: 1,
   TestMode: 2,
-  // A prefix element (assignment or redirect) has already been consumed, so further
-  // assignments are still recognized but reserved words are not: `FOO=bar for` runs
-  // the command `for`, and `A=1 >f B=2 cmd` assigns both.
+  // After a prefix element: assignments still recognized, reserved words not.
   CommandPrefix: 3,
 } as const;
 export type LexContext = (typeof LexContext)[keyof typeof LexContext];
@@ -600,11 +598,7 @@ export class Lexer {
     return this.findClosingShellDelimiter(start, end, CH_RBRACKET);
   }
 
-  /**
-   * Find the closing bracket of a `$[ … ]` arithmetic expansion. Unlike an array subscript,
-   * bash's `$[` matcher does not recurse into `${ }`, so a `]` written inside braces closes
-   * it: `$[${x-]}` is complete, while `h[${x:-]}]=1` keys the array on `]`.
-   */
+  /** Find the closing bracket of `$[ … ]`, which unlike a subscript does not recurse into `${ }`. */
   private findClosingArithmeticBracket(start: number, end: number = this.srcEnd): number {
     return this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, false);
   }
@@ -1627,9 +1621,6 @@ export class Lexer {
           delimiter += "\\"; // trailing backslash escapes nothing and stays as itself
         }
       } else if (c === CH_BACKTICK) {
-        // A backquoted run belongs to the delimiter whole, newlines included, and is never
-        // run: bash reports ``cat <<`x` `` as wanting the literal delimiter `` `x` ``. It
-        // does not make the delimiter quoted, so the body still expands.
         const btStart = this.pos;
         this.pos++;
         while (this.pos < len && src.charCodeAt(this.pos) !== CH_BACKTICK) {
@@ -1685,9 +1676,7 @@ export class Lexer {
   // With parenEnds (inside $(...)), a line starting with the delimiter directly
   // followed by ")" also terminates the body, resuming at the ")" — bash treats
   // the substitution's closing paren as end-of-file for its heredocs.
-  // Match `delimiter` at `lineStart`, crossing `\`+newline pairs when it was written
-  // unquoted — bash reads continuation lines the same way it read the header, so the
-  // delimiter itself may straddle one. Returns the offset just past it, or -1.
+  // `join` crosses `\`+newline pairs, which an unquoted delimiter may straddle.
   private matchHereDocDelimiter(delimiter: string, lineStart: number, end: number, join: boolean): number {
     const src = this.src;
     let pos = lineStart;
@@ -1703,8 +1692,7 @@ export class Lexer {
     return pos;
   }
 
-  // End of the logical line at `from`: a `\` consumes the character after it, so `\`+newline
-  // continues the line while `\\` does not.
+  // A `\` consumes the next character, so `\`+newline continues the line and `\\` does not.
   private logicalLineEnd(from: number, end: number, join: boolean): number {
     const src = this.src;
     let pos = from;
@@ -1735,10 +1723,8 @@ export class Lexer {
         return bodyEnd;
       }
 
-      // Inside a substitution a line that merely *starts* with the delimiter also ends the
-      // body, provided a `)` appears anywhere later on the same logical line; scanning then
-      // resumes right after the delimiter text, mid-line. Bash finds that `)` by raw byte
-      // search, so quoting and backslashes in between do not hide it.
+      // A line starting with the delimiter also ends the body when a `)` follows on the same
+      // logical line; the scan then resumes mid-line, right after the delimiter.
       if (parenEnds) {
         const afterDelim = this.matchHereDocDelimiter(delimiter, lineStart, len, !quoted);
         if (afterDelim !== -1) {
@@ -1891,8 +1877,7 @@ export class Lexer {
     }
     if (ctx === LexContext.CommandStart || ctx === LexContext.CommandPrefix) {
       if (isAssignment === undefined) {
-        // Fast-path word (value === raw span): detect assignment positionally. This scan
-        // already visits every character, so noting a `[` on the way costs nothing extra.
+        // Fast-path word (value === raw span): detect assignment positionally.
         let eq = -1;
         let bracket = false;
         for (let i = tokenStart + 1; i < wordEnd; i++) {
@@ -1911,9 +1896,8 @@ export class Lexer {
           wordEnd < this.srcEnd &&
           scanAssignmentPrefix(src, tokenStart, wordEnd, ASSIGNMENT_NAME_START) >= ASSIGNMENT_INDEX_BASE
         ) {
-          // The word stopped on a metacharacter inside an unfinished subscript. Bash reads
-          // `a[...]` here as a matched pair, so re-read it with that rule on. The second
-          // pass leaves the fast path, so `_wordIsAssignment` is set and this cannot recur.
+          // The second pass leaves the fast path, setting `_wordIsAssignment`, so this
+          // cannot recur.
           this.pos = tokenStart;
           this.readWordText(true);
           this.classifyWord(out, ctx, tokenStart);
@@ -1928,7 +1912,7 @@ export class Lexer {
       }
     }
     // `]]` is reserved only where it can close a `[[`; operands and wordlist entries, which
-    // read Normal, are ordinary words, and so is a `]]` demoted by a command prefix.
+    // read Normal, are ordinary words, as is a `]]` demoted by a command prefix.
     if ((ctx === LexContext.CommandStart || ctx === LexContext.TestMode) && keywordEligible) {
       if (raw) {
         if (
@@ -1993,11 +1977,8 @@ export class Lexer {
     out.keywordEligible = keywordEligible;
   }
 
-  // `subscripts` re-reads a word already known to stop inside an array subscript: bash reads
-  // `a[...]` in assignment position as a matched pair, so metacharacters inside it are
-  // ordinary text (`a[1 + 2]=7`, `a[(1+2)*3]=9`). It skips the fast path outright, because
-  // that is the path that stopped too early. `classifyWord` decides when to set it;
-  // elsewhere bash splits the word normally, so `echo a[3|4]=8` really is a pipeline.
+  // `subscripts` re-reads a word known to stop inside an array subscript, where
+  // metacharacters are ordinary text.
   private readWordText(subscripts = false): void {
     const src = this.src;
     const len = this.srcEnd;
@@ -2115,8 +2096,6 @@ export class Lexer {
           }
           continue;
         }
-        // Inside an array subscript a metacharacter is ordinary text. Jump to the matching
-        // `]`; without one the word ends here, exactly as it did before.
         if (subscripts && assignmentState >= ASSIGNMENT_INDEX_BASE) {
           const close = this.findClosingBracket(pos);
           if (close !== -1) {
@@ -2154,8 +2133,7 @@ export class Lexer {
             pos++;
           }
         } else {
-          // A backslash at end of input escapes nothing and stays as itself: bash writes
-          // to a file literally named `\` for `>\`, and `echo a\` prints `a\`.
+          // A backslash at end of input escapes nothing and stays as itself.
           if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
           quoted = true;
           keywordEligible = false;
@@ -3185,9 +3163,7 @@ export class Lexer {
     while (this.pos < len && depth > 0) {
       const ch = src.charCodeAt(this.pos);
       if (ch === CH_DOLLAR) {
-        // Dispatch forward from the `$`. `$$` is the PID and consumes its own second `$`,
-        // so a `{` after it is literal text rather than a nested expansion — `${$${}`
-        // closes at the first `}`. Looking back from a `{` cannot tell the two apart.
+        // Dispatch forward: `$$` consumes its own second `$`, so a `{` after it is literal.
         const next = this.pos + 1 < len ? src.charCodeAt(this.pos + 1) : 0;
         if (next === CH_LBRACE) {
           depth++;
@@ -3203,7 +3179,6 @@ export class Lexer {
           continue;
         }
         if (next === CH_LPAREN) {
-          // `$(` and `$((`: a `}` inside the substitution body is that body's, not ours.
           const dollarPos = this.pos;
           this.pos += 2;
           this.extractBalanced();
@@ -3548,8 +3523,7 @@ export class Lexer {
         break;
       } else if (
         c === 99 /* c */ &&
-        // Ensure word start boundary (not inside e.g. "lowercase"). Only a metacharacter
-        // ends a word — `{`, `"` and `$` do not, so `{case` is one word and not a keyword.
+        // Ensure word start boundary (not inside e.g. "lowercase"); only `& 1` ends a word.
         (this.pos === start || (src.charCodeAt(this.pos - 1) < 128 && charType[src.charCodeAt(this.pos - 1)] & 1)) &&
         this.pos + 3 < len &&
         src.charCodeAt(this.pos + 1) === 97 /* a */ &&
@@ -3571,11 +3545,8 @@ export class Lexer {
     let caseParens = 0;
     let pendingDelims: { delimiter: string; strip: boolean; quoted: boolean }[] | null = null;
     let arithBase = -1;
-    // Bash finds a `$((` construct's extent with its arithmetic scanner, where `#` is an
-    // ordinary character, and keeps that extent even when the body turns out to be a
-    // command list. So `$(($())#)` closes at the last `)`, while the otherwise identical
-    // `$( ($())#)` does not — there the `#` after `)` opens a comment. The two characters
-    // before `start` are the opening delimiter this scan was entered for.
+    // A `$((` extent is found by bash's arithmetic scanner, where `#` is ordinary, and keeps
+    // that extent even for a command body. The two chars before `start` are the delimiter.
     const arithExtent =
       start >= 2 &&
       src.charCodeAt(start) === CH_LPAREN &&
@@ -3666,9 +3637,7 @@ export class Lexer {
         }
         if (this.pos > wStart) {
           const wLen = this.pos - wStart;
-          // A run only starts a word when what precedes it is a metacharacter. `{`, quotes
-          // and `$` merely broke the run, so `{case`, `"x"case` and `$xcase` are single
-          // words in which `case` is not a keyword.
+          // A run only starts a word after a metacharacter.
           const prev = wStart > start ? src.charCodeAt(wStart - 1) : 0;
           if (wLen === 4 && (wStart === start || (prev < 128 && charType[prev] & 1))) {
             const c0 = src.charCodeAt(wStart);
