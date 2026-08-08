@@ -444,3 +444,22 @@ test("case is a keyword in a substitution only at a real word boundary", () => {
   // And an unterminated one is still an error, as it is in bash.
   assert.ok(parse("$(a\ncase x in)").errors);
 });
+
+test("a $(( extent ignores comments, a $( ( extent does not", () => {
+  // Bash finds a `$((` construct's extent with its arithmetic scanner, where `#` is an
+  // ordinary character, and keeps that extent even when the body is a command list.
+  for (const source of [
+    "$(($())#)",
+    'echo "$((echo x)#)"',
+    'echo "$((echo A)# )"',
+    'echo "$((echo A) #)"',
+    'echo "$(($()) #)"',
+    'echo "$(($())#x)"',
+  ])
+    assert.equal(parse(source).errors, undefined, source);
+
+  // With a space after `$(` the arithmetic scanner never ran, so `#` opens a comment and
+  // swallows the closing paren — and a process substitution is not a `$((` extent either.
+  for (const source of ['echo "$( (echo A)#)"', 'echo "$( (echo A) #)"', 'echo "$(echo A #B)"', "<((a)#)"])
+    assert.ok(parse(source).errors, source);
+});

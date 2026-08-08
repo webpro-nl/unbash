@@ -3571,6 +3571,16 @@ export class Lexer {
     let caseParens = 0;
     let pendingDelims: { delimiter: string; strip: boolean; quoted: boolean }[] | null = null;
     let arithBase = -1;
+    // Bash finds a `$((` construct's extent with its arithmetic scanner, where `#` is an
+    // ordinary character, and keeps that extent even when the body turns out to be a
+    // command list. So `$(($())#)` closes at the last `)`, while the otherwise identical
+    // `$( ($())#)` does not — there the `#` after `)` opens a comment. The two characters
+    // before `start` are the opening delimiter this scan was entered for.
+    const arithExtent =
+      start >= 2 &&
+      src.charCodeAt(start) === CH_LPAREN &&
+      src.charCodeAt(start - 1) === CH_LPAREN &&
+      src.charCodeAt(start - 2) === CH_DOLLAR;
     let substitutions = 0;
     let reported = false;
 
@@ -3643,7 +3653,7 @@ export class Lexer {
         this.pos++;
         for (const hd of pendingDelims) this.skipHereDocBody(hd.delimiter, hd.strip, true, hd.quoted);
         pendingDelims = null;
-      } else if (ch === CH_HASH && arithBase < 0 && opensComment(src, this.pos, start)) {
+      } else if (ch === CH_HASH && arithBase < 0 && !arithExtent && opensComment(src, this.pos, start)) {
         // Word-boundary # opens a comment — opaque up to (not including) the
         // newline, so quotes and << inside it stay inert
         while (this.pos < len && src.charCodeAt(this.pos) !== CH_NL) this.pos++;
