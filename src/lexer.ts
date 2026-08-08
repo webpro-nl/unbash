@@ -1601,6 +1601,8 @@ export class Lexer {
         if (this.pos < len) {
           delimiter += src[this.pos];
           this.pos++;
+        } else {
+          delimiter += "\\"; // trailing backslash escapes nothing and stays as itself
         }
       } else if (c === CH_DOLLAR) {
         const next = this.pos + 1 < len ? src.charCodeAt(this.pos + 1) : 0;
@@ -2080,6 +2082,17 @@ export class Lexer {
               if (bp) litBuf += src[pos];
             }
             pos++;
+          }
+        } else {
+          // A backslash at end of input escapes nothing and stays as itself: bash writes
+          // to a file literally named `\` for `>\`, and `echo a\` prints `a\`.
+          if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
+          quoted = true;
+          keywordEligible = false;
+          lastValueChar = CH_BACKSLASH;
+          if (bt) {
+            text += "\\";
+            if (bp) litBuf += "\\";
           }
         }
         continue;

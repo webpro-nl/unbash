@@ -344,3 +344,18 @@ test("multi-digit fd", () => {
   const c = getCmd(parse("cmd 10>file"));
   assert.equal(c.redirects?.[0].fileDescriptor, 10);
 });
+
+test("a trailing backslash is a literal redirect target", () => {
+  // Bash escapes nothing with a backslash at end of input: `>\` writes to a file named `\`.
+  const command = parse(">\\").commands[0].command as Command;
+  assert.equal(command.redirects.length, 1);
+  assert.equal(command.redirects[0].operator, ">");
+  assert.equal(command.redirects[0].target?.text, "\\");
+  assert.equal(parse(">\\").errors, undefined);
+
+  const read = parse("cat <a\\").commands[0].command as Command;
+  assert.equal(read.redirects[0].target?.text, "a\\");
+
+  assert.equal((parse("echo a\\").commands[0].command as Command).suffix[0].text, "a\\");
+  assert.equal((parse("cat <<x\\").commands[0].command as Command).redirects[0].target?.text, "x\\");
+});
