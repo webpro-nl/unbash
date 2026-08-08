@@ -376,3 +376,27 @@ test("delimiter-prefixed body line does not end heredoc", () => {
     }
   }
 });
+
+// The substitution extent scanner treats `)` as a case-pattern terminator while a `case` is
+// open, so it must also account for parentheses that genuinely pair up inside one: the
+// optional leading `(` on a pattern, an extglob group, and any subshell in a case body.
+test("parentheses inside a case inside $() stay balanced", () => {
+  const cases = [
+    "x=$(case y in (a) z;; esac)",
+    "x=$(case y in a) (echo 1);; esac)",
+    "x=$(case y in a) z;; esac)",
+    "x=$(case y in a) case z in (b) :;; esac;; esac)",
+    'x="$(case y in (a) z;; esac)"',
+    "x=$(case $(f) in a) :;; esac)",
+    "x=$( (echo 1); case y in a) :;; esac )",
+    "x=$(case y in a) :;; esac; (echo 1))",
+    "x=$(case esac in (esac) echo esac;; esac)",
+  ];
+  for (const source of cases) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    assert.equal(ast.commands.length, 1, source);
+    assert.equal(ast.commands[0].end, source.length, source);
+    verify(source, ast);
+  }
+});

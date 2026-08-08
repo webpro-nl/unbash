@@ -3389,6 +3389,10 @@ export class Lexer {
 
     // Slow path: just track position (source is copied verbatim, so slice at end)
     let caseDepth = 0;
+    // Parentheses opened since the innermost `case` began. A `)` only terminates a case
+    // pattern when nothing is open — otherwise it closes a pattern's leading `(`, an
+    // extglob group, or a subshell in the case body, and must rebalance `depth`.
+    let caseParens = 0;
     let pendingDelims: { delimiter: string; strip: boolean }[] | null = null;
     let arithBase = -1;
     let substitutions = 0;
@@ -3411,11 +3415,13 @@ export class Lexer {
           }
         }
         depth++;
+        if (caseDepth > 0) caseParens++;
         this.pos++;
       } else if (ch === CH_RPAREN) {
-        if (caseDepth > 0) {
+        if (caseDepth > 0 && caseParens === 0) {
           this.pos++;
         } else {
+          if (caseDepth > 0) caseParens--;
           depth--;
           if (depth === 0) {
             const result = bt ? src.slice(start, this.pos) : "";
@@ -3491,6 +3497,7 @@ export class Lexer {
               caseDepth > 0
             ) {
               caseDepth--;
+              if (caseDepth === 0) caseParens = 0;
             }
           }
         } else {
