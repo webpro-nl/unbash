@@ -12,19 +12,31 @@ npm install unbash
 
 ## When to use unbash?
 
-Use unbash when your input is Bash syntax. A shell command or a complete script,
-and you need to inspect its structure without executing it. It returns a typed,
-source-positioned AST.
+Use unbash when your input is Bash source: a pasted command, a complete script,
+or shell source embedded in another format, and you need to inspect its
+structure without executing it. It returns a typed, source-positioned AST.
 
 Example use cases:
 
-- Audit commands or scripts against an application-defined safety policy
-- Find and classify commands, including commands nested in substitutions
-- Surface parse errors in generated or pasted Bash, with source positions
-- Extract a command such as `curl` from pasted shell input while keeping
-  neighboring pipelines, logical chains, redirects, and comments separate
-- Build command explanations from syntax, expansions, and source positions
-- Rewrite one syntactic element while preserving the surrounding command text
+- Classify commands, redirects, substitutions, and background execution for
+  permission prompts, allowlists, or audit findings
+- Statically inventory executables and literal file, configuration, and
+  dependency references in package scripts, CI steps, task-runner configs,
+  hooks, and source-code shell calls
+- Import or convert a supported command such as `curl` without folding
+  neighboring pipelines, logical chains, redirects, or comments into its
+  arguments
+- Attach diagnostics to generated or pasted Bash using source-positioned errors
+  and partial trees
+- Build explanations, visualizations, or structured previews of pipelines,
+  conditions, expansions, and nested commands
+- Find or migrate command invocations and flags with source-range edits that
+  leave surrounding formatting and comments untouched
+
+When Bash is embedded in JSON, YAML, or source code, use the host-language
+parser to extract the shell string first. unbash provides Bash structure and
+source ranges within that string; the consumer owns command-specific argument
+semantics and policy.
 
 ## Supported syntax
 
