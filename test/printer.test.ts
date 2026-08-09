@@ -187,6 +187,25 @@ test("subshell multi command", () => {
   assert.equal(fmt("(echo a; echo b)"), ["(", "  echo a", "  echo b", ")"].join("\n"));
 });
 
+test("nested subshells stay distinct from arithmetic commands", () => {
+  const cases = [
+    ["( (ls) )", "( (ls))", "Subshell"],
+    ["( ((ls)) )", "( (( ls )))", "ArithmeticCommand"],
+    ["( (echo x; echo y) )", ["( (", "  echo x", "  echo y", "))"].join("\n"), "Subshell"],
+  ];
+
+  for (const [source, expected, innerType] of cases) {
+    const printed = fmt(source);
+    assert.equal(printed, expected, source);
+    assert.equal(fmt(printed), printed, source);
+
+    const outer = parse(printed).commands[0]?.command;
+    assert.equal(outer?.type, "Subshell", source);
+    if (outer?.type !== "Subshell") assert.fail(source);
+    assert.equal(outer.body.commands[0]?.command.type, innerType, source);
+  }
+});
+
 // --- Brace group ---
 
 test("brace group", () => {

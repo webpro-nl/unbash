@@ -270,7 +270,8 @@ function funcNode(n: Function, indent: number): string {
 function subshell(n: Subshell, indent: number): string {
   const pad = "  ".repeat(indent);
   if (n.body.commands.length <= 1) {
-    return "(" + inlineList(n.body) + ")";
+    const body = inlineList(n.body);
+    return "(" + (body.startsWith("(") ? " " : "") + body + ")";
   }
   let out = "(\n";
   out += stmts(n.body.commands, indent + 1) + "\n";
