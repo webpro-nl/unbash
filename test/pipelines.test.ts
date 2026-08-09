@@ -45,22 +45,20 @@ test("negated pipeline", () => {
   assert.equal(p.negated, true);
 });
 
-// Bash's grammar is `pipeline_command: '!' pipeline_command`, and each `!` toggles the
-// invert flag rather than nesting, so an even number of them cancels out.
-test("repeated negation toggles like bash", () => {
-  const cases: [string, boolean | undefined][] = [
-    ["! cmd", true],
-    ["! ! cmd", undefined],
-    ["! ! ! cmd", true],
-    ["! !", undefined],
+test("repeated pipeline negation reports a syntax error", () => {
+  const cases: [string, number][] = [
+    ["! ! cmd", 2],
+    ["! ! ! cmd", 2],
+    ["! !", 2],
+    ["time ! ! cmd", 7],
   ];
-  for (const [source, negated] of cases) {
+  for (const [source, pos] of cases) {
     const ast = parse(source);
     const pipeline = ast.commands[0].command;
     assert.equal(pipeline.type, "Pipeline", source);
-    assert.equal(pipeline.type === "Pipeline" && pipeline.negated, negated, source);
+    assert.equal(pipeline.type === "Pipeline" && pipeline.negated, true, source);
     assert.equal(pipeline.pos, 0, source);
-    assert.equal(ast.errors, undefined, source);
+    assert.deepEqual(ast.errors, [{ message: "unexpected token '!'", pos }], source);
   }
 });
 
@@ -190,6 +188,8 @@ test("time alone produces a node", () => {
   assert.equal(p.type, "Pipeline");
   assert.equal(p.time, true);
   assert.equal(p.commands.length, 0);
+  assert.equal(p.pos, 0);
+  assert.equal(p.end, 4);
 });
 
 test("time -p alone produces a node", () => {
@@ -198,6 +198,8 @@ test("time -p alone produces a node", () => {
   const p = ast.commands[0].command as Pipeline;
   assert.equal(p.time, true);
   assert.equal(p.commands.length, 0);
+  assert.equal(p.pos, 0);
+  assert.equal(p.end, 7);
 });
 
 test("time on its own line followed by command", () => {

@@ -175,8 +175,9 @@ function cmd(c: Command): string {
 
 function pipe(p: Pipeline, indent: number): string {
   let out = "";
-  if (p.time) out += "time ";
-  if (p.negated) out += "! ";
+  if (p.time) out = "time";
+  if (p.negated) out += out ? " !" : "!";
+  if (out && p.commands.length > 0) out += " ";
   for (let i = 0; i < p.commands.length; i++) {
     if (i > 0) out += " " + p.operators[i - 1] + " ";
     out += printNode(p.commands[i], indent);

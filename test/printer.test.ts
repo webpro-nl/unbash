@@ -85,6 +85,11 @@ test("time pipeline", () => {
   assert.equal(fmt("time cmd"), "time cmd");
 });
 
+test("bare time has no trailing whitespace", () => {
+  assert.equal(fmt("time"), "time");
+  assert.equal(fmt("time -p"), "time");
+});
+
 // --- And/Or ---
 
 test("and list", () => {
