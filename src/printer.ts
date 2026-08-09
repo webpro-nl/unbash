@@ -72,7 +72,7 @@ function flushHeredocs(text: string, queued: number): string {
   if (heredocQueue.length === queued) return text;
   const pending = heredocQueue.splice(queued);
   if (pending.length === 1 && text.endsWith(HEREDOC_MARK)) {
-    return text.slice(0, -1) + "\n" + pending[0].content + delimName(pending[0]);
+    return text.slice(0, -1) + "\n" + heredocBody(pending[0]);
   }
   let out = "";
   let copied = 0;
@@ -90,9 +90,8 @@ function flushHeredocs(text: string, queued: number): string {
     }
     out += text.slice(copied, lineEnd);
     copied = lineEnd;
-    // `content` already ends in a newline, so this lands the delimiter on its own line.
     for (; marks > 0 && next < pending.length; marks--, next++) {
-      out += "\n" + pending[next].content + delimName(pending[next]);
+      out += "\n" + heredocBody(pending[next]);
     }
   }
   return out + text.slice(copied);
@@ -100,6 +99,11 @@ function flushHeredocs(text: string, queued: number): string {
 
 function delimName(r: Redirect): string {
   return r.target?.value ?? "";
+}
+
+function heredocBody(r: Redirect): string {
+  const content = r.content ?? "";
+  return content + (content.length > 0 && !content.endsWith("\n") ? "\n" : "") + delimName(r);
 }
 
 function printNode(n: Node, indent: number): string {

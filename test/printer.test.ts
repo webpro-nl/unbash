@@ -278,6 +278,16 @@ test("heredoc", () => {
   assert.equal(fmt(src), "cat << EOF\nhello\nworld\nEOF");
 });
 
+test("unterminated heredoc without a final newline prints stably", () => {
+  const printed = fmt("cat <<EOF\nno end marker");
+  assert.equal(printed, "cat << EOF\nno end marker\nEOF");
+  assert.equal(print(parse(printed)), printed);
+});
+
+test("empty heredoc body stays empty", () => {
+  assert.equal(fmt("cat <<EOF\nEOF"), "cat << EOF\nEOF");
+});
+
 test("escaped redirect target is requoted", () => {
   assert.equal(fmt("echo hi > fi\\ le"), "echo hi > 'fi le'");
   const command = parse(fmt("echo hi > fi\\ le")).commands[0].command as any;
