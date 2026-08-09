@@ -14,6 +14,28 @@ test("simple command", () => {
   assert.deepEqual(args(c), ["hello"]);
 });
 
+test("empty command collections are owned by their AST", () => {
+  const first = parse("echo").commands[0].command;
+  const second = parse("date").commands[0].command;
+  assert.equal(first.type, "Command");
+  assert.equal(second.type, "Command");
+  if (first.type !== "Command" || second.type !== "Command") return;
+  assert.notEqual(first.prefix, second.prefix);
+  assert.notEqual(first.suffix, second.suffix);
+  assert.notEqual(first.redirects, second.redirects);
+
+  assert.ok(first.name);
+  first.suffix.push(first.name);
+  assert.equal(second.suffix.length, 0);
+  const third = parse("pwd").commands[0].command;
+  assert.equal(third.type === "Command" ? third.suffix.length : undefined, 0);
+});
+
+test("empty statement redirects are owned by their statement", () => {
+  const statements = parse("echo; date").commands;
+  assert.notEqual(statements[0].redirects, statements[1].redirects);
+});
+
 test("command with flags", () => {
   const c = getCmd(parse("program -short --long args"));
   assert.equal(c.name?.text, "program");

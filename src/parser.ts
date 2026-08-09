@@ -72,6 +72,7 @@ class ArithmeticCommandImpl implements ArithmeticCommand {
   set expression(v: ArithmeticExpression | undefined) {
     this.#expression = v ?? undefined;
   }
+
 }
 
 class ArithmeticForImpl implements ArithmeticFor {
@@ -158,6 +159,7 @@ class ArithmeticForImpl implements ArithmeticFor {
   set update(v: ArithmeticExpression | undefined) {
     this.#update = v ?? undefined;
   }
+
 }
 
 const CASE_TERMINATORS: Record<number, CaseTerminator> = {
@@ -319,9 +321,11 @@ const heredocDelimiterParts: PartsResolver = (source, word) => {
   return raw === word.text ? undefined : [{ type: "Literal", value: word.text, text: raw }];
 };
 
-const EMPTY_PREFIX: AssignmentPrefix[] = [];
-const EMPTY_SUFFIX: Word[] = [];
 const EMPTY_REDIRECTS: Redirect[] = [];
+
+function ownEmpty<T>(values: T[]): T[] {
+  return values.length === 0 ? [] : values;
+}
 
 export function parse(source: string): ParsedScript {
   return new Parser(source, 0, source.length).run();
@@ -432,7 +436,7 @@ class Parser {
       end,
       command,
       background: undefined,
-      redirects,
+      redirects: ownEmpty(redirects),
     };
   }
 
@@ -674,9 +678,9 @@ class Parser {
         pos,
         end: startEnd,
         name: undefined,
-        prefix: EMPTY_PREFIX,
-        suffix: EMPTY_SUFFIX,
-        redirects: EMPTY_REDIRECTS,
+        prefix: [],
+        suffix: [],
+        redirects: [],
       };
       const bodyRedirects = this._redirects;
       this._redirects = EMPTY_REDIRECTS;
@@ -698,13 +702,13 @@ class Parser {
         pos: tentativeWord.pos,
         end: tentativeWord.end,
         name: tentativeWord,
-        prefix: EMPTY_PREFIX,
-        suffix: EMPTY_SUFFIX,
-        redirects: EMPTY_REDIRECTS,
+        prefix: [],
+        suffix: [],
+        redirects: [],
       };
       const redirects = this.collectTrailingRedirects();
       const end = redirects.length > 0 ? redirects[redirects.length - 1].end : cmd.end;
-      return { type: "Coproc", pos, end, name: undefined, body: cmd, redirects };
+      return { type: "Coproc", pos, end, name: undefined, body: cmd, redirects: ownEmpty(redirects) };
     }
 
     if (body.type === "Command") {
@@ -716,7 +720,7 @@ class Parser {
       cmd.pos = tentativeWord.pos;
       const redirects = this.collectTrailingRedirects();
       const end = redirects.length > 0 ? redirects[redirects.length - 1].end : cmd.end;
-      return { type: "Coproc", pos, end, name: undefined, body: cmd, redirects };
+      return { type: "Coproc", pos, end, name: undefined, body: cmd, redirects: ownEmpty(redirects) };
     }
 
     // Pipeline or compound command — tentative "name" IS the coproc name
@@ -1293,13 +1297,13 @@ class Parser {
     const redirects = this._redirects;
     this._redirects = EMPTY_REDIRECTS;
     const end = redirects.length > 0 ? redirects[redirects.length - 1].end : body.end;
-    return { type: "Function", pos, end, name, body, redirects };
+    return { type: "Function", pos, end, name, body, redirects: ownEmpty(redirects) };
   }
 
   // simple_command or function_def (word '(' ')' body)
   private simpleCommandOrFunction(): Node {
-    let prefix: AssignmentPrefix[] = EMPTY_PREFIX;
-    let redirects: Redirect[] = EMPTY_REDIRECTS;
+    const prefix: AssignmentPrefix[] = [];
+    let redirects: Redirect[] = [];
     let cmdPos = this.tok.peek(LexContext.CommandStart).pos;
     let lastEnd = cmdPos;
 
@@ -1311,7 +1315,6 @@ class Parser {
       if (t === Token.Assignment) {
         const assignment = this.tok.next(ctx);
         lastEnd = assignment.end;
-        if (prefix === EMPTY_PREFIX) prefix = [];
         prefix.push(this.parseAssignment(assignment));
       } else if (t === Token.Redirect) {
         redirects = this.collectRedirect(redirects, ctx);
@@ -1329,7 +1332,7 @@ class Parser {
         end: lastEnd,
         name: undefined,
         prefix,
-        suffix: EMPTY_SUFFIX,
+        suffix: [],
         redirects,
       } satisfies Command;
     }
@@ -1347,18 +1350,24 @@ class Parser {
         const bodyRedirects = this._redirects;
         this._redirects = EMPTY_REDIRECTS;
         const end = bodyRedirects.length > 0 ? bodyRedirects[bodyRedirects.length - 1].end : body.end;
-        return { type: "Function", pos: name.pos, end, name, body, redirects: bodyRedirects } satisfies Function;
+        return {
+          type: "Function",
+          pos: name.pos,
+          end,
+          name,
+          body,
+          redirects: ownEmpty(bodyRedirects),
+        } satisfies Function;
       }
     }
 
-    let suffix: Word[] = EMPTY_SUFFIX;
+    const suffix: Word[] = [];
 
     // Collect suffix words and redirects
     for (;;) {
       const st = this.tok.peek(LexContext.Normal).token;
       if (st === Token.Word || st === Token.Assignment) {
         const w = this.readWord(LexContext.Normal);
-        if (suffix === EMPTY_SUFFIX) suffix = [];
         suffix.push(w);
         lastEnd = w.end;
       } else if (st === Token.Redirect) {
@@ -1369,7 +1378,15 @@ class Parser {
       }
     }
 
-    return { type: "Command", pos: cmdPos, end: lastEnd, name, prefix, suffix, redirects } satisfies Command;
+    return {
+      type: "Command",
+      pos: cmdPos,
+      end: lastEnd,
+      name,
+      prefix,
+      suffix,
+      redirects,
+    } satisfies Command;
   }
 
   private collectRedirect(redirects: Redirect[], ctx: LexContext): Redirect[] {
