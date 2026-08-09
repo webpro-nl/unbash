@@ -1325,6 +1325,7 @@ export class Lexer {
     this.pos = pos;
 
     if (pos >= len) {
+      this.consumePendingHereDocs();
       setToken(out, Token.EOF, "", pos, pos);
       return;
     }

@@ -288,6 +288,10 @@ test("empty heredoc body stays empty", () => {
   assert.equal(fmt("cat <<EOF\nEOF"), "cat << EOF\nEOF");
 });
 
+test("heredoc target at end of input has an empty body", () => {
+  assert.equal(fmt("cat <<EOF"), "cat << EOF\nEOF");
+});
+
 test("escaped redirect target is requoted", () => {
   assert.equal(fmt("echo hi > fi\\ le"), "echo hi > 'fi le'");
   const command = parse(fmt("echo hi > fi\\ le")).commands[0].command as any;
