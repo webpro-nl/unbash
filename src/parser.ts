@@ -73,6 +73,15 @@ class ArithmeticCommandImpl implements ArithmeticCommand {
     this.#expression = v ?? undefined;
   }
 
+  toJSON(): ArithmeticCommand {
+    return {
+      type: this.type,
+      pos: this.pos,
+      end: this.end,
+      expression: this.expression,
+      body: this.body,
+    };
+  }
 }
 
 class ArithmeticForImpl implements ArithmeticFor {
@@ -160,6 +169,17 @@ class ArithmeticForImpl implements ArithmeticFor {
     this.#update = v ?? undefined;
   }
 
+  toJSON(): ArithmeticFor {
+    return {
+      type: this.type,
+      pos: this.pos,
+      end: this.end,
+      initialize: this.initialize,
+      test: this.test,
+      update: this.update,
+      body: this.body,
+    };
+  }
 }
 
 const CASE_TERMINATORS: Record<number, CaseTerminator> = {

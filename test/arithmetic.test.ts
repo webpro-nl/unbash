@@ -544,6 +544,16 @@ test("(( expr )) has parsed expr in ArithmeticCommand", () => {
   assert.equal((node.expression as any).operator, "+=");
 });
 
+test("ArithmeticCommand serializes its lazy expression", () => {
+  const ast: ReturnType<typeof parse> = JSON.parse(JSON.stringify(parse("(( x + 1 ))")));
+  const node = ast.commands[0].command;
+  assert.equal(node.type, "ArithmeticCommand");
+  if (node.type !== "ArithmeticCommand") return;
+  assert.equal(node.expression?.type, "ArithmeticBinary");
+  if (node.expression?.type !== "ArithmeticBinary") return;
+  assert.equal(node.expression.operator, "+");
+});
+
 // --- Integration: ArithmeticFor ---
 
 test("for (( init; test; update )) has parsed exprs", () => {
@@ -563,6 +573,24 @@ test("for (( init; test; update )) has parsed exprs", () => {
   assert.equal(node.update!.type, "ArithmeticUnary");
   assert.equal((node.update as ArithmeticUnary).operator, "++");
   assert.equal((node.update as ArithmeticUnary).prefix, false);
+});
+
+test("ArithmeticFor serializes all lazy expressions", () => {
+  const ast: ReturnType<typeof parse> = JSON.parse(
+    JSON.stringify(parse("for (( i = 0; i < 10; i++ )); do echo $i; done")),
+  );
+  const node = ast.commands[0].command;
+  assert.equal(node.type, "ArithmeticFor");
+  if (node.type !== "ArithmeticFor") return;
+  assert.equal(node.initialize?.type, "ArithmeticBinary");
+  assert.equal(node.test?.type, "ArithmeticBinary");
+  assert.equal(node.update?.type, "ArithmeticUnary");
+  if (node.initialize?.type !== "ArithmeticBinary") return;
+  if (node.test?.type !== "ArithmeticBinary") return;
+  if (node.update?.type !== "ArithmeticUnary") return;
+  assert.equal(node.initialize.operator, "=");
+  assert.equal(node.test.operator, "<");
+  assert.equal(node.update.operator, "++");
 });
 
 test("for (( i=0, j=10; ... )) comma in init", () => {
