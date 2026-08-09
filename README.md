@@ -119,9 +119,10 @@ Word-like fields that can execute nested shell syntax expose the same structure.
 `BraceExpansion`, `ExtendedGlob`, and `ArithmeticWord` use `parts`; parameter
 and assignment array indexes use `indexParts`.
 
-Positions index the source owned by the nearest `ParsedScript`. Root scripts and
-verbatim nested substitutions share the caller's source, so their `pos`/`end`
-slice that source directly:
+Positions are zero-based UTF-16 code-unit offsets forming half-open `[pos, end)`
+ranges in the source owned by the nearest `ParsedScript`. Root scripts and
+verbatim nested substitutions share the caller's source, so their ranges slice
+that source directly:
 
 ```js
 const nested = word.parts.find((part) => part.type === "CommandExpansion").script;
