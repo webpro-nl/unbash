@@ -336,10 +336,12 @@ const BINARY_TEST_OPS: Record<string, 1> = {
 };
 
 // A heredoc delimiter is quote-removed but never expanded, so it has no expandable structure.
-const heredocDelimiterParts: PartsResolver = (source, word) => {
-  const raw = source.slice(word.pos, word.end);
-  return raw === word.text ? undefined : [{ type: "Literal", value: word.text, text: raw }];
-};
+function heredocDelimiterParts(value: string): PartsResolver {
+  return (source, word) => {
+    const raw = source.slice(word.pos, word.end);
+    return raw === value ? undefined : [{ type: "Literal", value, text: raw }];
+  };
+}
 
 const EMPTY_REDIRECTS: Redirect[] = [];
 
@@ -1427,8 +1429,9 @@ class Parser {
     };
     if (t.targetEnd > t.targetPos) {
       const heredoc = t.value === "<<" || t.value === "<<-";
-      const resolver = heredoc ? heredocDelimiterParts : undefined;
-      r.target = new WordImpl(t.content ?? "", t.targetPos, t.targetEnd, this.source, resolver, this.depth);
+      const resolver = heredoc ? heredocDelimiterParts(t.content ?? "") : undefined;
+      const text = this.source.slice(t.targetPos, t.targetEnd);
+      r.target = new WordImpl(text, t.targetPos, t.targetEnd, this.source, resolver, this.depth);
     } else {
       this.error("expected redirect target", t.targetPos);
     }

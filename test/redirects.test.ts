@@ -174,8 +174,19 @@ test("heredoc strip (<<-) captures body", () => {
 
 test("heredoc empty delimiter captures body", () => {
   const c = getCmd(parse('cat <<""\nhello\n'));
-  assert.equal(c.redirects![0].target?.text, "");
+  assert.equal(c.redirects![0].target?.text, '""');
+  assert.equal(c.redirects![0].target?.value, "");
   assert.equal(c.redirects![0].content, "hello\n");
+});
+
+test("quoted heredoc delimiter preserves raw source text", () => {
+  const source = "cat <<'EOF'\n$name\nEOF";
+  const redirect = getCmd(parse(source)).redirects[0];
+  assert.ok(redirect.target);
+  assert.equal(redirect.target.text, "'EOF'");
+  assert.equal(redirect.target.value, "EOF");
+  assert.equal(source.slice(redirect.target.pos, redirect.target.end), redirect.target.text);
+  assert.equal(redirect.heredocQuoted, true);
 });
 
 test("heredoc with quoted delimiter", () => {
@@ -301,6 +312,15 @@ test("redirect target carries parts for quoted string", () => {
   const src = 'echo hello > "out file.txt"';
   const c = getCmd(parse(src));
   assert.equal(wp(src, c.redirects![0].target!)![0].type, "DoubleQuoted");
+});
+
+test("redirect target preserves raw source text", () => {
+  const source = 'echo > "file name"';
+  const target = getCmd(parse(source)).redirects[0].target;
+  assert.ok(target);
+  assert.equal(target.text, '"file name"');
+  assert.equal(target.value, "file name");
+  assert.equal(source.slice(target.pos, target.end), target.text);
 });
 
 test("herestring target carries parts", () => {

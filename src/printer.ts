@@ -445,9 +445,9 @@ function selectNode(n: Select, indent: number): string {
   return out;
 }
 
-// Partless redirect targets carry decoded text (quotes and escapes removed), so
-// tokenization-breaking characters must be requoted from the value. Glob and
-// expansion characters stay verbatim — quoting them would change meaning.
+// Partless targets with tokenization-breaking characters must be quoted from
+// their value. Glob and expansion characters stay verbatim — quoting them would
+// change meaning.
 const UNSAFE_TARGET = /[\s"'\\|&;<>()]/;
 
 function singleQuote(value: string): string {
