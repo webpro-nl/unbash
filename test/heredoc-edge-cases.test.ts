@@ -81,6 +81,24 @@ test("heredoc with numeric delimiter", () => {
   assert.equal(r.content, "stuff\n");
 });
 
+test("heredoc with an empty delimiter stops at the next blank line (#283)", () => {
+  const ast = parse("cat <<''\nhello\n\necho after");
+  assert.equal(ast.errors, undefined);
+  assert.equal(ast.end, 26);
+  assert.equal(ast.commands.length, 2);
+  const redirect = (ast.commands[0].command as Command).redirects[0];
+  assert.equal(redirect.target?.text, "''");
+  assert.equal(redirect.target?.value, "");
+  assert.equal(redirect.heredocQuoted, true);
+  assert.equal(redirect.content, "hello\n");
+  const next = ast.commands[1].command as Command;
+  assert.equal(next.name?.text, "echo");
+  assert.deepEqual(
+    next.suffix.map((word) => word.text),
+    ["after"],
+  );
+});
+
 // --- Strip heredoc with tabs ---
 
 test("<<- strips leading tabs from content and delimiter", () => {

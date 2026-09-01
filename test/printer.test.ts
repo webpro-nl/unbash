@@ -288,6 +288,10 @@ test("empty heredoc body stays empty", () => {
   assert.equal(fmt("cat <<EOF\nEOF"), "cat << EOF\nEOF");
 });
 
+test("empty heredoc delimiter keeps its blank terminator (#283)", () => {
+  assert.equal(fmt("cat <<''\nhello\n\n"), "cat << ''\nhello\n\n");
+});
+
 test("heredoc target at end of input has an empty body", () => {
   assert.equal(fmt("cat <<EOF"), "cat << EOF\nEOF");
 });

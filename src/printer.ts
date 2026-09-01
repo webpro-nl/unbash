@@ -103,7 +103,8 @@ function delimName(r: Redirect): string {
 
 function heredocBody(r: Redirect): string {
   const content = r.content ?? "";
-  return content + (content.length > 0 && !content.endsWith("\n") ? "\n" : "") + delimName(r);
+  const delimiter = delimName(r);
+  return content + (content.length > 0 && !content.endsWith("\n") ? "\n" : "") + delimiter + (delimiter ? "" : "\n");
 }
 
 function printNode(n: Node, indent: number): string {
