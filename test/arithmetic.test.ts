@@ -544,6 +544,24 @@ test("(( expr )) has parsed expr in ArithmeticCommand", () => {
   assert.equal((node.expression as any).operator, "+=");
 });
 
+test("arithmetic commands keep nested subscript words (#272)", () => {
+  const source = "((a[b[i]]))";
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    ast.commands.map(({ pos, end }) => [pos, end]),
+    [[0, 11]],
+  );
+  const node = ast.commands[0].command;
+  assert.equal(node.type, "ArithmeticCommand");
+  if (node.type !== "ArithmeticCommand") return;
+  assert.equal(node.body, "a[b[i]]");
+  const expression = node.expression;
+  assert.equal(expression?.type, "ArithmeticWord");
+  if (expression?.type !== "ArithmeticWord") return;
+  assert.deepEqual([expression.pos, expression.end, expression.value], [2, 9, "a[b[i]]"]);
+});
+
 test("ArithmeticCommand serializes its lazy expression", () => {
   const ast: ReturnType<typeof parse> = JSON.parse(JSON.stringify(parse("(( x + 1 ))")));
   const node = ast.commands[0].command;

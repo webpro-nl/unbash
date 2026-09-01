@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
-import type { AssignmentPrefix, Command } from "../src/types.ts";
+import type { AssignmentPrefix, BraceGroup, Case, Command, Function, If, Pipeline } from "../src/types.ts";
 import { computeWordParts } from "../src/parts.ts";
 
 const getAssign = (src: string, i = 0): AssignmentPrefix => {
@@ -9,6 +9,21 @@ const getAssign = (src: string, i = 0): AssignmentPrefix => {
   const cmd = ast.commands[0].command as Command;
   const assigns = cmd.prefix.filter((p) => p.type === "Assignment");
   return assigns[i] as AssignmentPrefix;
+};
+
+const assertCommandGroups = (source: string, expected: unknown) => {
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined, source);
+  assert.deepEqual(
+    ast.commands.map(({ command, pos, end }) =>
+      command.type === "Command"
+        ? [command.type, pos, end, command.name?.text, command.prefix.map((assignment) => assignment.name)]
+        : [command.type, pos, end],
+    ),
+    expected,
+    source,
+  );
+  return ast;
 };
 
 // --- Basic scalar assignments ---
@@ -226,6 +241,23 @@ test("value with simple expansion", () => {
   assert.equal(computeWordParts(input, a.value!)![0].type, "SimpleExpansion");
 });
 
+test("repeated unquoted expansions stay in one assignment value (#180)", () => {
+  const source = "var=$ITEM/word-$ITEM/a/b";
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  const value = ((ast.commands[0].command as Command).prefix[0] as AssignmentPrefix).value!;
+  assert.deepEqual([value.text, value.pos, value.end], ["$ITEM/word-$ITEM/a/b", 4, 24]);
+  assert.deepEqual(
+    computeWordParts(source, value)?.map(({ type, text }) => [type, text]),
+    [
+      ["SimpleExpansion", "$ITEM"],
+      ["Literal", "/word-"],
+      ["SimpleExpansion", "$ITEM"],
+      ["Literal", "/a/b"],
+    ],
+  );
+});
+
 test("value with command substitution", () => {
   const input = "y=$(echo hi)";
   const a = getAssign(input);
@@ -251,6 +283,50 @@ test("value with param expansion", () => {
   assert.equal(computeWordParts(input, a.value!)![0].type, "ParameterExpansion");
 });
 
+test("parameter expansion operands keep unquoted pipes (#290)", () => {
+  for (const [source, roots, operand] of [
+    [
+      '#!/usr/bin/env bash\n\nHELLO="${HELLO:-YES|NO}"\n\necho "cool"\n',
+      [
+        ["Command", 21, 45, undefined, ["HELLO"]],
+        ["Command", 47, 58, "echo", []],
+      ],
+      ["YES|NO", 37, 43],
+    ],
+    [
+      '#!/usr/bin/env bash\n\nHELLO="${HELLO:-YES|NO|MAYBE}"\n\necho "cool"\n',
+      [
+        ["Command", 21, 51, undefined, ["HELLO"]],
+        ["Command", 53, 64, "echo", []],
+      ],
+      ["YES|NO|MAYBE", 37, 49],
+    ],
+    [
+      '#!/usr/bin/env bash\n\nHELLO="${HELLO:-"YES|NO|MAYBE"}"\n\necho "cool"\n',
+      [
+        ["Command", 21, 53, undefined, ["HELLO"]],
+        ["Command", 55, 66, "echo", []],
+      ],
+      ['"YES|NO|MAYBE"', 37, 51],
+    ],
+  ] as const) {
+    const ast = assertCommandGroups(source, roots);
+    const command = ast.commands[0].command;
+    assert.equal(command.type, "Command", source);
+    if (command.type !== "Command") continue;
+    const assignment = command.prefix[0];
+    assert.equal(assignment.type, "Assignment", source);
+    if (assignment.type !== "Assignment") continue;
+    const quoted = assignment.value?.parts?.[0];
+    assert.equal(quoted?.type, "DoubleQuoted", source);
+    if (quoted?.type !== "DoubleQuoted") continue;
+    const expansion = quoted.parts[0];
+    assert.equal(expansion.type, "ParameterExpansion", source);
+    if (expansion.type !== "ParameterExpansion") continue;
+    assert.deepEqual([expansion.operand?.text, expansion.operand?.pos, expansion.operand?.end], operand, source);
+  }
+});
+
 // --- Multiple assignments ---
 
 test("multiple assignments", () => {
@@ -269,6 +345,111 @@ test("env var prefix with command", () => {
   assert.equal(a.name, "NODE_ENV");
   assert.equal(a.value?.text, "production");
   assert.equal(cmd.name?.text, "node");
+});
+
+test("assignment-only commands end at newlines before if (#228)", () => {
+  assertCommandGroups("a= c=\nb=\nif true; then true; fi", [
+    ["Command", 0, 5, undefined, ["a", "c"]],
+    ["Command", 6, 8, undefined, ["b"]],
+    ["If", 9, 31],
+  ]);
+  assertCommandGroups("a= c= b=\nif true; then true; fi", [
+    ["Command", 0, 8, undefined, ["a", "c", "b"]],
+    ["If", 9, 31],
+  ]);
+});
+
+test("multiple assignments do not absorb export across a newline (#295)", () => {
+  assertCommandGroups("a=a\nb=b c=c\nexport a\nexport b c", [
+    ["Command", 0, 3, undefined, ["a"]],
+    ["Command", 4, 11, undefined, ["b", "c"]],
+    ["Command", 12, 20, "export", []],
+    ["Command", 21, 31, "export", []],
+  ]);
+});
+
+test("negated conditions preserve multiple assignment prefixes (#318)", () => {
+  const cases = [
+    [
+      "if ! IFS=$'\\n' REPLY=$(cat response); then :; else :; fi;",
+      56,
+      [
+        ["IFS", 5, 14],
+        ["REPLY", 15, 36],
+      ],
+    ],
+    [
+      "if ! FOO='foo' BAR='bar'; then :; else :; fi;",
+      44,
+      [
+        ["FOO", 5, 14],
+        ["BAR", 15, 24],
+      ],
+    ],
+  ] as const;
+
+  for (const [source, end, assignments] of cases) {
+    const ast = assertCommandGroups(source, [["If", 0, end]]);
+    const pipeline = (ast.commands[0].command as If).clause.commands[0].command as Pipeline;
+    const command = pipeline.commands[0] as Command;
+    assert.deepEqual([pipeline.type, pipeline.negated, command.type], ["Pipeline", true, "Command"], source);
+    assert.deepEqual(
+      command.prefix.map((assignment) => [assignment.name, assignment.pos, assignment.end]),
+      assignments,
+      source,
+    );
+    if (source === cases[0][0]) {
+      const expansion = command.prefix[1].value?.parts?.[0];
+      assert.equal(expansion?.type, "CommandExpansion", source);
+      if (expansion?.type !== "CommandExpansion") return;
+      const nested = expansion.script?.commands[0].command as Command;
+      assert.deepEqual([expansion.text, nested.name?.text], ["$(cat response)", "cat"], source);
+    }
+  }
+});
+
+test("assignment-only commands end before if inside functions (#342)", () => {
+  const source = `handle_mime() {
+  mime="$1" uncompressed_filename="$2"
+
+  if [ -z "$decompress" ]; then
+    case "$mime" in
+    esac
+  fi
+}`;
+  const cases = [
+    [source, 123, [58, 121], [92, 116]],
+    [source.replace('filename="$2"', 'filename="$2";'), 124, [59, 122], [93, 117]],
+  ] as const;
+
+  for (const [source, end, ifSpan, caseSpan] of cases) {
+    const ast = assertCommandGroups(source, [["Function", 0, end]]);
+    const fn = ast.commands[0].command as Function;
+    const body = (fn.body as BraceGroup).body.commands;
+    const assignments = body[0].command as Command;
+    const caseNode = (body[1].command as If).then.commands[0].command as Case;
+    assert.deepEqual(
+      [
+        fn.body.type,
+        body.map(({ command, pos, end }) => [command.type, pos, end]),
+        assignments.prefix.map(({ name, pos, end }) => [name, pos, end]),
+        [caseNode.type, caseNode.pos, caseNode.end, caseNode.items],
+      ],
+      [
+        "BraceGroup",
+        [
+          ["Command", 18, 54],
+          ["If", ...ifSpan],
+        ],
+        [
+          ["mime", 18, 27],
+          ["uncompressed_filename", 28, 54],
+        ],
+        ["Case", ...caseSpan, []],
+      ],
+      source,
+    );
+  }
 });
 
 // --- Text field preserved ---

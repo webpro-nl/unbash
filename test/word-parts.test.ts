@@ -48,6 +48,28 @@ test("unquoted variable", () => {
   assert.deepEqual(p(src, c.suffix[0]), [{ type: "SimpleExpansion", text: "$name" }]);
 });
 
+for (const [label, source, range] of [
+  ["primary", "$FOO/$BAR/", [0, 10]],
+  ["echo argument", "echo $FOO/$BAR/", [5, 15]],
+] as const) {
+  test(`punctuation-separated expansions stay in one ${label} word (#315)`, () => {
+    const ast = parse(source);
+    const command = getCmd(ast);
+    const word = command.name?.text === "echo" ? command.suffix[0] : command.name!;
+    assert.equal(ast.errors, undefined);
+    assert.deepEqual([word.text, word.pos, word.end], ["$FOO/$BAR/", ...range]);
+    assert.deepEqual(
+      p(source, word)?.map(({ type, text }) => [type, text]),
+      [
+        ["SimpleExpansion", "$FOO"],
+        ["Literal", "/"],
+        ["SimpleExpansion", "$BAR"],
+        ["Literal", "/"],
+      ],
+    );
+  });
+}
+
 test("special variables", () => {
   const src = "echo $@ $# $?";
   const c = getCmd(parse(src));
@@ -72,6 +94,31 @@ test("parameter expansion ${...}", () => {
   assert.equal((parts[0] as any).parameter, "var");
   assert.equal((parts[0] as any).operator, ":-");
   assert.equal((parts[0] as any).operand.text, "default");
+});
+
+test("associative indexes keep whitespace-concatenated expansions (#268)", () => {
+  const source = 'echo "${things[$foo $bar]}"';
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  const word = getCmd(ast).suffix[0];
+  assert.deepEqual([word.text, word.pos, word.end], ['"${things[$foo $bar]}"', 5, 27]);
+
+  const quoted = p(source, word)?.[0];
+  assert.equal(quoted?.type, "DoubleQuoted");
+  if (quoted?.type !== "DoubleQuoted") return;
+  assert.equal(quoted.parts.length, 1);
+  const expansion = quoted.parts[0];
+  assert.equal(expansion.type, "ParameterExpansion");
+  if (expansion.type !== "ParameterExpansion") return;
+  assert.deepEqual(
+    [expansion.text, expansion.parameter, expansion.index],
+    ["${things[$foo $bar]}", "things", "$foo $bar"],
+  );
+  assert.deepEqual(expansion.indexParts, [
+    { type: "SimpleExpansion", text: "$foo" },
+    { type: "Literal", value: " ", text: " " },
+    { type: "SimpleExpansion", text: "$bar" },
+  ]);
 });
 
 test("command substitution $()", () => {

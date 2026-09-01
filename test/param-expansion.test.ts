@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
-import type { Command, ParameterExpansionPart } from "../src/types.ts";
+import type { Assignment, Command, ParameterExpansionPart, Word } from "../src/types.ts";
 import { computeWordParts } from "../src/parts.ts";
 
 const getCmd = (ast: ReturnType<typeof parse>, i = 0) => ast.commands[i].command as Command;
@@ -9,6 +9,23 @@ const getPart = (input: string): ParameterExpansionPart => {
   const c = getCmd(parse(input));
   const parts = computeWordParts(input, c.suffix[0])!;
   return parts[0] as ParameterExpansionPart;
+};
+const getAssignment = (ast: ReturnType<typeof parse>, i = 0): Assignment => {
+  const assignment = getCmd(ast, i).prefix[0];
+  assert.equal(assignment?.type, "Assignment");
+  return assignment as Assignment;
+};
+const getParam = (word: Word): ParameterExpansionPart => {
+  const part = word.parts?.[0];
+  assert.equal(part?.type, "ParameterExpansion");
+  return part as ParameterExpansionPart;
+};
+const getQuotedParam = (word: Word): ParameterExpansionPart => {
+  const quoted = word.parts?.[0];
+  assert.equal(quoted?.type, "DoubleQuoted");
+  const part = quoted?.type === "DoubleQuoted" ? quoted.parts[0] : undefined;
+  assert.equal(part?.type, "ParameterExpansion");
+  return part as ParameterExpansionPart;
 };
 
 // --- Simple expansions ---
@@ -86,11 +103,78 @@ test("${var:+alternate}", () => {
   assert.equal(p.operand!.text, "alternate");
 });
 
+test("semicolon in parameter expansion operand (#267)", () => {
+  for (const [source, end, operandEnd, literal] of [
+    ["${a:+$a;}", 9, 8, ";"],
+    ["${a:+$a; }", 10, 9, "; "],
+  ] as const) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    assert.equal(ast.end, end, source);
+    const word = getCmd(ast).name;
+    assert.equal(word?.text, source, source);
+    const part = word?.parts?.[0];
+    assert.equal(part?.type, "ParameterExpansion", source);
+    if (part?.type !== "ParameterExpansion") continue;
+    assert.equal(part.parameter, "a", source);
+    assert.equal(part.operator, ":+", source);
+    assert.deepEqual(
+      [part.operand?.pos, part.operand?.end, part.operand?.text],
+      [5, operandEnd, `$a${literal}`],
+      source,
+    );
+    assert.deepEqual(
+      part.operand?.parts,
+      [
+        { type: "SimpleExpansion", text: "$a" },
+        { type: "Literal", value: literal, text: literal },
+      ],
+      source,
+    );
+  }
+});
+
 test("${var:?error msg}", () => {
   const p = getPart("echo ${var:?error msg}");
   assert.equal(p.parameter, "var");
   assert.equal(p.operator, ":?");
   assert.equal(p.operand!.text, "error msg");
+});
+
+test("punctuation remains part of parameter operands (#280)", () => {
+  const source = [
+    "#!/usr/bin/env bash",
+    "",
+    ": ${ASDF:=qwer-zxcv}",
+    ": ${ASDF:=qwer}",
+    "ASDF=${ASDF:-qwer-zxcv}",
+    ": ${ASDF:?qwer+zxcv}",
+    ": ${ASDF:?qwer#zxcv}",
+    ": ${ASDF:?qwer@zxcv}",
+    ": ${ASDF:?qwer=zxcv}",
+    ": ${ASDF:+qwer-asdf}",
+    "",
+  ].join("\n");
+  const ast = parse(source);
+  const words = ast.commands.map((_, i) => (i === 2 ? getAssignment(ast, i).value! : getCmd(ast, i).suffix[0]));
+
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    words.map((word) => {
+      const part = getParam(word);
+      return [part.operator, part.operand?.text, part.operand?.pos, part.operand?.end, part.operand?.parts];
+    }),
+    [
+      [":=", "qwer-zxcv", 31, 40, undefined],
+      [":=", "qwer", 52, 56, undefined],
+      [":-", "qwer-zxcv", 71, 80, undefined],
+      [":?", "qwer+zxcv", 92, 101, undefined],
+      [":?", "qwer#zxcv", 113, 122, undefined],
+      [":?", "qwer@zxcv", 134, 143, undefined],
+      [":?", "qwer=zxcv", 155, 164, undefined],
+      [":+", "qwer-asdf", 176, 185, undefined],
+    ],
+  );
 });
 
 // --- Default/assign/error/alt without colon ---
@@ -177,6 +261,112 @@ test("${path%%/*} longest suffix strip", () => {
   assert.equal(p.operand!.text, "/*");
 });
 
+test("escaped braces remain complete strip operands (#259)", () => {
+  const source = 'name="${value#\\{sd.cicd.}"\necho "${name%\\}}"';
+  const ast = parse(source);
+  const operands = [getQuotedParam(getAssignment(ast).value!), getQuotedParam(getCmd(ast, 1).suffix[0])];
+
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    operands.map((part) => [
+      part.operator,
+      part.operand?.text,
+      part.operand?.value,
+      part.operand?.pos,
+      part.operand?.end,
+    ]),
+    [
+      ["#", "\\{sd.cicd.", "{sd.cicd.", 14, 24],
+      ["%", "\\}", "}", 40, 42],
+    ],
+  );
+});
+
+test("a quoted expansion remains inside a quoted suffix pattern (#254)", () => {
+  const source = 'echo "${1%"$2"*}"';
+  const ast = parse(source);
+  const word = getCmd(ast).suffix[0];
+  const part = getQuotedParam(word);
+
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    [part.parameter, part.operator, part.operand?.text, part.operand?.value, part.operand?.pos, part.operand?.end],
+    ["1", "%", '"$2"*', "$2*", 10, 15],
+  );
+  assert.deepEqual(part.operand?.parts, [
+    {
+      type: "DoubleQuoted",
+      text: '"$2"',
+      parts: [{ type: "SimpleExpansion", text: "$2" }],
+    },
+    { type: "Literal", value: "*", text: "*" },
+  ]);
+});
+
+test("closing brackets stay in suffix operands without swallowing later roots (#274, #285)", () => {
+  for (const { source, roots, assignmentIndex, assignment, operand } of [
+    {
+      source: [
+        "#!/bin/bash",
+        "",
+        "# comment is grey — syntax highlighting works",
+        'temp="${temp%]*}"',
+        "",
+        "# comment is not grey — syntax highlighting is broken here",
+        "",
+        ': "$"',
+        "# comment is grey again — syntax highlighting somehow restored",
+        "",
+      ].join("\n"),
+      roots: [
+        ["Command", 59, 76],
+        ["Command", 138, 143],
+      ],
+      assignmentIndex: 0,
+      assignment: ["temp", 59, 76],
+      operand: ["]*", 72, 74],
+    },
+    {
+      source: [
+        "#!/bin/bash",
+        "",
+        "a='abc[]'",
+        "",
+        'a="${a%]}"',
+        'printf "Something broke here!\\n"',
+        "",
+        "if false; then",
+        "    echo 'Just showing some further code'",
+        "    echo 'Ooops!'",
+        "fi",
+        "",
+      ].join("\n"),
+      roots: [
+        ["Command", 13, 22],
+        ["Command", 24, 34],
+        ["Command", 35, 67],
+        ["If", 69, 146],
+      ],
+      assignmentIndex: 1,
+      assignment: ["a", 24, 34],
+      operand: ["]", 31, 32],
+    },
+  ] as const) {
+    const ast = parse(source);
+    const assigned = getAssignment(ast, assignmentIndex);
+    const part = getQuotedParam(assigned.value!);
+
+    assert.equal(ast.errors, undefined, source);
+    assert.deepEqual(
+      ast.commands.map(({ command }) => [command.type, command.pos, command.end]),
+      roots,
+      source,
+    );
+    assert.deepEqual([assigned.name, assigned.pos, assigned.end], assignment, source);
+    assert.deepEqual([part.operand?.text, part.operand?.pos, part.operand?.end], operand, source);
+  }
+});
+
 // --- Replacement ---
 
 test("${var/pat/rep} replace first", () => {
@@ -217,6 +407,35 @@ test("${var/pat} replace with empty", () => {
   assert.equal(p.operator, "/");
   assert.equal(p.replace!.pattern.text, "\\."); // raw source span
   assert.equal(p.replace!.replacement.text, "");
+});
+
+test("a terminal ampersand remains in a quoted replacement (#279)", () => {
+  const source = "echo \"${LIST[@]/*/'prefix'&}\"";
+  const ast = parse(source);
+  const word = getCmd(ast).suffix[0];
+  const part = getQuotedParam(word);
+
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual([ast.commands.length, word.text, word.pos, word.end], [1, "\"${LIST[@]/*/'prefix'&}\"", 5, 29]);
+  assert.deepEqual(
+    [
+      part.parameter,
+      part.index,
+      part.operator,
+      part.replace?.pattern.text,
+      part.replace?.pattern.pos,
+      part.replace?.pattern.end,
+    ],
+    ["LIST", "@", "/", "*", 16, 17],
+  );
+  assert.deepEqual(
+    [part.replace?.replacement.text, part.replace?.replacement.pos, part.replace?.replacement.end],
+    ["'prefix'&", 18, 27],
+  );
+  assert.deepEqual(part.replace?.replacement.parts, [
+    { type: "SingleQuoted", value: "prefix", text: "'prefix'" },
+    { type: "Literal", value: "&", text: "&" },
+  ]);
 });
 
 // --- Substring/slice ---

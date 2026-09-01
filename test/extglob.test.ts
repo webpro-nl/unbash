@@ -65,6 +65,39 @@ test("extglob with literal prefix", () => {
   assert.equal(parts[1].type, "ExtendedGlob");
 });
 
+test("pathname-prefixed extglob stays inside nested rm command (#313; Bash -O extglob)", () => {
+  const source = `function check_pools() { (
+    shopt -s nullglob extglob
+    rm -fv /etc/php/*/fpm/pool.d/!(*.conf|*.orig|*.dpkg-dist)
+); }`;
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  const fn = ast.commands[0].command;
+  assert.deepEqual([fn.type, fn.pos, fn.end], ["Function", 0, 123]);
+  if (fn.type !== "Function") return;
+  assert.equal(fn.body.type, "BraceGroup");
+  if (fn.body.type !== "BraceGroup") return;
+  const subshell = fn.body.body.commands[0].command;
+  assert.deepEqual([subshell.type, subshell.pos, subshell.end], ["Subshell", 25, 120]);
+  if (subshell.type !== "Subshell") return;
+  assert.equal(subshell.body.commands.length, 2);
+  const rm = subshell.body.commands[1].command;
+  assert.deepEqual([rm.type, rm.pos, rm.end, rm.type === "Command" && rm.name?.text], ["Command", 61, 118, "rm"]);
+  if (rm.type !== "Command") return;
+  const path = rm.suffix[1];
+  assert.deepEqual([path.text, path.pos, path.end], ["/etc/php/*/fpm/pool.d/!(*.conf|*.orig|*.dpkg-dist)", 68, 118]);
+  assert.deepEqual(wp(source, path), [
+    { type: "Literal", value: "/etc/php/*/fpm/pool.d/", text: "/etc/php/*/fpm/pool.d/" },
+    {
+      type: "ExtendedGlob",
+      text: "!(*.conf|*.orig|*.dpkg-dist)",
+      operator: "!",
+      pattern: "*.conf|*.orig|*.dpkg-dist",
+      parts: undefined,
+    },
+  ]);
+});
+
 test("=(pattern) is NOT extglob (used for array assignment)", () => {
   const c = getCmd(parse("x=(a b c)"));
   assert.equal(c.prefix.length, 1);

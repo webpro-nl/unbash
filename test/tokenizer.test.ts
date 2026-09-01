@@ -169,6 +169,24 @@ test("positional parameter $1 is single digit", () => {
   assert.equal(c.suffix[0].text, "$11");
 });
 
+test("positional expansion remains part of a preceding path (#306)", () => {
+  const ast = parse("rm -f $COMMON_CONFDIR/ifaces/$1");
+  const command = getCmd(ast);
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    command.suffix.map(({ text, pos, end }) => [text, pos, end]),
+    [
+      ["-f", 3, 5],
+      ["$COMMON_CONFDIR/ifaces/$1", 6, 31],
+    ],
+  );
+  assert.deepEqual(command.suffix[1].parts, [
+    { type: "SimpleExpansion", text: "$COMMON_CONFDIR" },
+    { type: "Literal", value: "/ifaces/", text: "/ifaces/" },
+    { type: "SimpleExpansion", text: "$1" },
+  ]);
+});
+
 // ── Gnarly tokenization from real parsers ───────────────────────────
 
 test("empty assignment followed by semicolon", () => {
@@ -215,6 +233,66 @@ test("nested conditional parameter expansion with unbalanced parens", () => {
 test("escaped whitespace continues word", () => {
   const c = getCmd(parse("echo hello\\ world"));
   assert.equal(c.suffix[0].text, "hello\\ world");
+});
+
+test("escaped horizontal whitespace starts standalone arguments (#284)", () => {
+  const ast = parse('printf "<%s>\\n" x \\  \\\t x');
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    getCmd(ast)
+      .suffix.slice(2, 4)
+      .map(({ text, value, pos, end }) => [text, value, pos, end]),
+    [
+      ["\\ ", " ", 18, 20],
+      ["\\\t", "\t", 21, 23],
+    ],
+  );
+});
+
+test("single-bracket glob stays in one command (#214)", () => {
+  const source = '[ -e "${EROOT}"/usr/lib/gtk-2.0/2.[^1]* ]';
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  assert.equal(ast.commands.length, 1);
+  const command = getCmd(ast);
+  assert.deepEqual(
+    [command.name, ...command.suffix].map((word) => [word?.text, word?.pos, word?.end]),
+    [
+      ["[", 0, 1],
+      ["-e", 2, 4],
+      ['"${EROOT}"/usr/lib/gtk-2.0/2.[^1]*', 5, 39],
+      ["]", 40, 41],
+    ],
+  );
+});
+
+test("escaped parentheses remain builtin arguments while unescaped controls fail (#269)", () => {
+  const source = "[ \\( 'aaa' = 'bbb' \\) -o \\( 'ccc' = 'ccc' \\) ]";
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  assert.equal(ast.commands.length, 1);
+  const command = getCmd(ast);
+  assert.deepEqual([command.name?.text, command.pos, command.end], ["[", 0, 46]);
+  assert.deepEqual(
+    command.suffix.map(({ text, value, pos, end }) => [text, value, pos, end]),
+    [
+      ["\\(", "(", 2, 4],
+      ["'aaa'", "aaa", 5, 10],
+      ["=", "=", 11, 12],
+      ["'bbb'", "bbb", 13, 18],
+      ["\\)", ")", 19, 21],
+      ["-o", "-o", 22, 24],
+      ["\\(", "(", 25, 27],
+      ["'ccc'", "ccc", 28, 33],
+      ["=", "=", 34, 35],
+      ["'ccc'", "ccc", 36, 41],
+      ["\\)", ")", 42, 44],
+      ["]", "]", 45, 46],
+    ],
+  );
+
+  const invalid = "[ ( 'aaa' = 'bbb' ) -o ( 'ccc' = 'ccc' ) ]";
+  assert.deepEqual(parse(invalid).errors, [{ message: "unexpected token ')'", pos: 18 }]);
 });
 
 test("escaped whitespace keeps a following # literal (#68)", () => {

@@ -76,6 +76,37 @@ test("if/elif/else/fi", () => {
   assert.ok((if_.else as If).else);
 });
 
+test("redirected pipelines do not merge adjacent if statements (#304)", () => {
+  const source = `#!/usr/bin/env bash
+
+set -eo pipefail
+shopt -s inherit_errexit
+
+if ! rg -xF '^refs/heads/*-deploy' < <(git config --get-all remote.origin.fetch) >/dev/null &&
+    rg -- '-deploy$' < <(git branch -r -l) >/dev/null; then
+    git config --add remote.origin.fetch '^refs/heads/*-deploy'
+    git branch -lr | awk '$1 ~ /-deploy$/ { printf "%s%s", $1, "\\0" }' | xargs -0 -- git branch -r -d
+fi
+
+if ! rg -xF '^refs/tags/*-deploy' < <(git config --get-all remote.origin.fetch) >/dev/null &&
+    rg -- '-deploy$' < <(git tag -l) >/dev/null; then
+    git config --add remote.origin.fetch '^refs/tags/*-deploy'
+    git tag -l | rg -- '-deploy$' | tr '\\n' '\\0' | xargs -0 -- git tag -d
+fi`;
+  const ast = parse(source);
+
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    ast.commands.map((statement) => [statement.command.type, statement.pos, statement.end]),
+    [
+      ["Command", 21, 37],
+      ["Command", 38, 62],
+      ["If", 64, 387],
+      ["If", 389, 676],
+    ],
+  );
+});
+
 // --- For loop ---
 
 test("for loop", () => {
@@ -166,6 +197,37 @@ test("case/esac", () => {
   assert.equal(c.items[0].pattern[0].text, "a");
   assert.equal((c.items[0].body.commands[0].command as Command).name?.text, "echo");
   assert.equal(c.items[1].pattern[0].text, "b");
+});
+
+test("hyphens and underscores remain ordinary case-pattern words (#336)", () => {
+  for (const [source, itemIndex, expected] of [
+    [
+      '#!/bin/bash\n\ncase "$1" in\n  -first) echo 1;;\n  second) echo 2;;\n  third) echo 3;;\n  *) echo wildcard;;\nesac\n',
+      0,
+      ["-first", 28, 34],
+    ],
+    [
+      '#!/bin/bash\n\ncase "$1" in\n  first) echo 1;;\n  second) echo 2;;\n  third) echo 3;;\n  *) echo wildcard;;\nesac\n',
+      0,
+      ["first", 28, 33],
+    ],
+    [
+      '#!/bin/bash\n\ncase "$1" in\n  first) echo 1;;\n  s_econd) echo 2;;\n  third) echo 3;;\n  *) echo wildcard;;\nesac\n',
+      1,
+      ["s_econd", 46, 53],
+    ],
+  ] as const) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    const command = ast.commands[0].command;
+    assert.equal(command.type, "Case", source);
+    if (command.type !== "Case") continue;
+    assert.deepEqual(
+      command.items[itemIndex].pattern.map(({ text, pos, end }) => [text, pos, end]),
+      [expected],
+      source,
+    );
+  }
 });
 
 test("case with ;& fallthrough captures terminator", () => {

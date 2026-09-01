@@ -53,6 +53,25 @@ test("redirections not in suffix", () => {
   assert.equal(c.redirects?.length, 1);
 });
 
+test("single-bracket commands stay separate around a redirect (#316)", () => {
+  const source = "[ 2 -lt 3 ]\necho >1\n[ ]\n";
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    ast.commands.map(({ command }) => [(command as Command).name?.text, command.pos, command.end]),
+    [
+      ["[", 0, 11],
+      ["echo", 12, 19],
+      ["[", 20, 23],
+    ],
+  );
+  const redirect = getCmd(ast, 1).redirects[0];
+  assert.deepEqual(
+    [redirect.operator, redirect.pos, redirect.end, redirect.target?.text, redirect.target?.pos, redirect.target?.end],
+    [">", 17, 19, "1", 18, 19],
+  );
+});
+
 test("missing redirect targets do not reuse word state", () => {
   const redirect = getCmd(parse("echo >")).redirects?.[0];
   assert.equal(redirect?.target, undefined);
@@ -240,6 +259,83 @@ test("herestring redirect captured", () => {
   assert.equal(c.redirects![0].operator, "<<<");
   assert.equal(c.redirects![0].target?.text, "value");
 });
+
+test("multi-digit fd herestring (#226)", () => {
+  const redirect = getCmd(parse('cat /dev/fd/10 10<<<"test"')).redirects[0];
+  assert.deepEqual([redirect.fileDescriptor, redirect.operator, redirect.target?.text], [10, "<<<", '"test"']);
+});
+
+for (const { issue, source, name, suffix, redirects } of [
+  {
+    issue: "#232-A",
+    source: "cat >x <<< 'x'",
+    name: "cat",
+    suffix: [],
+    redirects: [
+      [">", "x", 4, 6, 5, 6],
+      ["<<<", "'x'", 7, 14, 11, 14],
+    ],
+  },
+  {
+    issue: "#232-C",
+    source: "x <<<x x >x",
+    name: "x",
+    suffix: ["x"],
+    redirects: [
+      ["<<<", "x", 2, 6, 5, 6],
+      [">", "x", 9, 11, 10, 11],
+    ],
+  },
+  {
+    issue: "#232-D",
+    source: "x <x a b c",
+    name: "x",
+    suffix: ["a", "b", "c"],
+    redirects: [["<", "x", 2, 4, 3, 4]],
+  },
+  {
+    issue: "#282-A",
+    source: "rev > output <<< hello",
+    name: "rev",
+    suffix: [],
+    redirects: [
+      [">", "output", 4, 12, 6, 12],
+      ["<<<", "hello", 13, 22, 17, 22],
+    ],
+  },
+  {
+    issue: "#282-B",
+    source: "rev <<< hello > output",
+    name: "rev",
+    suffix: [],
+    redirects: [
+      ["<<<", "hello", 4, 13, 8, 13],
+      [">", "output", 14, 22, 16, 22],
+    ],
+  },
+]) {
+  test(`redirect ordering and ranges (${issue})`, () => {
+    const ast = parse(source);
+    const command = getCmd(ast);
+    assert.equal(ast.errors, undefined);
+    assert.equal(command.name?.text, name);
+    assert.deepEqual(
+      command.suffix.map(({ text }) => text),
+      suffix,
+    );
+    assert.deepEqual(
+      command.redirects.map(({ operator, target, pos, end }) => [
+        operator,
+        target?.text,
+        pos,
+        end,
+        target?.pos,
+        target?.end,
+      ]),
+      redirects,
+    );
+  });
+}
 
 test("herestring with double-quoted variable", () => {
   const ast = parse('cat <<<"$ENTRIES"');

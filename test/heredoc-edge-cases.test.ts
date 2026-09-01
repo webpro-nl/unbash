@@ -16,6 +16,53 @@ const getRedirects = (src: string): Redirect[] => {
   return cmd.redirects;
 };
 
+const redirectShape = (command: Command) =>
+  command.redirects.map(({ operator, pos, end, target, content }) => [
+    operator,
+    pos,
+    end,
+    target?.text,
+    target?.pos,
+    target?.end,
+    content,
+  ]);
+
+test("leading heredoc redirect stays on the following command (#305)", () => {
+  const source = `#!/bin/bash
+
+<<-EOF echo "Hello
+  World"
+EOF
+`;
+  const ast = parse(source);
+  const command = ast.commands[0].command as Command;
+
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    [ast.type, ast.pos, ast.end, ast.commands.map(({ command, pos, end }) => [command.type, pos, end])],
+    ["Script", 0, 45, [["Command", 13, 40]]],
+  );
+  assert.deepEqual([command.name?.text, command.name?.pos, command.name?.end], ["echo", 20, 24]);
+  assert.deepEqual(redirectShape(command), [["<<-", 13, 19, "EOF", 16, 19, ""]]);
+});
+
+test("nameless leading heredoc keeps the following redirect (#305)", () => {
+  const source = "<< 'EOF' > scratch.ts\nhello\nEOF";
+  const ast = parse(source);
+  const command = ast.commands[0].command as Command;
+
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    [ast.type, ast.pos, ast.end, ast.commands.map(({ command, pos, end }) => [command.type, pos, end])],
+    ["Script", 0, 31, [["Command", 0, 21]]],
+  );
+  assert.equal(command.name, undefined);
+  assert.deepEqual(redirectShape(command), [
+    ["<<", 0, 8, "'EOF'", 3, 8, "hello\n"],
+    [">", 9, 21, "scratch.ts", 11, 21, "scratch.ts"],
+  ]);
+});
+
 // --- Multiple heredocs on one line ---
 
 test("two heredocs on one command", () => {

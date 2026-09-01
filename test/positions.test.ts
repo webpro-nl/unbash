@@ -75,6 +75,23 @@ test("if/then/fi positions", () => {
   assert.equal(slice(src, if_), src);
 });
 
+test("if branch lists group multiple commands (#212)", () => {
+  const src = "if true; false; true; then echo foo; echo bar; echo then; else echo baz; echo flux; echo else; fi";
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  const if_ = ast.commands[0].command as If;
+  assert.equal(if_.else?.type, "CompoundList");
+  if (if_.else?.type !== "CompoundList") return;
+  assert.deepEqual(
+    [if_.clause, if_.then, if_.else].map(({ pos, end, commands }) => [pos, end, commands.length]),
+    [
+      [3, 20, 3],
+      [27, 56, 3],
+      [63, 93, 3],
+    ],
+  );
+});
+
 test("if/elif/else/fi positions", () => {
   const src = "if a; then b; elif c; then d; else e; fi";
   const ast = parse(src);

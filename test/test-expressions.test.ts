@@ -10,6 +10,7 @@ import type {
   TestLogicalExpression,
   TestNotExpression,
   TestUnaryExpression,
+  WordPart,
 } from "../src/types.ts";
 
 const getTest = (src: string): TestCommand => {
@@ -24,6 +25,12 @@ const binary = (e: TestExpression) => e as TestBinaryExpression;
 const logical = (e: TestExpression) => e as TestLogicalExpression;
 const not = (e: TestExpression) => e as TestNotExpression;
 const group = (e: TestExpression) => e as TestGroupExpression;
+const partShape = (part: WordPart): unknown => {
+  if (part.type === "ExtendedGlob") return [part.type, part.text, part.operator, part.pattern];
+  if (part.type === "DoubleQuoted") return [part.type, part.text, part.parts.map(partShape)];
+  if (part.type === "Literal" || part.type === "SingleQuoted") return [part.type, part.text, part.value];
+  return [part.type, part.text];
+};
 
 // --- Unary tests ---
 
@@ -239,6 +246,41 @@ test("binary =~ single-quoted backslash stays literal", () => {
   assert.equal(t.type, "TestCommand");
   assert.equal(binary(t.expression).right.text, "'a\\'b");
   assert.equal(binary(t.expression).right.value, "a\\b");
+});
+
+test("binary =~ keeps a concatenated single-quoted space (#275)", () => {
+  const source = `#!/usr/bin/bash
+
+v='a b'
+if [[ $v =~ a' ' ]]; then
+    echo ok
+fi
+`;
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    ast.commands.map(({ command }) => [command.type, command.pos, command.end]),
+    [
+      ["Command", 17, 24],
+      ["If", 25, 65],
+    ],
+  );
+  const if_ = ast.commands[1].command;
+  assert.equal(if_.type, "If");
+  if (if_.type !== "If") return;
+  const command = if_.clause.commands[0].command;
+  assert.equal(command.type, "TestCommand");
+  if (command.type !== "TestCommand") return;
+  const right = binary(command.expression).right;
+  assert.deepEqual([right.text, right.value, right.pos, right.end], ["a' '", "a ", 37, 41]);
+  assert.deepEqual(right.parts?.map(partShape), [
+    ["Literal", "a", "a"],
+    ["SingleQuoted", "' '", " "],
+  ]);
+  assert.deepEqual(
+    if_.then.commands.map(({ command: body }) => [body.type, body.pos, body.end]),
+    [["Command", 55, 62]],
+  );
 });
 
 test("binary =~ splits at depth-zero && into logical AND", () => {
@@ -490,6 +532,101 @@ test("glob pattern on right side of ==", () => {
   const t = getTest("[[ $str == h* ]]");
   assert.equal(binary(t.expression).operator, "==");
   assert.equal(binary(t.expression).right.text, "h*");
+});
+
+test("prefixed extglobs stay in one test operand (#246)", () => {
+  for (const [source, expectedRange, expectedParts] of [
+    [
+      `if [[ "README.md" == *.@(md|mkd|markdown) ]]; then
+    echo "This is a Markdown file"
+fi
+`,
+      [21, 41],
+      [
+        ["Literal", "*.", "*."],
+        ["ExtendedGlob", "@(md|mkd|markdown)", "@", "md|mkd|markdown"],
+      ],
+    ],
+    [
+      '[[ "a.md" == ?.@(md|mkd) ]]',
+      [13, 24],
+      [
+        ["Literal", "?.", "?."],
+        ["ExtendedGlob", "@(md|mkd)", "@", "md|mkd"],
+      ],
+    ],
+    [
+      '[[ ".md" == .@(md|mkd) ]]',
+      [12, 22],
+      [
+        ["Literal", ".", "."],
+        ["ExtendedGlob", "@(md|mkd)", "@", "md|mkd"],
+      ],
+    ],
+    [
+      '[[ "ab.md" == "ab".@(md|mkd) ]]',
+      [14, 28],
+      [
+        ["DoubleQuoted", '"ab"', [["Literal", "ab", "ab"]]],
+        ["Literal", ".", "."],
+        ["ExtendedGlob", "@(md|mkd)", "@", "md|mkd"],
+      ],
+    ],
+  ] as const) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    const root = ast.commands[0].command;
+    const command = root.type === "If" ? root.clause.commands[0].command : root;
+    assert.equal(command.type, "TestCommand", source);
+    if (command.type !== "TestCommand") continue;
+    const right = binary(command.expression).right;
+    assert.deepEqual([right.pos, right.end], expectedRange, source);
+    assert.deepEqual(right.parts?.map(partShape), expectedParts, source);
+  }
+});
+
+test("quoted-space glob stays in one test operand (#321)", () => {
+  for (const [source, expectedIfEnd, expectedWord, expectedParts] of [
+    [
+      `if [[ "\${tmp}" = *"AB"* ]]; then
+  echo "ok"
+fi
+`,
+      47,
+      ['*"AB"*', "*AB*", 17, 23],
+      [
+        ["Literal", "*", "*"],
+        ["DoubleQuoted", '"AB"', [["Literal", "AB", "AB"]]],
+        ["Literal", "*", "*"],
+      ],
+    ],
+    [
+      `if [[ "\${tmp}" = *"A B"* ]]; then
+  echo "ok"
+fi
+`,
+      48,
+      ['*"A B"*', "*A B*", 17, 24],
+      [
+        ["Literal", "*", "*"],
+        ["DoubleQuoted", '"A B"', [["Literal", "A B", "A B"]]],
+        ["Literal", "*", "*"],
+      ],
+    ],
+  ] as const) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    const if_ = ast.commands[0].command;
+    assert.deepEqual([if_.type, if_.pos, if_.end], ["If", 0, expectedIfEnd], source);
+    assert.equal(if_.type, "If", source);
+    if (if_.type !== "If") continue;
+    const command = if_.clause.commands[0].command;
+    assert.equal(command.type, "TestCommand", source);
+    if (command.type !== "TestCommand") continue;
+    const right = binary(command.expression).right;
+    assert.deepEqual([right.text, right.value, right.pos, right.end], expectedWord, source);
+    assert.deepEqual(right.parts?.map(partShape), expectedParts, source);
+  }
 });
 
 test("bracket pattern", () => {

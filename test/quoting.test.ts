@@ -143,6 +143,37 @@ test("empty quotes and close-escape-reopen preserve one word", () => {
   );
 });
 
+test("backslashes do not escape quotes inside single quotes (#234)", () => {
+  const invalid = parse(String.raw`'sed -E \'s///\''`);
+  assert.deepEqual(invalid.errors, [{ message: "unterminated single quote", pos: 16 }]);
+
+  const valid = parse(String.raw`'sed -E '\''s///'\'`);
+  const word = getCmd(valid).name!;
+  assert.equal(valid.errors, undefined);
+  assert.equal(word.value, "sed -E 's///'");
+  assert.deepEqual(word.parts, [
+    { type: "SingleQuoted", value: "sed -E ", text: "'sed -E '" },
+    { type: "Literal", value: "'", text: "\\'" },
+    { type: "SingleQuoted", value: "s///", text: "'s///'" },
+    { type: "Literal", value: "'", text: "\\'" },
+  ]);
+});
+
+test("locale strings remain structured when concatenated (#258)", () => {
+  const ast = parse('foo$"bar"');
+  const word = getCmd(ast).name!;
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual([word.text, word.value, word.pos, word.end], ['foo$"bar"', "foobar", 0, 9]);
+  assert.deepEqual(word.parts, [
+    { type: "Literal", value: "foo", text: "foo" },
+    {
+      type: "LocaleString",
+      text: '$"bar"',
+      parts: [{ type: "Literal", value: "bar", text: "bar" }],
+    },
+  ]);
+});
+
 test("unquoted escapes suppress parameter and backtick expansion", () => {
   const words = getCmd(parse("echo ab\\${x}def bo\\`op")).suffix;
 
