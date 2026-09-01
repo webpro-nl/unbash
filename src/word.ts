@@ -29,6 +29,13 @@ function unescapeBareValue(text: string): string {
   return s + text.slice(start);
 }
 
+function commandExpansionValue(text: string): string {
+  if (text[0] !== "$") return text;
+  let pos = 1;
+  while (text[pos] === "\\" && text[pos + 1] === "\n") pos += 2;
+  return pos === 1 || text[pos] !== "(" ? text : "$" + text.slice(pos);
+}
+
 export class WordImpl implements Word {
   static _resolveWord: PartsResolver;
   static _resolveHeredocBody: PartsResolver;
@@ -69,6 +76,9 @@ export class WordImpl implements Word {
             case "DoubleQuoted":
             case "LocaleString":
               s += dequoteValue(p.parts);
+              break;
+            case "CommandExpansion":
+              s += commandExpansionValue(p.text);
               break;
             default:
               s += p.text;

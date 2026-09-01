@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Lexer } from "../src/lexer.ts";
 import { parse } from "../src/parser.ts";
 import { print } from "../src/printer.ts";
 import type { Command, Pipeline } from "../src/types.ts";
@@ -573,6 +574,150 @@ test("escaped whitespace keeps a following # literal inside $() (#68)", () => {
 
 test("closing substitution keeps a following # literal inside $() (#68)", () => {
   assertHashLiteralInCommandSubstitution("echo $(echo $(true)# hi)", ["$(true)#", "hi"]);
+});
+
+test("a continued command substitution stays structured inside $()", () => {
+  const source = "echo $(echo $\\\n(true)# hi)";
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    ast.commands.map(({ pos, end }) => [pos, end]),
+    [[0, 26]],
+  );
+
+  const outerWord = getCmd(ast).suffix[0];
+  assert.deepEqual(
+    [outerWord.text, outerWord.value, outerWord.pos, outerWord.end],
+    ["$(echo $\\\n(true)# hi)", "$(echo $\\\n(true)# hi)", 5, 26],
+  );
+
+  const outer = outerWord.parts?.[0];
+  assert.equal(outer?.type, "CommandExpansion");
+  if (outer?.type !== "CommandExpansion" || !outer.script) return;
+  assert.deepEqual(
+    [outer.text, outer.inner, outer.innerStart, outer.script.pos, outer.script.end, outer.script.errors],
+    ["$(echo $\\\n(true)# hi)", undefined, undefined, 7, 25, undefined],
+  );
+
+  const innerCommand = outer.script.commands[0].command as Command;
+  assert.deepEqual(
+    [innerCommand.type, innerCommand.pos, innerCommand.end, innerCommand.name?.text],
+    ["Command", 7, 25, "echo"],
+  );
+  assert.deepEqual(
+    innerCommand.suffix.map(({ text, value, pos, end }) => [text, value, pos, end]),
+    [
+      ["$\\\n(true)#", "$(true)#", 12, 22],
+      ["hi", "hi", 23, 25],
+    ],
+  );
+
+  const innerWord = innerCommand.suffix[0];
+  const innerLexer = new Lexer(source, innerWord.pos, innerWord.end);
+  const unresolvedInner = innerLexer.buildWordParts(innerWord.pos)?.[0];
+  assert.equal(unresolvedInner?.type, "CommandExpansion");
+  if (unresolvedInner?.type !== "CommandExpansion") return;
+  assert.deepEqual(
+    [unresolvedInner.text, unresolvedInner.inner, unresolvedInner.innerStart],
+    ["$\\\n(true)", "true", 16],
+  );
+
+  const innerParts = innerWord.parts;
+  assert.deepEqual(
+    innerParts?.map(({ type, text }) => [type, text]),
+    [
+      ["CommandExpansion", "$\\\n(true)"],
+      ["Literal", "#"],
+    ],
+  );
+  const nested = innerParts?.[0];
+  assert.equal(nested?.type, "CommandExpansion");
+  if (nested?.type !== "CommandExpansion" || !nested.script) return;
+  assert.deepEqual([nested.script.pos, nested.script.end, nested.script.errors], [16, 20, undefined]);
+  const nestedCommand = nested.script.commands[0].command as Command;
+  assert.deepEqual(
+    [nestedCommand.pos, nestedCommand.end, nestedCommand.type, nestedCommand.name?.text],
+    [16, 20, "Command", "true"],
+  );
+  assert.equal(verify(source, ast), source);
+  assert.equal(print(ast), source);
+  assert.equal(print(parse(print(ast))), source);
+});
+
+test("a continued command substitution is one direct word", () => {
+  const source = "echo $\\\n(true)# hi";
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  const command = getCmd(ast);
+  assert.deepEqual([command.pos, command.end, command.name?.text], [0, 18, "echo"]);
+  assert.deepEqual(
+    command.suffix.map(({ text, value, pos, end }) => [text, value, pos, end]),
+    [
+      ["$\\\n(true)#", "$(true)#", 5, 15],
+      ["hi", "hi", 16, 18],
+    ],
+  );
+  const expansion = command.suffix[0].parts?.[0];
+  assert.equal(expansion?.type, "CommandExpansion");
+  if (expansion?.type !== "CommandExpansion" || !expansion.script) return;
+  assert.deepEqual(
+    [expansion.text, expansion.script.pos, expansion.script.end, expansion.script.errors],
+    ["$\\\n(true)", 9, 13, undefined],
+  );
+
+  const repeatedSource = "echo $\\\n\\\n(true)";
+  const repeatedAst = parse(repeatedSource);
+  assert.equal(repeatedAst.errors, undefined);
+  const repeatedWord = getCmd(repeatedAst).suffix[0];
+  assert.deepEqual(
+    [repeatedWord.text, repeatedWord.value, repeatedWord.pos, repeatedWord.end],
+    ["$\\\n\\\n(true)", "$(true)", 5, 16],
+  );
+  const repeated = repeatedWord.parts?.[0];
+  assert.equal(repeated?.type, "CommandExpansion");
+  if (repeated?.type !== "CommandExpansion" || !repeated.script) return;
+  assert.deepEqual(
+    [repeated.text, repeated.script.pos, repeated.script.end, repeated.script.errors],
+    ["$\\\n\\\n(true)", 11, 15, undefined],
+  );
+});
+
+test("continued command-substitution scanning stays linear", () => {
+  const value = "x=$(" + "\\\n".repeat(512) + "echo hi)";
+  let reads = 0;
+  const source = new Proxy(Object(value), {
+    get(target, property) {
+      if (property === "charCodeAt") {
+        return (index: number) => {
+          reads++;
+          return value.charCodeAt(index);
+        };
+      }
+      const member = Reflect.get(target, property, target);
+      return typeof member === "function" ? member.bind(value) : member;
+    },
+  }) as unknown as string;
+
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  assert.equal(ast.commands.length, 1);
+  assert.ok(reads > 512, `expected more than 512 character reads, received ${reads}`);
+  assert.ok(reads < 10_000, `expected fewer than 10000 character reads, received ${reads}`);
+});
+
+test("an unescaped newline after $ does not join a command substitution", () => {
+  const source = "echo $\n(true)";
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    ast.commands.map(({ pos, end, command }) => [pos, end, command.type]),
+    [
+      [0, 6, "Command"],
+      [7, 13, "Subshell"],
+    ],
+  );
+  const dollar = getCmd(ast).suffix[0];
+  assert.deepEqual([dollar.text, dollar.value, dollar.pos, dollar.end, dollar.parts], ["$", "$", 5, 6, undefined]);
 });
 
 test("array-like assignment keeps an adjacent # literal inside $() (#68)", () => {

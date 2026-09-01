@@ -217,6 +217,11 @@ charType[CH_DOLLAR] = 2;
 charType[CH_BACKTICK] = 2;
 charType[CH_LBRACE] = 2;
 
+function skipLineContinuations(source: string, pos: number, end: number): number {
+  while (pos + 1 < end && source.charCodeAt(pos) === CH_BACKSLASH && source.charCodeAt(pos + 1) === CH_NL) pos += 2;
+  return pos;
+}
+
 const arithmeticWordDelimiter = new Uint8Array(128);
 for (const ch of [
   CH_TAB,
@@ -2742,6 +2747,13 @@ export class Lexer {
       return;
     }
 
+    const logicalPos = skipLineContinuations(src, this.pos, len);
+    if (
+      logicalPos > this.pos &&
+      src.charCodeAt(logicalPos) === CH_LPAREN &&
+      src.charCodeAt(logicalPos + 1) !== CH_LPAREN
+    )
+      this.pos = logicalPos;
     const ch = src.charCodeAt(this.pos);
 
     if (ch === CH_LPAREN) {
@@ -2753,7 +2765,7 @@ export class Lexer {
         this.errors.length = savedErrors;
         this.pos = savedPos;
       }
-      this.readCommandSubstitution();
+      this.readCommandSubstitution(dollarPos);
       return;
     }
 
@@ -3007,20 +3019,21 @@ export class Lexer {
     setToken(out, Token.ArithCmd, body, tokenStart, this.pos);
   }
 
-  private readCommandSubstitution(): void {
-    const dollarPos = this.pos - 1;
+  private readCommandSubstitution(dollarPos: number): void {
+    const openPos = this.pos;
     this.pos++; // skip (
     // extractBalanced returns the inner text without the closing paren, so it
     // stays correct when the input ended before that paren was reached.
     const inner = this.extractBalanced();
     if (this._unbalanced) this.errors.push({ message: "unterminated command substitution", pos: dollarPos });
     const bt = this._buildParts || this._buildValue;
-    const text = bt ? this.src.slice(dollarPos, this.pos) : "";
+    const rawText = bt ? this.src.slice(dollarPos, this.pos) : "";
+    const text = !bt || openPos === dollarPos + 1 ? rawText : "$" + this.src.slice(openPos, this.pos);
     this._resultText = text;
-    this._resultIsRaw = true;
+    this._resultIsRaw = openPos === dollarPos + 1;
     this._resultHasExpansion = true;
     if (this._buildParts) {
-      this._resultPart = { type: "CommandExpansion", text, script: undefined, inner, innerStart: dollarPos + 2 };
+      this._resultPart = { type: "CommandExpansion", text: rawText, script: undefined, inner, innerStart: openPos + 1 };
       this.collect(this._resultPart);
     } else {
       this._resultPart = undefined;
@@ -3560,13 +3573,17 @@ export class Lexer {
       src.charCodeAt(start - 2) === CH_DOLLAR;
     let substitutions = 0;
     let reported = false;
+    let continuedDollarPos = -1;
+    let continuedParenPos = -1;
 
     while (this.pos < len && depth > 0) {
       const ch = src.charCodeAt(this.pos);
       if (ch === CH_LPAREN) {
         const prev = this.pos > start ? src.charCodeAt(this.pos - 1) : 0;
+        const commandDollarPos =
+          prev === CH_DOLLAR ? this.pos - 1 : this.pos === continuedParenPos ? continuedDollarPos : -1;
         const wordParen =
-          prev === CH_DOLLAR ||
+          commandDollarPos !== -1 ||
           prev === CH_LT ||
           prev === CH_GT ||
           prev === CH_EQ ||
@@ -3586,12 +3603,14 @@ export class Lexer {
         }
         // Nested $( — count it against the shared budget (the substitution being
         // scanned is level one, hence >=) so over-deep chains surface a parse error.
-        if (src.charCodeAt(this.pos - 1) === CH_DOLLAR && ++substitutions + this._nestingDepth >= MAX_SYNTAX_NESTING) {
+        if (commandDollarPos !== -1 && ++substitutions + this._nestingDepth >= MAX_SYNTAX_NESTING) {
           if (!reported) {
-            this.errors.push({ message: "maximum command substitution nesting depth exceeded", pos: this.pos - 1 });
+            this.errors.push({ message: "maximum command substitution nesting depth exceeded", pos: commandDollarPos });
             reported = true;
           }
         }
+        continuedDollarPos = -1;
+        continuedParenPos = -1;
         depth++;
         if (caseDepth > 0) caseParens++;
         this.pos++;
@@ -3612,6 +3631,17 @@ export class Lexer {
           this.pos++;
         }
       } else if (ch === CH_BACKSLASH) {
+        if (this.pos > start && src.charCodeAt(this.pos - 1) === CH_DOLLAR) {
+          const logicalPos = skipLineContinuations(src, this.pos, len);
+          if (
+            logicalPos > this.pos &&
+            src.charCodeAt(logicalPos) === CH_LPAREN &&
+            src.charCodeAt(logicalPos + 1) !== CH_LPAREN
+          ) {
+            continuedDollarPos = this.pos - 1;
+            continuedParenPos = logicalPos;
+          }
+        }
         this.pos++;
         if (this.pos < len) {
           if (src.charCodeAt(this.pos) !== CH_NL) {
