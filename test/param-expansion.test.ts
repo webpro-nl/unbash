@@ -480,6 +480,38 @@ test("${parameter:(-1)} parens for negative offset", () => {
   assert.equal(p.slice!.offset.text, "(-1)");
 });
 
+for (const [label, source, expectedOffset, expectedLength] of [
+  [
+    "A",
+    "address=${address: ${#address} < 8 ? 0 : -8} # Limit to 32-bit",
+    [" ${#address} < 8 ? 0 : -8", 18, 43],
+    undefined,
+  ],
+  ["B", "echo ${FOO: 0 : 1 ? 2 : 3}", [" 0 ", 11, 14], [" 1 ? 2 : 3", 15, 25]],
+  ["C", "echo ${FOO: 1 ? 2 : 3 : 4}", [" 1 ? 2 : 3 ", 11, 22], [" 4", 23, 25]],
+  ["D", "echo ${FOO: 1 ? 2 ? 3 : 4 : 5 : 2}", [" 1 ? 2 ? 3 : 4 : 5 ", 11, 30], [" 2", 31, 33]],
+  ["E", "echo ${FOO:$(f a?b):2}", ["$(f a?b)", 11, 19], ["2", 20, 21]],
+  ["F", "echo ${FOO:`f a?b`:2}", ["`f a?b`", 11, 18], ["2", 19, 20]],
+  ["G", "echo ${FOO:(1?2:3):2}", ["(1?2:3)", 11, 18], ["2", 19, 20]],
+  [
+    "H",
+    "echo ${FOO:$(case x in x) : a?b;; esac; printf 1):2}",
+    ["$(case x in x) : a?b;; esac; printf 1)", 11, 49],
+    ["2", 50, 51],
+  ],
+  ["I", 'echo ${FOO:"$(f "a?b")":2}', ['"$(f "a?b")"', 11, 23], ["2", 24, 25]],
+  ["J", 'echo ${FOO:"${x:-"a?b"}":2}', ['"${x:-"a?b"}"', 11, 24], ["2", 25, 26]],
+] as const) {
+  test(`ternary expression in slice ${label} (#317)`, () => {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined);
+    const word = label === "A" ? getAssignment(ast).value! : getCmd(ast).suffix[0];
+    const slice = getParam(word).slice!;
+    assert.deepEqual([slice.offset.text, slice.offset.pos, slice.offset.end], expectedOffset);
+    assert.deepEqual(slice.length && [slice.length.text, slice.length.pos, slice.length.end], expectedLength);
+  });
+}
+
 // --- Case modification ---
 
 test("${var^} capitalize first", () => {

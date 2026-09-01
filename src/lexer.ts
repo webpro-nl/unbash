@@ -265,8 +265,14 @@ export function hasEmbeddedWordStructure(source: string, start: number, end: num
   return false;
 }
 
-function findUnnested(s: string, target: number): number {
+function findUnnested(
+  s: string,
+  target: number,
+  pairTernaries = false,
+  findNestedEnd?: (index: number, quoted: boolean) => number,
+): number {
   let depth = 0;
+  let ternaryDepth = 0;
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
     if (c === CH_BACKSLASH) {
@@ -288,11 +294,36 @@ function findUnnested(s: string, target: number): number {
     }
     if (c === CH_DQUOTE) {
       i++;
-      while (i < s.length && s.charCodeAt(i) !== CH_DQUOTE) {
-        if (s.charCodeAt(i) === CH_BACKSLASH) i++;
+      while (i < s.length) {
+        const quoted = s.charCodeAt(i);
+        if (quoted === CH_DQUOTE) break;
+        if (quoted === CH_BACKSLASH) {
+          i += 2;
+          continue;
+        }
+        const nestedEnd = findNestedEnd?.(i, true) ?? i;
+        if (nestedEnd > i) {
+          i = nestedEnd;
+          continue;
+        }
         i++;
       }
       continue;
+    }
+    const nestedEnd = findNestedEnd?.(i, false) ?? i;
+    if (nestedEnd > i) {
+      i = nestedEnd - 1;
+      continue;
+    }
+    if (pairTernaries && depth === 0) {
+      if (c === CH_QUESTION) {
+        ternaryDepth++;
+        continue;
+      }
+      if (c === CH_COLON && ternaryDepth > 0) {
+        ternaryDepth--;
+        continue;
+      }
     }
     if (c === target && depth === 0) return i;
   }
@@ -3354,7 +3385,11 @@ export class Lexer {
       // Slice: ${var:offset} or ${var:offset:length}
       i++;
       const sliceRest = inner.slice(i);
-      const colonIdx = findUnnested(sliceRest, CH_COLON);
+      const sliceStart = innerStart + i;
+      const sliceEnd = innerStart + ilen;
+      const colonIdx = findUnnested(sliceRest, CH_COLON, true, (index, quoted) => {
+        return this.findNestedShellEnd(sliceStart + index, sliceEnd, quoted) - sliceStart;
+      });
       if (colonIdx === -1) {
         result.slice = { offset: sub(i, ilen), length: undefined };
       } else {
@@ -3464,6 +3499,43 @@ export class Lexer {
     // Unknown operator — store remaining as op
     result.operator = inner.slice(i);
     return result;
+  }
+
+  private findNestedShellEnd(start: number, end: number, quoted: boolean): number {
+    const ch = this.src.charCodeAt(start);
+    if (ch === CH_BACKTICK) {
+      let pos = start + 1;
+      while (pos < end) {
+        const current = this.src.charCodeAt(pos);
+        if (current === CH_BACKSLASH) {
+          pos += 2;
+          continue;
+        }
+        pos++;
+        if (current === CH_BACKTICK) return pos;
+      }
+      return end;
+    }
+
+    let close: number;
+    if (ch === CH_DOLLAR) {
+      const next = start + 1;
+      if (next < end && this.src.charCodeAt(next) === CH_LBRACE) {
+        close = this.findClosingBrace(next + 1, end);
+      } else {
+        const open = skipLineContinuations(this.src, next, end);
+        if (open >= end || this.src.charCodeAt(open) !== CH_LPAREN) return start;
+        close = this.findClosingParenthesis(open + 1, end);
+      }
+    } else {
+      const open = start + 1;
+      if (quoted || (ch !== CH_LT && ch !== CH_GT) || open >= end || this.src.charCodeAt(open) !== CH_LPAREN) {
+        return start;
+      }
+      close = this.findClosingParenthesis(open + 1, end);
+    }
+
+    return close === -1 ? end : close + 1;
   }
 
   private scanParamName(s: string, start: number): number {
