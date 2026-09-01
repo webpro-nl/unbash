@@ -231,17 +231,16 @@ unbash provides:
 
 ## Benchmarks
 
-Parse throughput in MB/s, higher is better, with unbash's relative speed in
-parentheses. Median of eleven runs on Apple M1 Pro/32GB using Node.js 24.19.0.
+Parse throughput in MB/s, calculated from the median of 22 per-run p75 iteration times; higher is better. Parentheses show unbash's relative speed. Measured on Apple M1 Pro/32GB using Node.js 24.19.0.
 
-| Parser                       | short (1.2KB) | advanced (0.9KB) | medium (150KB) | large (965KB) |
-| ---------------------------- | ------------: | ---------------: | -------------: | ------------: |
-| **unbash**                   |      **75.7** |         **69.4** |       **97.1** |     **115.7** |
-| tree-sitter-bash (native)    |    4.59 (16x) |       6.52 (11x) |     14.90 (7x) |   11.78 (10x) |
-| tree-sitter-bash (WASM)      |    4.56 (17x) |       5.57 (12x) |     8.55 (11x) |    7.55 (15x) |
-| sh-syntax                    |  0.03 (2870x) |     0.04 (1947x) |     7.59 (13x) |    13.58 (9x) |
-| bash-parser                  |   0.28 (275x) |              n/a |            n/a |           n/a |
-| @ericcornelissen/bash-parser |   0.26 (291x) |              n/a |            n/a |           n/a |
+| Parser                       | short (1.1KiB) | advanced (0.9KiB) | medium (150KiB) | large (970KiB) |
+| ---------------------------- | -------------: | ----------------: | --------------: | -------------: |
+| **unbash**                   |       **76.5** |          **70.5** |        **95.3** |      **112.4** |
+| tree-sitter-bash (native)    |     4.60 (17x) |        6.55 (11x) |      15.07 (6x) |     11.92 (9x) |
+| tree-sitter-bash (WASM)      |     4.59 (17x) |        5.64 (12x) |      8.59 (11x) |     7.64 (15x) |
+| sh-syntax                    |   0.03 (2981x) |      0.03 (2015x) |      7.49 (13x) |     13.63 (8x) |
+| bash-parser                  |    0.27 (287x) |               n/a |             n/a |            n/a |
+| @ericcornelissen/bash-parser |    0.25 (301x) |               n/a |             n/a |            n/a |
 
 Run the benchmarks using Node.js v22+:
 
