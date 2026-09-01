@@ -329,6 +329,45 @@ test("mid-word # in $() is not a comment", () => {
   assert.equal(parse(src).errors, undefined);
 });
 
+function assertHashLiteralInCommandSubstitution(src: string, expected: string[]) {
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined, src);
+  const part = wp(src, getCmd(ast).suffix[0])?.[0];
+  assert.equal(part?.type, "CommandExpansion", src);
+  if (part?.type !== "CommandExpansion") return;
+  assert.equal(part.script?.errors, undefined, src);
+  const inner = part.script?.commands[0].command as Command;
+  assert.equal(inner.name?.text, "echo", src);
+  assert.deepEqual(args(inner), expected, src);
+}
+
+test("escaped whitespace keeps a following # literal inside $() (#68)", () => {
+  assertHashLiteralInCommandSubstitution("echo $(echo \\ # hi)", ["\\ #", "hi"]);
+});
+
+test("closing substitution keeps a following # literal inside $() (#68)", () => {
+  assertHashLiteralInCommandSubstitution("echo $(echo $(true)# hi)", ["$(true)#", "hi"]);
+});
+
+test("array-like assignment keeps an adjacent # literal inside $() (#68)", () => {
+  const src = "echo $(a=(x)# ) tail";
+  const ast = parse(src);
+  assert.equal(ast.errors, undefined);
+  const outer = getCmd(ast);
+  assert.deepEqual(args(outer), ["$(a=(x)# )", "tail"]);
+  const part = wp(src, outer.suffix[0])?.[0];
+  assert.equal(part?.type, "CommandExpansion");
+  if (part?.type !== "CommandExpansion") return;
+  assert.ok(part.script);
+  if (!part.script) return;
+  const assignment = (part.script.commands[0].command as Command).prefix[0];
+  assert.equal(assignment.type, "Assignment");
+  if (assignment.type !== "Assignment") return;
+  assert.equal(assignment.text, "a=(x)#");
+  assert.equal(assignment.value?.text, "(x)#");
+  assert.equal(assignment.array, undefined);
+});
+
 test("comment in single-line $() swallows the paren like bash", () => {
   // bash: the comment runs to a newline, so `)` inside it does not close
   const src = `echo "$(# c)"`;

@@ -157,6 +157,41 @@ test("array comment starts only at a word boundary", () => {
   );
 });
 
+function assertHashLiteralInArray(source: string, expected: string[][]) {
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined, source);
+  assert.equal(ast.commands.length, 2, source);
+  const assignment = (ast.commands[0].command as Command).prefix[0];
+  assert.equal(assignment.type, "Assignment", source);
+  if (assignment.type !== "Assignment") return;
+  assert.deepEqual(
+    assignment.array?.map((word) => [word.text, word.value]),
+    expected,
+    source,
+  );
+  const declare = ast.commands[1].command as Command;
+  assert.equal(declare.name?.text, "declare", source);
+  assert.deepEqual(
+    declare.suffix.map((word) => word.text),
+    ["-p", "a"],
+    source,
+  );
+}
+
+test("escaped whitespace keeps a following # literal in arrays (#68)", () => {
+  assertHashLiteralInArray("a=(\\ # hi); declare -p a", [
+    ["\\ #", " #"],
+    ["hi", "hi"],
+  ]);
+});
+
+test("closing substitution keeps a following # literal in arrays (#68)", () => {
+  assertHashLiteralInArray("a=($(true)# hi); declare -p a", [
+    ["$(true)#", "$(true)#"],
+    ["hi", "hi"],
+  ]);
+});
+
 test("extglob patterns keep # as literal pattern data", () => {
   // Bash matches `#b` against @(a|#b), so `#` is data here, not a comment.
   const ast = parse('case "#b" in @(a|#b)) echo m;; esac');

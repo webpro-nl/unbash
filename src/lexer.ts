@@ -217,13 +217,6 @@ charType[CH_DOLLAR] = 2;
 charType[CH_BACKTICK] = 2;
 charType[CH_LBRACE] = 2;
 
-// A `#` opens a comment only at a word start: the scan start, or after a metacharacter.
-function opensComment(src: string, pos: number, start: number): boolean {
-  if (pos === start) return true;
-  const prev = src.charCodeAt(pos - 1);
-  return prev < 128 && (charType[prev] & 1) !== 0;
-}
-
 const arithmeticWordDelimiter = new Uint8Array(128);
 for (const ch of [
   CH_TAB,
@@ -696,14 +689,16 @@ export class Lexer {
     this.srcEnd = Math.min(end, this.srcEnd);
     const delimiters = [closing];
     let pos = start;
+    let wordStart = true;
 
     while (pos < this.srcEnd) {
       const ch = this.src.charCodeAt(pos);
       if (ch === CH_BACKSLASH) {
+        if (pos + 1 < this.srcEnd && this.src.charCodeAt(pos + 1) !== CH_NL) wordStart = false;
         pos += 2;
         continue;
       }
-      if (ch === CH_HASH && comments && opensComment(this.src, pos, start)) {
+      if (ch === CH_HASH && comments && delimiters.length === 1 && wordStart) {
         while (pos < this.srcEnd && this.src.charCodeAt(pos) !== CH_NL) pos++;
         continue;
       }
@@ -711,12 +706,14 @@ export class Lexer {
         this.pos = pos + 1;
         this.skipSQ();
         pos = this.pos;
+        wordStart = false;
         continue;
       }
       if (ch === CH_DQUOTE) {
         this.pos = pos + 1;
         this.skipDQ();
         pos = this.pos;
+        wordStart = false;
         continue;
       }
       if (ch === CH_BACKTICK) {
@@ -726,6 +723,7 @@ export class Lexer {
           pos++;
         }
         if (pos < this.srcEnd) pos++;
+        wordStart = false;
         continue;
       }
       if (
@@ -735,6 +733,7 @@ export class Lexer {
         this.pos = pos + 2;
         this.extractBalanced();
         pos = this.pos;
+        wordStart = false;
         continue;
       }
       const expected = delimiters[delimiters.length - 1];
@@ -742,11 +741,13 @@ export class Lexer {
         const after = this.src.charCodeAt(pos + 1);
         if (after === CH_DOLLAR) {
           pos += 2; // `$$` consumes its second `$`, so a `{` after it opens nothing
+          wordStart = false;
           continue;
         }
         if (after === CH_LBRACE && braces) {
           delimiters.push(CH_RBRACE);
           pos += 2;
+          wordStart = false;
           continue;
         }
       }
@@ -762,7 +763,11 @@ export class Lexer {
           this._unbalanced = savedUnbalanced;
           return pos;
         }
+        wordStart = false;
+        pos++;
+        continue;
       }
+      wordStart = ch < 128 && (charType[ch] & 1) !== 0;
       pos++;
     }
 
@@ -3503,6 +3508,7 @@ export class Lexer {
     let depth = 1;
     const start = this.pos;
     this._unbalanced = false;
+    let wordStart = true;
 
     // Fast path: scan for simple cases with no nested quotes/parens/case. Nothing here
     // opens a paren — `(` breaks to the slow path — so depth stays 1 and the first `)`
@@ -3517,15 +3523,11 @@ export class Lexer {
         break;
       } else if (c === CH_LT && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LT) {
         break;
-      } else if (
-        c === CH_HASH &&
-        (this.pos === start || (src.charCodeAt(this.pos - 1) < 128 && charType[src.charCodeAt(this.pos - 1)] & 1))
-      ) {
+      } else if (c === CH_HASH && wordStart) {
         break;
       } else if (
         c === 99 /* c */ &&
-        // Ensure word start boundary (not inside e.g. "lowercase"); only `& 1` ends a word.
-        (this.pos === start || (src.charCodeAt(this.pos - 1) < 128 && charType[src.charCodeAt(this.pos - 1)] & 1)) &&
+        wordStart &&
         this.pos + 3 < len &&
         src.charCodeAt(this.pos + 1) === 97 /* a */ &&
         src.charCodeAt(this.pos + 2) === 115 /* s */ &&
@@ -3534,6 +3536,7 @@ export class Lexer {
       ) {
         break;
       } else {
+        wordStart = c < 128 && (charType[c] & 1) !== 0;
         this.pos++;
       }
     }
@@ -3544,6 +3547,8 @@ export class Lexer {
     // pattern when nothing is open — otherwise it closes a pattern's leading `(`, an
     // extglob group, or a subshell in the case body, and must rebalance `depth`.
     let caseParens = 0;
+    // Word-form parens resume mid-word; grammar parens resume where `#` can open a comment.
+    const wordStartAfterParen: boolean[] = [];
     let pendingDelims: { delimiter: string; strip: boolean; quoted: boolean }[] | null = null;
     let arithBase = -1;
     // A `$((` extent is found by bash's arithmetic scanner, where `#` is ordinary, and keeps
@@ -3559,6 +3564,21 @@ export class Lexer {
     while (this.pos < len && depth > 0) {
       const ch = src.charCodeAt(this.pos);
       if (ch === CH_LPAREN) {
+        const prev = this.pos > start ? src.charCodeAt(this.pos - 1) : 0;
+        const wordParen =
+          prev === CH_DOLLAR ||
+          prev === CH_LT ||
+          prev === CH_GT ||
+          prev === CH_EQ ||
+          prev === CH_AT ||
+          prev === CH_QUESTION ||
+          prev === CH_STAR ||
+          prev === CH_PLUS ||
+          prev === CH_BANG ||
+          (prev === CH_LPAREN && wordStartAfterParen[wordStartAfterParen.length - 1] === false) ||
+          (arithExtent && this.pos === start);
+        wordStartAfterParen.push(!wordParen);
+        wordStart = true;
         // (( opens arithmetic — suppress heredoc detection until the parens
         // rebalance so shift operators inside aren't mistaken for heredocs
         if (arithBase < 0 && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
@@ -3578,6 +3598,7 @@ export class Lexer {
       } else if (ch === CH_RPAREN) {
         if (caseDepth > 0 && caseParens === 0) {
           this.pos++;
+          wordStart = true;
         } else {
           if (caseDepth > 0) caseParens--;
           depth--;
@@ -3587,17 +3608,25 @@ export class Lexer {
             return result;
           }
           if (depth <= arithBase) arithBase = -1;
+          wordStart = wordStartAfterParen.pop() ?? true;
           this.pos++;
         }
       } else if (ch === CH_BACKSLASH) {
         this.pos++;
-        if (this.pos < len) this.pos++;
+        if (this.pos < len) {
+          if (src.charCodeAt(this.pos) !== CH_NL) {
+            wordStart = false;
+          }
+          this.pos++;
+        }
       } else if (ch === CH_SQUOTE) {
         this.pos++;
         this.skipSQ();
+        wordStart = false;
       } else if (ch === CH_DQUOTE) {
         this.pos++;
         this.skipDQ();
+        wordStart = false;
       } else if (ch === CH_BACKTICK) {
         this.pos++;
         while (this.pos < len && src.charCodeAt(this.pos) !== CH_BACKTICK) {
@@ -3605,6 +3634,7 @@ export class Lexer {
           if (this.pos < len) this.pos++;
         }
         if (this.pos < len) this.pos++;
+        wordStart = false;
       } else if (ch === CH_LT && arithBase < 0 && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LT) {
         // << is a heredoc operator even in case-pattern position — unquoted <<
         // inside a pattern is a bash syntax error, so no caseDepth gate here
@@ -3621,11 +3651,13 @@ export class Lexer {
             (pendingDelims ??= []).push({ delimiter: this._hereDelim, strip, quoted: this._hereQuoted });
           }
         }
+        wordStart = false;
       } else if (ch === CH_NL && pendingDelims) {
         this.pos++;
         for (const hd of pendingDelims) this.skipHereDocBody(hd.delimiter, hd.strip, true, hd.quoted);
         pendingDelims = null;
-      } else if (ch === CH_HASH && arithBase < 0 && !arithExtent && opensComment(src, this.pos, start)) {
+        wordStart = true;
+      } else if (ch === CH_HASH && arithBase < 0 && !arithExtent && wordStart) {
         // Word-boundary # opens a comment — opaque up to (not including) the
         // newline, so quotes and << inside it stay inert
         while (this.pos < len && src.charCodeAt(this.pos) !== CH_NL) this.pos++;
@@ -3638,9 +3670,7 @@ export class Lexer {
         }
         if (this.pos > wStart) {
           const wLen = this.pos - wStart;
-          // A run only starts a word after a metacharacter.
-          const prev = wStart > start ? src.charCodeAt(wStart - 1) : 0;
-          if (wLen === 4 && (wStart === start || (prev < 128 && charType[prev] & 1))) {
+          if (wLen === 4 && wordStart) {
             const c0 = src.charCodeAt(wStart);
             if (
               c0 === 99 &&
@@ -3660,7 +3690,10 @@ export class Lexer {
               if (caseDepth === 0) caseParens = 0;
             }
           }
+          wordStart = false;
         } else {
+          const wc = src.charCodeAt(this.pos);
+          wordStart = wc < 128 && (charType[wc] & 1) !== 0;
           this.pos++;
         }
       }

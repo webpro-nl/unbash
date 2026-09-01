@@ -217,6 +217,18 @@ test("escaped whitespace continues word", () => {
   assert.equal(c.suffix[0].text, "hello\\ world");
 });
 
+test("escaped whitespace keeps a following # literal (#68)", () => {
+  const ast = parse("echo \\ # hi");
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    getCmd(ast).suffix.map((word) => [word.text, word.value]),
+    [
+      ["\\ #", " #"],
+      ["hi", "hi"],
+    ],
+  );
+});
+
 test("double-quoted string with nested double-quoted $() expansion", () => {
   const ast = parse('echo "x $(echo "hi")"');
   assert.ok(ast.commands.length > 0);
