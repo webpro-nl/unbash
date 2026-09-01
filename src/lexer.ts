@@ -2701,7 +2701,7 @@ export class Lexer {
 
       if (ch === CH_BACKTICK) {
         const btStart = this.pos;
-        this.readBacktickExpansion();
+        this.readBacktickExpansion(true);
         if (bt) text += this._resultText;
         hasExpansions = true;
         if (bp && this._resultPart && isDQChild(this._resultPart)) {
@@ -3081,7 +3081,7 @@ export class Lexer {
     }
   }
 
-  private readBacktickExpansion(): void {
+  private readBacktickExpansion(insideDoubleQuotes = false): void {
     this.pos++; // skip opening `
     const src = this.src;
     const len = this.srcEnd;
@@ -3118,7 +3118,7 @@ export class Lexer {
           this.pos++;
           if (this.pos < len) {
             const c = src.charCodeAt(this.pos);
-            if (c === CH_DOLLAR || c === CH_BACKTICK || c === CH_BACKSLASH) {
+            if (c === CH_DOLLAR || c === CH_BACKTICK || c === CH_BACKSLASH || (insideDoubleQuotes && c === CH_DQUOTE)) {
               inner += src[this.pos];
             } else {
               inner += "\\" + src[this.pos];

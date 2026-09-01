@@ -10,6 +10,22 @@ const getCmd = (ast: ReturnType<typeof parse>, i = 0) => ast.commands[i].command
 const wp = (s: string, w: import("../src/types.ts").Word) => computeWordParts(s, w);
 const args = (c: Command) => c.suffix.map((s) => s.text);
 
+function assignmentBacktickScript(source: string) {
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined, source);
+  const assignment = getCmd(ast).prefix[0];
+  assert.equal(assignment.type, "Assignment", source);
+  if (assignment.type !== "Assignment" || !assignment.value) throw new Error(source);
+  const parts = wp(source, assignment.value);
+  const expansion =
+    parts?.[0]?.type === "DoubleQuoted"
+      ? parts[0].parts?.find((part) => part.type === "CommandExpansion")
+      : parts?.find((part) => part.type === "CommandExpansion");
+  assert.equal(expansion?.type, "CommandExpansion", source);
+  if (expansion?.type !== "CommandExpansion" || !expansion.script) throw new Error(source);
+  return expansion.script;
+}
+
 // ── $() command substitution ─────────────────────────────────────────
 
 test("$() inner script is parsed via CommandExpansion part", () => {
@@ -86,6 +102,40 @@ test("adjacent backtick substitutions form one word", () => {
 test("backtick in double quotes", () => {
   const ast = parse('echo "`echo hello`"');
   assert.ok(ast.commands.length > 0);
+});
+
+test("backticks inside double quotes decode escaped double quotes (#214)", () => {
+  const source = 'word="`echo \\"${2}\\" | sed -e\\"s|=.*$||\\" -e\\"s|^.*opt ||\\"`"';
+  const script = assignmentBacktickScript(source);
+  assert.equal(script.source, 'echo "${2}" | sed -e"s|=.*$||" -e"s|^.*opt ||"');
+  assert.equal(script.errors, undefined);
+  assert.equal(script.commands.length, 1);
+  const pipeline = script.commands[0].command;
+  assert.equal(pipeline.type, "Pipeline");
+  if (pipeline.type !== "Pipeline") return;
+  assert.deepEqual(pipeline.operators, ["|"]);
+  assert.deepEqual(
+    pipeline.commands.map((command) => command.type === "Command" && command.name?.text),
+    ["echo", "sed"],
+  );
+  const sed = pipeline.commands[1];
+  assert.equal(sed.type, "Command");
+  if (sed.type !== "Command") return;
+  assert.deepEqual(
+    sed.suffix.map((word) => word.value),
+    ["-es|=.*$||", "-es|^.*opt ||"],
+  );
+});
+
+test("backtick double-quote decoding stays context-sensitive (#214)", () => {
+  const unquoted = assignmentBacktickScript('word=`printf \\"x\\"`');
+  assert.equal(unquoted.source, 'printf \\"x\\"');
+
+  const layered = assignmentBacktickScript('word="`printf \\\\\\"x\\\\\\"`"');
+  assert.equal(layered.source, 'printf \\"x\\"');
+
+  const nonspecial = assignmentBacktickScript('word="`printf \\q`"');
+  assert.equal(nonspecial.source, "printf \\q");
 });
 
 test("a comment inside backticks stops at the closing backtick (#116)", () => {
