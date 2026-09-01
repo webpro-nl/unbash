@@ -15,6 +15,8 @@ const knownInvalidInputs = new Set([
   "function f1 f2 f3() {\n\ta\n}",
   "function {\n\ta\n}",
   "() {\n\ta\n}",
+  "if; then; fi",
+  "if foo; then; fi",
   "$foo[(r)pattern]",
   "echo *.txt(@)",
   "echo /bin/sh(:t)",

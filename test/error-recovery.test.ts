@@ -148,6 +148,20 @@ test("valid compound commands have no errors", () => {
   assert.equal(ast.errors, undefined);
 });
 
+test("comment-only then body collects an error (#321)", () => {
+  const source = `if [[ "\${tmp}" = *"-----BEGIN CERTIFICATE-----"* ]]; then
+  # ...
+fi`;
+
+  assert.deepEqual(parse(source).errors, [{ message: "expected command after 'then'", pos: 66 }]);
+
+  const valid = `if [[ "\${tmp}" = *"-----BEGIN CERTIFICATE-----"* ]]; then
+  # ...
+  :
+fi`;
+  assert.equal(parse(valid).errors, undefined);
+});
+
 test("unexpected root list terminators collect errors and recover", () => {
   for (const terminator of ["then", "else", "elif", "fi", "do", "done", "in", "esac", ")", "}", ";;", ";&", ";;&"]) {
     const source = `safe\n${terminator}; recovered`;

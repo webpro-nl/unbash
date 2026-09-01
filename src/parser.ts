@@ -839,8 +839,12 @@ class Parser {
     for (;;) {
       clause = this.makeCompoundList(this.list());
       this.skipSemi();
-      if (!this.accept(Token.Then, LexContext.CommandStart)) this.error("expected 'then'", this.tok.getPos());
-      then_ = this.makeCompoundList(this.list());
+      const thenToken = this.accept(Token.Then, LexContext.CommandStart);
+      if (!thenToken) this.error("expected 'then'", this.tok.getPos());
+      const thenCommands = this.list();
+      if (thenToken && thenCommands.length === 0)
+        this.error("expected command after 'then'", this.tok.peek(LexContext.CommandStart).pos);
+      then_ = this.makeCompoundList(thenCommands);
       this.skipSemi();
       const elif = this.accept(Token.Elif, LexContext.CommandStart);
       if (!elif) break;
