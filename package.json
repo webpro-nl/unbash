@@ -1,6 +1,6 @@
 {
   "name": "unbash",
-  "version": "4.0.10",
+  "version": "4.0.11",
   "description": "Fast 0-deps bash parser written in TypeScript",
   "keywords": [
     "ast",
