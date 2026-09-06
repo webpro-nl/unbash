@@ -449,11 +449,22 @@ export interface ParsedScript extends Script {
    */
   readonly source?: string;
   errors?: ParseError[];
+  /**
+   * Every comment the parser skipped in this script, in source order, as a `[pos, end)` span
+   * from the `#` up to (not including) the newline. Absent when there are none. A shebang is
+   * `shebang`, not a comment. Comments inside a lazily parsed script are on that script.
+   */
+  comments?: Comment[];
 }
 
 export interface ParseError {
   message: string;
   pos: number;
+}
+
+export interface Comment {
+  pos: number;
+  end: number;
 }
 
 export type DeferredCommandExpansion = CommandExpansionPart | ProcessSubstitutionPart | ArithmeticCommandExpansion;

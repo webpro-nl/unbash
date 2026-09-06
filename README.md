@@ -153,6 +153,19 @@ root: check `errors` on every nested `script` while traversing. A consumer that
 only reads the root `errors` array cannot tell that a substitution body failed
 to parse.
 
+Comments follow the same rule. A script's `comments` lists every comment the
+parser skipped in it, in source order, as `[pos, end)` spans from the `#` up to
+the newline; it is absent when there are none, and a shebang line is `shebang`
+rather than a comment:
+
+```js
+const src = "echo one # trailing\n# alone\n";
+const script = parse(src);
+
+script.comments.map(({ pos, end }) => src.slice(pos, end));
+// ["# trailing", "# alone"]
+```
+
 ### Print
 
 Basic opinionated printer, does not preserve whitespace or comments (except

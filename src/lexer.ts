@@ -5,6 +5,7 @@ import type {
   ExtGlobOperator,
   ParameterExpansionPart,
   ParseError,
+  Comment,
   Word,
   WordPart,
 } from "./types.ts";
@@ -545,6 +546,7 @@ export class Lexer {
   private pendingHereDocs: PendingHereDoc[] | null;
   private collectedExpansions: [DeferredCommandExpansion, number][] | null;
   _errors: ParseError[] | null = null;
+  _comments: Comment[] | null = null;
   _buildParts = false;
   // Build processed text while scanning. Off on the normal token path (values
   // materialize lazily); on for redirect targets, heredoc delimiters, arithmetic
@@ -1375,8 +1377,9 @@ export class Lexer {
     const ch = src.charCodeAt(pos);
 
     if (ch === CH_HASH) {
-      // Skip comment
+      // Skip comment, recording its span for consumers that want it
       while (this.pos < len && src.charCodeAt(this.pos) !== CH_NL) this.pos++;
+      (this._comments ??= []).push({ pos: tokenStart, end: this.pos });
       this.readNext(out, ctx);
       return;
     }

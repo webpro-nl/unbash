@@ -20,6 +20,7 @@ import type {
   LogicalOperator,
   Node,
   ParseError,
+  Comment,
   ParsedScript,
   PipeOperator,
   Pipeline,
@@ -366,6 +367,8 @@ class Parser {
   private end: number;
   private depth: number;
   private errors: ParseError[] | null = null;
+  // Comments from sub-lexers (array bodies); the main lexer's own are merged in run().
+  private comments: Comment[] | null = null;
   private _redirects: Redirect[] = EMPTY_REDIRECTS;
   private syntaxDepth = 0;
 
@@ -417,6 +420,14 @@ class Parser {
       for (let i = 0; i < lexerErrors.length; i++) errors.push(lexerErrors[i]);
     }
     if (this.errors !== null && this.errors.length > 1) this.errors.sort((a, b) => a.pos - b.pos);
+    const lexerComments = this.tok._comments;
+    if (lexerComments !== null && lexerComments.length > 0) {
+      const comments = (this.comments ??= []);
+      for (let i = 0; i < lexerComments.length; i++) comments.push(lexerComments[i]);
+    }
+    // An array body's comments are lexed when its assignment is parsed, after the main
+    // lexer may already have read past it, so source order is restored here.
+    if (this.comments !== null && this.comments.length > 1) this.comments.sort((a, b) => a.pos - b.pos);
     const result = {
       type: "Script",
       pos: start,
@@ -424,6 +435,7 @@ class Parser {
       shebang,
       commands,
       errors: this.errors ?? undefined,
+      comments: this.comments ?? undefined,
     } as ParsedScript;
     return result;
   }
@@ -1570,6 +1582,11 @@ class Parser {
         const text = t.raw ? t.value : this.source.slice(t.pos, t.end);
         elements.push(new WordImpl(text, t.pos, t.end, this.source, undefined, this.depth));
       }
+    }
+    const subComments = subTok._comments;
+    if (subComments !== null) {
+      const comments = (this.comments ??= []);
+      for (let i = 0; i < subComments.length; i++) comments.push(subComments[i]);
     }
     return elements;
   }
