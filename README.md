@@ -153,6 +153,11 @@ root: check `errors` on every nested `script` while traversing. A consumer that
 only reads the root `errors` array cannot tell that a substitution body failed
 to parse.
 
+A here-document's `content` is its raw body. `contentPos` and `contentEnd`
+bound that body in the source, and `heredocTerminated` is false when end of
+input ended the body before its delimiter line, which Bash accepts with a
+warning.
+
 ### Print
 
 Basic opinionated printer, does not preserve whitespace or comments (except

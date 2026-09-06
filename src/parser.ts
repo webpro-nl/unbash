@@ -1437,6 +1437,9 @@ class Parser {
       content: t.content,
       heredocQuoted: undefined,
       body: undefined,
+      contentPos: undefined,
+      contentEnd: undefined,
+      heredocTerminated: undefined,
     };
     if (t.targetEnd > t.targetPos) {
       const heredoc = t.value === "<<" || t.value === "<<-";

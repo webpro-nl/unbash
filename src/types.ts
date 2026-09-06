@@ -202,6 +202,11 @@ export interface Redirect {
   content: string | undefined;
   heredocQuoted: boolean | undefined;
   body: Word | undefined;
+  /** The span `content` was sliced from; present whenever `content` is. */
+  contentPos: number | undefined;
+  contentEnd: number | undefined;
+  /** False when end of input ended the body before its delimiter line. */
+  heredocTerminated: boolean | undefined;
 }
 
 export interface Command {

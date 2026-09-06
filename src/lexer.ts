@@ -419,11 +419,20 @@ function scanAssignmentPrefix(src: string, start: number, end: number, initialSt
   return state;
 }
 
+interface HereDocTarget {
+  content?: string;
+  heredocQuoted?: boolean;
+  body?: Word;
+  contentPos?: number;
+  contentEnd?: number;
+  heredocTerminated?: boolean;
+}
+
 interface PendingHereDoc {
   delimiter: string;
   strip: boolean;
   quoted: boolean;
-  target?: { content?: string; heredocQuoted?: boolean; body?: Word };
+  target?: HereDocTarget;
 }
 
 const NO_EXPANSIONS: [DeferredCommandExpansion, number][] = [];
@@ -544,6 +553,8 @@ export class Lexer {
   private hasPeek: boolean;
   private pendingHereDocs: PendingHereDoc[] | null;
   private collectedExpansions: [DeferredCommandExpansion, number][] | null;
+  // Whether the last heredoc body scan found its delimiter line, or ran to end of input.
+  private _hereDocTerminated = false;
   _errors: ParseError[] | null = null;
   _buildParts = false;
   // Build processed text while scanning. Off on the normal token path (values
@@ -1166,7 +1177,7 @@ export class Lexer {
     return parts.length > 1 || (parts.length === 1 && parts[0].type !== "Literal") ? parts : null;
   }
 
-  registerHereDocTarget(target: { content?: string; heredocQuoted?: boolean; body?: Word }): void {
+  registerHereDocTarget(target: HereDocTarget): void {
     if (this.pendingHereDocs === null) return;
     for (const hd of this.pendingHereDocs) {
       if (!hd.target) {
@@ -1693,9 +1704,13 @@ export class Lexer {
     if (pending === null || pending.length === 0) return;
     for (const hd of pending) {
       const bodyPos = this.pos;
-      const body = this.readHereDocBody(hd.delimiter, hd.strip);
+      const bodyEnd = this.skipHereDocBody(hd.delimiter, hd.strip);
+      const body = this.src.slice(bodyPos, bodyEnd);
       if (hd.target) {
         hd.target.content = body;
+        hd.target.contentPos = bodyPos;
+        hd.target.contentEnd = bodyEnd;
+        hd.target.heredocTerminated = this._hereDocTerminated;
         if (hd.quoted) {
           hd.target.heredocQuoted = true;
         } else if (body) {
@@ -1705,12 +1720,6 @@ export class Lexer {
       }
     }
     pending.length = 0;
-  }
-
-  private readHereDocBody(delimiter: string, strip: boolean): string {
-    const bodyStart = this.pos;
-    const bodyEnd = this.skipHereDocBody(delimiter, strip);
-    return this.src.slice(bodyStart, bodyEnd);
   }
 
   // Advance past the heredoc body and its delimiter line; return the body end
@@ -1762,6 +1771,7 @@ export class Lexer {
       if (lineEnd - lineStart === dLen && src.startsWith(delimiter, lineStart)) {
         const bodyEnd = this.pos;
         this.pos = lineEnd < len ? lineEnd + 1 : lineEnd;
+        this._hereDocTerminated = true;
         return bodyEnd;
       }
 
@@ -1774,6 +1784,7 @@ export class Lexer {
           if (paren !== -1 && paren < this.logicalLineEnd(lineStart, len, !quoted)) {
             const bodyEnd = this.pos;
             this.pos = afterDelim;
+            this._hereDocTerminated = true;
             return bodyEnd;
           }
         }
@@ -1781,6 +1792,7 @@ export class Lexer {
 
       this.pos = lineEnd < len ? lineEnd + 1 : lineEnd;
     }
+    this._hereDocTerminated = false;
     return this.pos;
   }
 
