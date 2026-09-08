@@ -45,20 +45,25 @@ test("negated pipeline", () => {
   assert.equal(p.negated, true);
 });
 
-test("repeated pipeline negation reports a syntax error", () => {
-  const cases: [string, number][] = [
-    ["! ! cmd", 2],
-    ["! ! ! cmd", 2],
-    ["! !", 2],
-    ["time ! ! cmd", 7],
+test("repeated pipeline negation preserves parity and prefix ranges", () => {
+  const cases: [string, boolean, number, number, boolean | undefined][] = [
+    ["  ! ! cmd  ", false, 2, 9, undefined],
+    ["! ! ! cmd", true, 0, 9, undefined],
+    ["! ! ! ! cmd", false, 0, 11, undefined],
+    ["time ! ! cmd", false, 0, 12, true],
+    ["time -p ! ! ! cmd", true, 0, 17, true],
   ];
-  for (const [source, pos] of cases) {
+  for (const [source, negated, pos, end, time] of cases) {
     const ast = parse(source);
     const pipeline = ast.commands[0].command;
-    assert.equal(pipeline.type, "Pipeline", source);
-    assert.equal(pipeline.type === "Pipeline" && pipeline.negated, true, source);
-    assert.equal(pipeline.pos, 0, source);
-    assert.deepEqual(ast.errors, [{ message: "unexpected token '!'", pos }], source);
+    assert.ok(pipeline.type === "Pipeline", source);
+    assert.equal(pipeline.negated, negated, source);
+    assert.equal(pipeline.pos, pos, source);
+    assert.equal(pipeline.end, end, source);
+    assert.equal(pipeline.time, time, source);
+    assert.deepEqual(names(pipeline.commands), ["cmd"], source);
+    assert.deepEqual(pipeline.operators, [], source);
+    assert.equal(ast.errors, undefined, source);
   }
 });
 

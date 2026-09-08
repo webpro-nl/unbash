@@ -548,7 +548,7 @@ class Parser {
     return this.makeStatement(node, redirects);
   }
 
-  // pipeline := ['time' ['-p']] ['!'] command ('|' newlines command)*
+  // pipeline := ['time' ['-p']] ('!')* command ('|' newlines command)*
   private pipeline(): Node | null {
     let time = false;
     let pipelinePos = 0;
@@ -564,30 +564,25 @@ class Parser {
         prefixEnd = this.tok.next(LexContext.CommandStart).end;
     }
 
-    let negated = false;
+    let negated: boolean | undefined;
     const bang = this.tok.peek(LexContext.CommandStart);
     if (bang.token === Token.Bang) {
       if (!time) pipelinePos = bang.pos;
-      prefixEnd = this.tok.next(LexContext.CommandStart).end;
-      negated = true;
-      const repeated = this.tok.peek(LexContext.CommandStart);
-      if (repeated.token === Token.Bang) {
-        this.error("unexpected token '!'", repeated.pos);
-        do {
-          prefixEnd = this.tok.next(LexContext.CommandStart).end;
-        } while (this.tok.peek(LexContext.CommandStart).token === Token.Bang);
-      }
+      do {
+        prefixEnd = this.tok.next(LexContext.CommandStart).end;
+        negated = !negated;
+      } while (this.tok.peek(LexContext.CommandStart).token === Token.Bang);
     }
 
     const first = this.command();
     if (!first) {
-      if (time || negated) {
+      if (time || negated !== undefined) {
         const pipeline: Pipeline = {
           type: "Pipeline",
           pos: pipelinePos,
           end: prefixEnd,
           commands: [],
-          negated: negated ? true : undefined,
+          negated,
           operators: [],
           time: time ? true : undefined,
         };
@@ -596,7 +591,7 @@ class Parser {
       return null;
     }
 
-    if (!time && !negated) pipelinePos = first.pos;
+    if (!time && negated === undefined) pipelinePos = first.pos;
 
     const commands: Node[] = [first];
     const operators: PipeOperator[] = [];
@@ -620,7 +615,7 @@ class Parser {
       commands.push(this.wrapCompoundRedirects(cmd));
     }
 
-    if (commands.length === 1 && !negated && !time) {
+    if (commands.length === 1 && negated === undefined && !time) {
       // Pass redirects up for list() to consume
       this._redirects = firstRedirects;
       return commands[0];
@@ -634,7 +629,7 @@ class Parser {
       pos: pipelinePos,
       end: commands[commands.length - 1].end,
       commands,
-      negated: negated ? true : undefined,
+      negated,
       operators,
       time: time ? true : undefined,
     };
