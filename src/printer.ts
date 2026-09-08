@@ -63,8 +63,8 @@ function stmt(s: Statement, indent: number): string {
   return heredocQueue.length === queued ? out : flushHeredocs(out, queued);
 }
 
-// Bash reads a heredoc body from the line after its `<<`. `redir` marks where it printed and
-// this drains each mark at the end of its own line, so reflowing cannot misplace a body.
+// Heredoc marks identify the line after which to emit queued bodies. Prefix redirects defer
+// their marks past multiline command words, so each body follows the complete header.
 const HEREDOC_MARK = "\u0000";
 const heredocQueue: Redirect[] = [];
 
@@ -172,10 +172,23 @@ function assign(a: AssignmentPrefix): string {
 function cmd(c: Command): string {
   const parts: string[] = [];
   for (const a of c.prefix) parts.push(assign(a));
-  if (c.name) parts.push(wd(c.name));
+  let redirectIndex = 0;
+  let heredocMarks = "";
+  if (c.name) {
+    while (redirectIndex < c.redirects.length && c.redirects[redirectIndex].pos < c.name.pos) {
+      const text = redir(c.redirects[redirectIndex++]);
+      if (text.endsWith(HEREDOC_MARK)) {
+        parts.push(text.slice(0, -1));
+        heredocMarks += HEREDOC_MARK;
+      } else {
+        parts.push(text);
+      }
+    }
+    parts.push(wd(c.name));
+  }
   for (const s of c.suffix) parts.push(wd(s));
-  for (const r of c.redirects) parts.push(redir(r));
-  return parts.join(" ");
+  for (; redirectIndex < c.redirects.length; redirectIndex++) parts.push(redir(c.redirects[redirectIndex]));
+  return parts.join(" ") + heredocMarks;
 }
 
 function pipe(p: Pipeline, indent: number): string {

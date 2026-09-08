@@ -67,6 +67,67 @@ test("herestring", () => {
   assert.equal(fmt("cat <<< hello"), "cat <<< hello");
 });
 
+test("prefix redirects keep reserved words as command names", () => {
+  const cases = [
+    [">/dev/null for", "> /dev/null for", "for"],
+    [">/dev/null then", "> /dev/null then", "then"],
+    [">/dev/null time arg", "> /dev/null time arg", "time"],
+    [">/dev/null ! arg", "> /dev/null ! arg", "!"],
+    [">/dev/null { arg", "> /dev/null { arg", "{"],
+    [">/dev/null [[ arg", "> /dev/null [[ arg", "[["],
+    [">/dev/null fo\\\nr", "> /dev/null fo\\\nr", "for"],
+  ];
+  for (const [source, expected, name] of cases) {
+    const printed = fmt(source);
+    assert.equal(printed, expected);
+    assert.equal(fmt(printed), expected);
+    const reparsed = parse(printed);
+    assert.equal(reparsed.errors, undefined);
+    const command = reparsed.commands[0].command;
+    assert.equal(command.type, "Command");
+    if (command.type !== "Command") assert.fail(printed);
+    assert.equal(command.name?.value, name);
+  }
+});
+
+test("prefix redirects preserve redirection order around the command name", () => {
+  const printed = fmt("2>&1 >out time arg 3>tail");
+  assert.equal(printed, "2>&1 > out time arg 3> tail");
+  const command = parse(printed).commands[0].command;
+  assert.equal(command.type, "Command");
+  if (command.type !== "Command") assert.fail(printed);
+  assert.deepEqual(
+    command.redirects.map((r) => [r.fileDescriptor, r.operator, r.target?.value]),
+    [
+      [2, ">&", "1"],
+      [undefined, ">", "out"],
+      [3, ">", "tail"],
+    ],
+  );
+});
+
+test("prefix redirects preserve ordinary and quoted command names", () => {
+  assert.equal(fmt(">out echo hi"), "> out echo hi");
+  assert.equal(fmt(">out 'time' arg"), "> out 'time' arg");
+  assert.equal(fmt("A=1 >out for"), "A=1 > out for");
+  assert.equal(fmt(">out"), "> out");
+});
+
+test("prefix heredocs follow complete multiline commands", () => {
+  const cases = [
+    ["<<EOF for\nbody\nEOF", "<< EOF for\nbody\nEOF"],
+    ['<<EOF for "a\nb"\nbody\nEOF', '<< EOF for "a\nb"\nbody\nEOF'],
+    ['<<A for "a\nb" <<B\nfirst\nA\nsecond\nB', '<< A for "a\nb" << B\nfirst\nA\nsecond\nB'],
+    ["<<EOF fo\\\nr\nbody\nEOF", "<< EOF fo\\\nr\nbody\nEOF"],
+  ];
+  for (const [source, expected] of cases) {
+    const printed = fmt(source);
+    assert.equal(printed, expected);
+    assert.equal(fmt(printed), expected);
+    assert.equal(parse(printed).errors, undefined);
+  }
+});
+
 // --- Pipelines ---
 
 test("simple pipeline", () => {
