@@ -1859,6 +1859,14 @@ export class Lexer {
 
   private readWord(out: TokenValue, ctx: LexContext, tokenStart: number = 0): void {
     this.readWordText();
+    if (ctx === LexContext.Normal && this._wordRaw) {
+      const next = this.pos < this.srcEnd ? this.src.charCodeAt(this.pos) : 0;
+      if (next !== CH_LT && next !== CH_GT) {
+        setSpanToken(out, Token.Word, tokenStart, this.pos, true);
+        out.keywordEligible = this._wordKeywordEligible;
+        return;
+      }
+    }
     this.classifyWord(out, ctx, tokenStart);
   }
 
