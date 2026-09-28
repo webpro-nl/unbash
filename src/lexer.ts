@@ -1258,12 +1258,19 @@ export class Lexer {
     const len = this.srcEnd;
     // Skip spaces to second '('
     while (this.pos < len && (src.charCodeAt(this.pos) === CH_SPACE || src.charCodeAt(this.pos) === CH_TAB)) this.pos++;
+    const openPos = this.pos;
     if (this.pos < len && src.charCodeAt(this.pos) === CH_LPAREN) this.pos++;
     const starts: [number, number, number] = [this.pos, 0, 0];
     const parts: [string, string, string, number, number, number] = ["", "", "", 0, 0, 0];
     let partIdx = 0;
     let depth = 1;
     let partStart = this.pos;
+    let extra = false;
+    const setPart = (end: number) => {
+      const raw = src.slice(partStart, end);
+      parts[partIdx] = raw.trim();
+      parts[3 + partIdx] = starts[partIdx] + raw.length - raw.trimStart().length;
+    };
     while (this.pos < len && depth > 0) {
       const c = src.charCodeAt(this.pos);
       if (c === CH_LPAREN) {
@@ -1272,9 +1279,9 @@ export class Lexer {
       } else if (c === CH_RPAREN) {
         depth--;
         if (depth === 0) {
-          const raw = src.slice(partStart, this.pos);
-          parts[partIdx] = raw.trim();
-          parts[3 + partIdx] = starts[partIdx] + raw.length - raw.trimStart().length;
+          if (!extra) setPart(this.pos);
+          if (partIdx < 2)
+            this.errors.push({ message: "expected three arithmetic expressions in for header", pos: this.pos });
           this.pos++; // skip closing )
           // Skip the outer ) as well
           while (this.pos < len && (src.charCodeAt(this.pos) === CH_SPACE || src.charCodeAt(this.pos) === CH_TAB))
@@ -1284,10 +1291,18 @@ export class Lexer {
         }
         this.pos++;
       } else if (c === CH_SEMI && depth === 1) {
-        const raw = src.slice(partStart, this.pos);
-        parts[partIdx] = raw.trim();
-        parts[3 + partIdx] = starts[partIdx] + raw.length - raw.trimStart().length;
-        if (partIdx < 2) partIdx++;
+        // Bash requires exactly three expressions; keep the first three and report the rest.
+        if (partIdx === 2) {
+          if (!extra) {
+            setPart(this.pos);
+            this.errors.push({ message: "expected three arithmetic expressions in for header", pos: this.pos });
+          }
+          extra = true;
+          this.pos++;
+          continue;
+        }
+        setPart(this.pos);
+        partIdx++;
         this.pos++;
         partStart = this.pos;
         starts[partIdx] = partStart;
@@ -1300,6 +1315,10 @@ export class Lexer {
       } else {
         this.pos++;
       }
+    }
+    if (depth > 0) {
+      if (!extra) setPart(this.pos);
+      this.errors.push({ message: "unterminated arithmetic for header", pos: openPos });
     }
     return parts;
   }

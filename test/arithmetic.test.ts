@@ -883,3 +883,19 @@ test("unterminated arithmetic reports an error and keeps its body", () => {
   assert.equal(word.text, "$(( 1 +");
   assert.equal(word.value, "$(( 1 +");
 });
+
+test("arithmetic for headers need exactly three expressions", () => {
+  const message = "expected three arithmetic expressions in for header";
+  assert.deepEqual(parse("for ((i=0;i<2)); do :; done").errors, [{ message, pos: 13 }]);
+  const four = parse("for ((1;2;3;4)); do :; done");
+  assert.deepEqual(four.errors, [{ message, pos: 11 }]);
+  const loop = four.commands[0].command as ArithmeticFor;
+  assert.equal(loop.update?.type, "ArithmeticWord");
+  assert.equal(loop.update?.type === "ArithmeticWord" ? loop.update.value : undefined, "3");
+  assert.equal(parse("for ((;;)); do :; done").errors, undefined);
+  assert.equal(parse("for ((i=0;i<2;)); do :; done").errors, undefined);
+  const open = parse("for ((i=0;;");
+  assert.deepEqual(open.errors?.[0], { message: "unterminated arithmetic for header", pos: 5 });
+  const initialize = (open.commands[0].command as ArithmeticFor).initialize;
+  assert.equal(initialize?.type === "ArithmeticBinary" ? initialize.operator : undefined, "=");
+});
