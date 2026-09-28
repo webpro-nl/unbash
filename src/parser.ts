@@ -1070,15 +1070,19 @@ class Parser {
       const rparenEnd = this.acceptEnd(Token.RParen, LexContext.Normal);
 
       const cmds = this.list();
-      let itemEnd = rparenEnd >= 0 ? rparenEnd : itemPos;
-      if (cmds.length > 0) itemEnd = cmds[cmds.length - 1].end;
+      // An empty body belongs where commands would start, not wherever the lexer stopped.
+      const bodyPos = rparenEnd >= 0 ? rparenEnd : pattern.length > 0 ? pattern[pattern.length - 1].end : itemPos;
+      const itemEnd = cmds.length > 0 ? cmds[cmds.length - 1].end : bodyPos;
 
       const item: CaseItem = {
         type: "CaseItem",
         pos: itemPos,
         end: itemEnd,
         pattern,
-        body: this.makeCompoundList(cmds),
+        body:
+          cmds.length > 0
+            ? this.makeCompoundList(cmds)
+            : { type: "CompoundList", pos: bodyPos, end: bodyPos, commands: [] },
         terminator: undefined,
       };
 

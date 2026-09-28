@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
-import type { Command, Coproc, For, Function, If, Pipeline, Subshell, While } from "../src/types.ts";
+import type { Case, Command, Coproc, For, Function, If, Pipeline, Subshell, While } from "../src/types.ts";
 
 const getCmd = (ast: ReturnType<typeof parse>, i = 0) => ast.commands[i].command as Command;
 
@@ -429,5 +429,20 @@ test("(( subshells keep their clause boundary in a loop or conditional head", ()
     const ast = parse(source);
     assert.equal(ast.errors, undefined, source);
     assert.equal(ast.commands[0].end, source.length, source);
+  }
+});
+
+test("empty case item bodies sit right after the pattern's closing parenthesis", () => {
+  for (const [source, pos] of [
+    ["case x in x) esac", 12],
+    ["case x in x)\nesac", 12],
+    ["case x in (x) ;; esac", 13],
+    ["case x in x|y) ;; esac", 14],
+  ] as const) {
+    const node = parse(source).commands[0].command as Case;
+    const item = node.items[0];
+    assert.deepEqual([item.body.pos, item.body.end, item.body.commands], [pos, pos, []], source);
+    assert.ok(item.pos <= item.body.pos && item.body.end <= item.end, source);
+    assert.equal(parse(source).errors, undefined, source);
   }
 });
