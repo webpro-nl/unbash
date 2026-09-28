@@ -363,6 +363,14 @@ test("function names that lex as assignments keep the function keyword", () => {
   assert.equal(parse(printed).errors, undefined);
 });
 
+test("case pattern esac keeps its opening parenthesis", () => {
+  const printed = fmt("case x in (esac) :;; esac");
+  assert.equal(printed, "case x in\n  (esac)\n    :\n    ;;\nesac");
+  assert.equal(fmt(printed), printed);
+  assert.equal(parse(printed).errors, undefined);
+  assert.equal(fmt("case x in (a|esac) :;; esac"), "case x in\n  a | esac)\n    :\n    ;;\nesac");
+});
+
 // --- Multiple statements ---
 
 test("multiple statements", () => {

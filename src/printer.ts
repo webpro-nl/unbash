@@ -260,7 +260,9 @@ function caseNode(n: Case, indent: number): string {
   const bPad = "  ".repeat(indent + 2);
   let out = "case " + wd(n.word) + " in\n";
   for (const item of n.items) {
-    out += iPad + item.pattern.map((p) => wd(p)).join(" | ") + ")\n";
+    // A leading `esac` closes the case unless the optional `(` precedes the pattern list.
+    const open = item.pattern.length > 0 && wd(item.pattern[0]) === "esac" ? "(" : "";
+    out += iPad + open + item.pattern.map((p) => wd(p)).join(" | ") + ")\n";
     if (item.body.commands.length > 0) {
       out += stmts(item.body.commands, indent + 2) + "\n";
     }
