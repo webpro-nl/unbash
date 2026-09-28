@@ -6,6 +6,7 @@ import { parse } from "../src/parser.ts";
 import { computeWordParts } from "../src/parts.ts";
 import type {
   ArithmeticBinary,
+  ArithmeticCommand,
   ArithmeticCommandExpansion,
   ArithmeticExpression,
   ArithmeticGroup,
@@ -842,4 +843,22 @@ test("$[ ] closes at the first unnested bracket, even inside braces", () => {
   const subscript = parse("h[${x:-]}]=1").commands[0].command as Command;
   assert.equal(subscript.prefix[0].type, "Assignment");
   if (subscript.prefix[0].type === "Assignment") assert.equal(subscript.prefix[0].index, "${x:-]}");
+});
+
+test("unparsed arithmetic tokens keep the whole body as one word", () => {
+  for (const [source, expected] of [
+    ["(( 1 2 ))", "1 2"],
+    ["(( x = 1.5 ))", "x = 1.5"],
+    ["(( x = y [ 0 ] ))", "x = y [ 0 ]"],
+    ["for ((i=0 1; i<2; i++)); do :; done", "i=0 1"],
+  ]) {
+    const command = parse(source).commands[0].command;
+    const expression =
+      command.type === "ArithmeticFor" ? command.initialize : (command as ArithmeticCommand).expression;
+    assert.equal(expression?.type, "ArithmeticWord", source);
+    if (expression?.type !== "ArithmeticWord") continue;
+    assert.equal(expression.value, expected, source);
+    assert.equal(source.slice(expression.pos, expression.end), expected, source);
+    assert.equal(expression.parts, undefined, source);
+  }
 });

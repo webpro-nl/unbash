@@ -339,6 +339,18 @@ test("background statement inside a clause keeps & as its terminator", () => {
   }
 });
 
+test("arithmetic commands with unparsed tokens print their body verbatim", () => {
+  for (const [source, expected] of [
+    ["(( 1 2 )); echo $?", "(( 1 2 ))\necho $?"],
+    ["(( x = 1.5 ))", "(( x = 1.5 ))"],
+    ["((echo a))", "(( echo a ))"],
+    ["for ((i=0 1;;)); do :; done", "for (( i=0 1; ;  )); do\n  :\ndone"],
+  ]) {
+    assert.equal(fmt(source), expected, source);
+    assert.equal(fmt(expected), expected, source);
+  }
+});
+
 // --- Multiple statements ---
 
 test("multiple statements", () => {

@@ -566,13 +566,23 @@ export function parseArithmeticExpression(
 
   skipWS();
   if (pos >= len) return null;
+  const start = pos;
   const result = parseBinExpr(0);
-  // Check there's nothing important remaining
   skipWS();
-  if (pos < len && collector) {
-    collector.commandExpansions.length = initialCommandCount;
-    collector.embeddedWords.length = initialWordCount;
-    return makeWord(0, len, true);
+  if (pos < len) {
+    // Unparsed tokens remain: a partial tree would silently drop them, so keep the whole body
+    // as one word. With embedded structure its parts still expose nested substitutions.
+    if (collector) {
+      collector.commandExpansions.length = initialCommandCount;
+      collector.embeddedWords.length = initialWordCount;
+    }
+    let end = len;
+    while (end > start) {
+      const c = src.charCodeAt(end - 1);
+      if (c !== CH_SPACE && c !== CH_TAB && c !== CH_NL) break;
+      end--;
+    }
+    return makeWord(start, end, collector !== undefined);
   }
   return result;
 }
