@@ -1,10 +1,22 @@
-import { parse } from "../src/parser.ts";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 import { bench, group, run, summary } from "mitata";
 import { short, advanced, installers, large } from "./fixtures.ts";
 
 type ParseFn = (s: string) => unknown;
 type Parser = { name: string; parse: ParseFn; limited?: boolean };
+
+const { values } = parseArgs({
+  options: {
+    parser: { type: "string" },
+    name: { type: "string", default: "unbash" },
+    json: { type: "boolean", default: false },
+    filter: { type: "string" },
+  },
+});
+const entry = values.parser ? pathToFileURL(resolve(values.parser)) : new URL("../src/parser.ts", import.meta.url);
+const { parse }: { parse: ParseFn } = await import(entry.href);
 
 const parsers: Parser[] = [];
 
@@ -65,7 +77,7 @@ for (const [label, scripts] of [
 ] as const) {
   group(label, () => {
     summary(() => {
-      bench("unbash", () => {
+      bench(values.name, () => {
         for (const script of scripts) parse(script);
       }).baseline();
 
@@ -86,4 +98,8 @@ for (const [label, scripts] of [
   });
 }
 
-await run();
+await run({
+  format: values.json ? { json: { debug: false, samples: false } } : "mitata",
+  filter: new RegExp(values.filter ?? ".*"),
+  throw: true,
+});

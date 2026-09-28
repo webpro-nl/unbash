@@ -1,19 +1,29 @@
 import { parse } from "../src/parser.ts";
-import type { Node, Statement, Word } from "../src/types.ts";
+import type { Assignment, CompoundList, Redirection, Statement, Word } from "../src/types.ts";
 import { bench, group, run, summary } from "mitata";
 import { short, advanced, specialized, installers, large } from "./fixtures.ts";
 
-function visitWords(node: Node | Statement): number {
+type ListNode = Statement | Statement["command"] | CompoundList;
+
+function visitWords(node: ListNode): number {
   let count = 0;
   switch (node.type) {
     case "Command":
       if (node.name) count += touchWord(node.name);
-      for (const w of node.suffix) count += touchWord(w);
-      for (const a of node.prefix) {
-        if (a.value) count += touchWord(a.value);
-        if (a.array) for (const w of a.array) count += touchWord(w);
+      for (const argument of node.suffix) {
+        if (argument.type === "Word") count += touchWord(argument);
+        else if (argument.type === "Assignment") count += touchAssignment(argument);
+        else count += visitRedirect(argument);
       }
-      for (const r of node.redirects) count += visitRedirect(r);
+      for (const item of node.prefix) count += item.type === "Assignment" ? touchAssignment(item) : visitRedirect(item);
+      break;
+    case "Redirected":
+      count += visitWords(node.command);
+      for (const redirect of node.redirects) count += visitRedirect(redirect);
+      break;
+    case "Time":
+    case "Negation":
+      if (node.command) count += visitWords(node.command);
       break;
     case "Pipeline":
       for (const c of node.commands) count += visitWords(c);
@@ -31,7 +41,7 @@ function visitWords(node: Node | Statement): number {
       break;
     case "For":
       count += touchWord(node.name);
-      for (const w of node.wordlist) count += touchWord(w);
+      for (const w of node.wordlist ?? []) count += touchWord(w);
       count += visitCompoundList(node.body);
       break;
     case "While":
@@ -48,11 +58,10 @@ function visitWords(node: Node | Statement): number {
     case "Function":
       count += touchWord(node.name);
       count += visitNode(node.body);
-      for (const r of node.redirects) count += visitRedirect(r);
       break;
     case "Select":
       count += touchWord(node.name);
-      for (const w of node.wordlist) count += touchWord(w);
+      for (const w of node.wordlist ?? []) count += touchWord(w);
       count += visitCompoundList(node.body);
       break;
     case "Subshell":
@@ -64,12 +73,10 @@ function visitWords(node: Node | Statement): number {
       break;
     case "Statement":
       count += visitWords(node.command);
-      for (const r of node.redirects) count += visitRedirect(r);
       break;
     case "Coproc":
       if (node.name) count += touchWord(node.name);
       count += visitNode(node.body);
-      for (const r of node.redirects) count += visitRedirect(r);
       break;
     case "TestCommand":
       count += visitTestExpr(node.expression);
@@ -81,21 +88,22 @@ function visitWords(node: Node | Statement): number {
   return count;
 }
 
-function visitNode(node: Node): number {
+function visitNode(node: ListNode): number {
   return visitWords(node);
 }
 
-function visitCompoundList(cl: { commands: Statement[] }): number {
+function visitCompoundList(cl: CompoundList): number {
   let count = 0;
   for (const s of cl.commands) count += visitWords(s);
   return count;
 }
 
-function visitRedirect(r: { target?: Word; body?: Word }): number {
-  let count = 0;
-  if (r.target) count += touchWord(r.target);
-  if (r.body) count += touchWord(r.body);
-  return count;
+function visitRedirect(r: Redirection): number {
+  if (r.type === "HereDoc") {
+    void r.body.parts;
+    return 1;
+  }
+  return r.target ? touchWord(r.target) : 0;
 }
 
 function visitTestExpr(expr: import("../src/types.ts").TestExpression): number {
@@ -125,6 +133,14 @@ function visitTestExpr(expr: import("../src/types.ts").TestExpression): number {
 function touchWord(w: Word): number {
   void w.parts; // trigger lazy computation
   return 1;
+}
+
+function touchAssignment(assignment: Assignment): number {
+  let count = assignment.index ? touchWord(assignment.index) : 0;
+  const value = assignment.value;
+  if (value.type === "Word") count += touchWord(value);
+  else for (const word of value.elements) count += touchWord(word);
+  return count;
 }
 
 for (const [label, scripts] of [
