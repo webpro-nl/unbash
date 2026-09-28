@@ -364,18 +364,18 @@ function isDQChild(p: WordPart): p is DoubleQuotedChild {
   );
 }
 
-function isAllDigits(text: string): boolean {
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charCodeAt(i);
-    if (c < CH_0 || c > CH_9) return false;
-  }
-  return text.length > 0;
-}
-
 function isAllDigitsRange(src: string, start: number, end: number): boolean {
   for (let i = start; i < end; i++) {
     const c = src.charCodeAt(i);
     if (c < CH_0 || c > CH_9) return false;
+  }
+  return end > start;
+}
+
+function isIdentifierRange(src: string, start: number, end: number): boolean {
+  for (let i = start; i < end; i++) {
+    const c = src.charCodeAt(i);
+    if (c >= 128 || !(isIdChar[c] & (i === start ? 1 : 2))) return false;
   }
   return end > start;
 }
@@ -1992,27 +1992,12 @@ export class Lexer {
               return;
             }
           }
-          if (fc === CH_LBRACE && wordLen > 2 && src.charCodeAt(wordEnd - 1) === CH_RBRACE) {
-            const varname = src.slice(tokenStart + 1, wordEnd - 1);
-            if (this.readRedirection(out, tokenStart)) {
-              out.variableName = varname;
-              return;
-            }
-          }
-        } else if (value !== null && value.length > 0) {
-          if (value.charCodeAt(0) >= CH_0 && value.charCodeAt(0) <= CH_9 && isAllDigits(value)) {
-            const fd = Number.parseInt(value, 10);
-            if (this.readRedirection(out, tokenStart)) {
-              out.fileDescriptor = fd;
-              return;
-            }
-          }
           if (
-            value.charCodeAt(0) === CH_LBRACE &&
-            value.charCodeAt(value.length - 1) === CH_RBRACE &&
-            value.length > 2
+            fc === CH_LBRACE &&
+            src.charCodeAt(wordEnd - 1) === CH_RBRACE &&
+            isIdentifierRange(src, tokenStart + 1, wordEnd - 1)
           ) {
-            const varname = value.slice(1, -1);
+            const varname = src.slice(tokenStart + 1, wordEnd - 1);
             if (this.readRedirection(out, tokenStart)) {
               out.variableName = varname;
               return;

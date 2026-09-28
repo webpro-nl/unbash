@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
+import { print } from "../src/printer.ts";
 import type { Command } from "../src/types.ts";
 import { computeWordParts } from "../src/parts.ts";
 
@@ -474,4 +475,28 @@ test("a trailing backslash is a literal redirect target", () => {
 
   assert.equal((parse("echo a\\").commands[0].command as Command).suffix[0].text, "a\\");
   assert.equal((parse("cat <<x\\").commands[0].command as Command).redirects[0].target?.text, "x\\");
+});
+
+test("redirect descriptors require unquoted digits or a valid identifier", () => {
+  for (const [source, words, printed] of [
+    ["echo x {1v}>out", ["x", "{1v}"], "echo x {1v} > out"],
+    ["echo x {v-w}>out", ["x", "{v-w}"], "echo x {v-w} > out"],
+    ['echo x "2">out', ["x", '"2"'], 'echo x "2" > out'],
+    ['echo x "{fd}">out', ["x", '"{fd}"'], 'echo x "{fd}" > out'],
+    ["echo x {f\\d}>out", ["x", "{f\\d}"], "echo x {f\\d} > out"],
+    ["echo x {_a1}>out", ["x"], "echo x {_a1}> out"],
+    ["echo x 2>out", ["x"], "echo x 2> out"],
+  ]) {
+    const ast = parse(source);
+    const command = getCmd(ast);
+    assert.deepEqual(
+      command.suffix.map((word) => word.text),
+      words,
+      source,
+    );
+    assert.equal(command.redirects.length, 1, source);
+    assert.equal(command.redirects[0].target?.text, "out", source);
+    assert.equal(print(ast), printed, source);
+    assert.equal(ast.errors, undefined, source);
+  }
 });
