@@ -1,13 +1,16 @@
 // oxlint-disable unicorn/no-thenable
 import type {
-  DeferredCommandExpansion,
+  ArithmeticCommandExpansion,
+  CommandExpansionPart,
   DoubleQuotedChild,
   ExtGlobOperator,
+  HereDoc,
   ParameterExpansionPart,
   ParseError,
+  ProcessSubstitutionPart,
   Word,
   WordPart,
-} from "./types.ts";
+} from "./internal-types.ts";
 import { decodeAnsiCQuoted } from "./ansi-c.ts";
 import { parseArithmeticExpression } from "./arithmetic.ts";
 import { WordImpl } from "./word.ts";
@@ -113,9 +116,11 @@ export class TokenValue {
   _owner: Lexer | null;
   pos: number = 0;
   end: number = 0;
-  fileDescriptor?: number = undefined;
-  variableName?: string = undefined;
-  content?: string = undefined;
+  fileDescriptor: number | undefined = undefined;
+  variableName: string | undefined = undefined;
+  descriptorEnd = 0;
+  delimiterQuoted = false;
+  content: string | undefined = undefined;
   targetPos = 0;
   targetEnd = 0;
   assignmentOperatorPos = -1;
@@ -146,6 +151,8 @@ export class TokenValue {
     this.end = 0;
     this.fileDescriptor = undefined;
     this.variableName = undefined;
+    this.descriptorEnd = 0;
+    this.delimiterQuoted = false;
     this.content = undefined;
     this.targetPos = 0;
     this.targetEnd = 0;
@@ -161,6 +168,8 @@ export class TokenValue {
     this.end = other.end;
     this.fileDescriptor = other.fileDescriptor;
     this.variableName = other.variableName;
+    this.descriptorEnd = other.descriptorEnd;
+    this.delimiterQuoted = other.delimiterQuoted;
     this.content = other.content;
     this.targetPos = other.targetPos;
     this.targetEnd = other.targetEnd;
@@ -217,7 +226,7 @@ charType[CH_DOLLAR] = 2;
 charType[CH_BACKTICK] = 2;
 charType[CH_LBRACE] = 2;
 
-function skipLineContinuations(source: string, pos: number, end: number): number {
+export function skipLineContinuations(source: string, pos: number, end: number): number {
   while (pos + 1 < end && source.charCodeAt(pos) === CH_BACKSLASH && source.charCodeAt(pos + 1) === CH_NL) pos += 2;
   return pos;
 }
@@ -415,10 +424,18 @@ interface PendingHereDoc {
   delimiter: string;
   strip: boolean;
   quoted: boolean;
-  target?: { content?: string; heredocQuoted?: boolean; body?: Word };
+  target?: HereDoc;
 }
 
-const NO_EXPANSIONS: [DeferredCommandExpansion, number][] = [];
+type DeferredCommandExpansion = [
+  CommandExpansionPart | ProcessSubstitutionPart | ArithmeticCommandExpansion,
+  number,
+  string,
+  number | undefined,
+  boolean,
+];
+
+const NO_EXPANSIONS: DeferredCommandExpansion[] = [];
 
 function setToken(out: TokenValue, token: Token, value: string, pos: number = 0, end: number = 0): void {
   out.token = token;
@@ -427,6 +444,8 @@ function setToken(out: TokenValue, token: Token, value: string, pos: number = 0,
   out.end = end;
   out.fileDescriptor = undefined;
   out.variableName = undefined;
+  out.descriptorEnd = 0;
+  out.delimiterQuoted = false;
   out.content = undefined;
   out.assignmentOperatorPos = -1;
   out.raw = false;
@@ -441,6 +460,8 @@ function setSpanToken(out: TokenValue, token: Token, pos: number, end: number, r
   out.end = end;
   out.fileDescriptor = undefined;
   out.variableName = undefined;
+  out.descriptorEnd = 0;
+  out.delimiterQuoted = false;
   out.content = undefined;
   out.assignmentOperatorPos = -1;
   out.raw = raw;
@@ -500,6 +521,9 @@ export const LexContext = {
   TestMode: 2,
   // After a prefix element: assignments still recognized, reserved words not.
   CommandPrefix: 3,
+  // Assignment arguments retain ordinary word boundaries inside subscripts.
+  Declaration: 4,
+  ArrayElement: 5,
 } as const;
 export type LexContext = (typeof LexContext)[keyof typeof LexContext];
 
@@ -530,12 +554,13 @@ function scanBraceExpansion(src: string, pos: number, len: number): number {
 export class Lexer {
   private src: string;
   private srcEnd: number;
+  private parenBoundary: boolean;
   private pos: number;
   private current: TokenValue;
   private nextState: TokenValue;
   private hasPeek: boolean;
   private pendingHereDocs: PendingHereDoc[] | null;
-  private collectedExpansions: [DeferredCommandExpansion, number][] | null;
+  private collectedExpansions: DeferredCommandExpansion[] | null;
   _errors: ParseError[] | null = null;
   _buildParts = false;
   // Build processed text while scanning. Off on the normal token path (values
@@ -549,9 +574,10 @@ export class Lexer {
   // `start`/`end` bound the lexer to a window of `src` so substitution scripts can be
   // parsed in place against the original source — every position is then absolute, with
   // no slicing or re-basing. Defaults cover the whole string (the common top-level parse).
-  constructor(src: string, start = 0, end = src.length) {
+  constructor(src: string, start = 0, end = src.length, parenBoundary = false) {
     this.src = src;
     this.srcEnd = end;
+    this.parenBoundary = parenBoundary;
     this.pos = start;
     this.current = new TokenValue(this);
     this.nextState = new TokenValue(this);
@@ -573,14 +599,20 @@ export class Lexer {
     return this._errors ?? (this._errors = []);
   }
 
-  getCollectedExpansions(): [DeferredCommandExpansion, number][] {
+  getCollectedExpansions(): DeferredCommandExpansion[] {
     return this.collectedExpansions ?? NO_EXPANSIONS;
   }
 
   // Collected expansions resolve after the enclosing scan unwinds, so each records the
   // depth it was found at; resolveCollected charges that depth against the shared budget.
-  private collect(part: DeferredCommandExpansion): void {
-    (this.collectedExpansions ??= []).push([part, this._nestingDepth]);
+  private collect(part: DeferredCommandExpansion[0], inner: string, innerStart?: number, parenBoundary = false): void {
+    (this.collectedExpansions ?? (this.collectedExpansions = [])).push([
+      part,
+      this._nestingDepth,
+      inner,
+      innerStart,
+      parenBoundary,
+    ]);
   }
 
   getPos(): number {
@@ -1052,15 +1084,15 @@ export class Lexer {
       const inner = this.extractBalanced();
       if (this._unbalanced) this.errors.push({ message: "unterminated process substitution", pos: startPos });
       const text = this.src.slice(startPos, this.pos);
-      const part: import("./types.ts").ProcessSubstitutionPart = {
+      const part: import("./internal-types.ts").ProcessSubstitutionPart = {
         type: "ProcessSubstitution",
+        pos: startPos,
+        end: this.pos,
         text,
         operator: ch === 0x3c ? "<" : ">",
         script: undefined,
-        inner: inner ?? undefined,
-        innerStart: startPos + 2,
       };
-      this.collect(part);
+      this.collect(part, inner, startPos + 2, !this._unbalanced);
       // Continue reading any trailing word text (e.g., suffix after proc sub)
       if (this.pos < this.srcEnd) {
         this.readWordText();
@@ -1086,18 +1118,50 @@ export class Lexer {
     return this._wordParts;
   }
 
+  buildArrayElementParts(startPos: number): WordPart[] | null {
+    const close = this.findClosingBracket(startPos + 1);
+    if (close === -1) return this.buildWordParts(startPos);
+    this._buildParts = true;
+    const prefix = hasEmbeddedWordStructure(this.src, startPos, close + 1)
+      ? this.parseSubFieldWord(startPos, close + 1)
+      : undefined;
+    this.pos = close + 1;
+    this.readWordText();
+    const parts = this._wordParts;
+    const prefixParts = prefix?.parts;
+    if (prefixParts) {
+      if (parts) return prefixParts.concat(parts);
+      if (this.pos > close + 1) {
+        prefixParts.push({
+          type: "Literal",
+          pos: close + 1,
+          end: this.pos,
+          text: this.src.slice(close + 1, this.pos),
+          value: this._wordText,
+        });
+      }
+      return prefixParts;
+    }
+    if (parts) {
+      const text = this.src.slice(startPos, close + 1);
+      parts.unshift({ type: "Literal", pos: startPos, end: close + 1, text, value: prefix?.value ?? text });
+    }
+    return parts;
+  }
+
   /** Scan a heredoc body for expansions, building parts. Spaces/newlines are literal. */
   buildHereDocParts(bodyPos: number, bodyEnd: number): WordPart[] | null {
     this._buildParts = true;
     const src = this.src;
     const parts: WordPart[] = [];
+    let hasExpansion = false;
     let litBuf = "";
     let litStart = bodyPos;
     let i = bodyPos;
 
     const flushLit = () => {
-      if (litBuf) {
-        parts.push({ type: "Literal", value: litBuf, text: src.slice(litStart, i) });
+      if (i > litStart) {
+        parts.push({ type: "Literal", pos: litStart, end: i, value: litBuf, text: src.slice(litStart, i) });
         litBuf = "";
       }
     };
@@ -1109,6 +1173,10 @@ export class Lexer {
         // Backslash escape — in unquoted heredoc, \\$, \\`, \\\\ are special
         if (i + 1 < bodyEnd) {
           const nc = src.charCodeAt(i + 1);
+          if (nc === CH_NL) {
+            i += 2;
+            continue;
+          }
           if (nc === 0x24 /* $ */ || nc === 0x60 /* ` */ || nc === 0x5c /* \\ */) {
             litBuf += String.fromCharCode(nc);
             i += 2;
@@ -1126,6 +1194,7 @@ export class Lexer {
         this.pos = i;
         this.readDollar();
         if (this._resultPart) {
+          hasExpansion = true;
           parts.push(this._resultPart);
           litStart = this.pos;
         } else {
@@ -1141,6 +1210,7 @@ export class Lexer {
         this.pos = i;
         this.readBacktickExpansion();
         if (this._resultPart) {
+          hasExpansion = true;
           parts.push(this._resultPart);
           litStart = this.pos;
         } else {
@@ -1155,10 +1225,10 @@ export class Lexer {
     }
 
     flushLit();
-    return parts.length > 1 || (parts.length === 1 && parts[0].type !== "Literal") ? parts : null;
+    return hasExpansion ? parts : null;
   }
 
-  registerHereDocTarget(target: { content?: string; heredocQuoted?: boolean; body?: Word }): void {
+  registerHereDocTarget(target: HereDoc): void {
     if (this.pendingHereDocs === null) return;
     for (const hd of this.pendingHereDocs) {
       if (!hd.target) {
@@ -1415,6 +1485,7 @@ export class Lexer {
     // Operators all start with a metachar; anything else is a word
     if (ch < 128 && charType[ch] & 1 && this.tryReadOperator(out, ch, ctx, tokenStart)) return;
 
+    if (ch === CH_LBRACKET && ctx === LexContext.ArrayElement && this.readArrayElement(out, tokenStart)) return;
     this.readWord(out, ctx, tokenStart);
   }
 
@@ -1531,10 +1602,15 @@ export class Lexer {
         if (this.pos >= this.srcEnd || src.charCodeAt(this.pos) !== CH_HASH) this.readHereDocDelimiter();
         const hasTarget = this.pos > targetPos;
         if (hasTarget) {
-          (this.pendingHereDocs ??= []).push({ delimiter: this._hereDelim, strip: dash, quoted: this._hereQuoted });
+          (this.pendingHereDocs ?? (this.pendingHereDocs = [])).push({
+            delimiter: this._hereDelim,
+            strip: dash,
+            quoted: this._hereQuoted,
+          });
         }
         setToken(out, Token.Redirect, dash ? "<<-" : "<<", tokenStart, this.pos);
         out.content = hasTarget ? this._hereDelim : undefined;
+        out.delimiterQuoted = hasTarget && this._hereQuoted;
         out.targetPos = targetPos;
         out.targetEnd = hasTarget ? this.pos : targetPos;
         return true;
@@ -1704,25 +1780,20 @@ export class Lexer {
     if (pending === null || pending.length === 0) return;
     for (const hd of pending) {
       const bodyPos = this.pos;
-      const body = this.readHereDocBody(hd.delimiter, hd.strip);
+      const bodyEnd = this.skipHereDocBody(hd.delimiter, hd.strip, this.parenBoundary, hd.quoted);
       if (hd.target) {
-        hd.target.content = body;
-        if (hd.quoted) {
-          hd.target.heredocQuoted = true;
-        } else if (body) {
-          const parsed = this.parseHereDocBody(body, bodyPos);
-          if (parsed) hd.target.body = parsed;
-        }
+        hd.target.body.pos = bodyPos;
+        hd.target.body.end = bodyEnd;
+        hd.target.body.text = this.src.slice(bodyPos, bodyEnd);
+        if (this.hereDocClosingPos !== -1)
+          hd.target.closing = { pos: this.hereDocClosingPos, end: this.hereDocClosingEnd };
       }
     }
     pending.length = 0;
   }
 
-  private readHereDocBody(delimiter: string, strip: boolean): string {
-    const bodyStart = this.pos;
-    const bodyEnd = this.skipHereDocBody(delimiter, strip);
-    return this.src.slice(bodyStart, bodyEnd);
-  }
+  private hereDocClosingPos = -1;
+  private hereDocClosingEnd = -1;
 
   // Advance past the heredoc body and its delimiter line; return the body end
   // (start of the delimiter line, or srcEnd when delimited by end-of-input).
@@ -1748,97 +1819,61 @@ export class Lexer {
   // A `\` consumes the next character, so `\`+newline continues the line and `\\` does not.
   private logicalLineEnd(from: number, end: number, join: boolean): number {
     const src = this.src;
-    let pos = from;
-    while (pos < end) {
-      const c = src.charCodeAt(pos);
-      if (c === CH_NL) return pos;
-      pos += join && c === CH_BACKSLASH ? 2 : 1;
+    let lineEnd = src.indexOf("\n", from);
+    while (lineEnd !== -1 && lineEnd < end) {
+      if (!join) return lineEnd;
+      let backslashes = lineEnd;
+      while (backslashes > from && src.charCodeAt(backslashes - 1) === CH_BACKSLASH) backslashes--;
+      if ((lineEnd - backslashes) % 2 === 0) return lineEnd;
+      from = lineEnd + 1;
+      lineEnd = src.indexOf("\n", from);
     }
     return end;
   }
 
   private skipHereDocBody(delimiter: string, strip: boolean, parenEnds = false, quoted = false): number {
+    this.hereDocClosingPos = -1;
+    this.hereDocClosingEnd = -1;
     const src = this.src;
     const len = this.srcEnd;
-    const dLen = delimiter.length;
     while (this.pos < len) {
       let lineStart = this.pos;
-      let lineEnd = src.indexOf("\n", this.pos);
-      if (lineEnd === -1 || lineEnd > len) lineEnd = len;
+      const lineEnd = this.logicalLineEnd(lineStart, len, !quoted);
 
-      if (strip) {
-        while (lineStart < lineEnd && src.charCodeAt(lineStart) === CH_TAB) lineStart++;
+      for (;;) {
+        const before = lineStart;
+        if (strip) while (lineStart < lineEnd && src.charCodeAt(lineStart) === CH_TAB) lineStart++;
+        if (!quoted) lineStart = skipLineContinuations(src, lineStart, lineEnd);
+        if (lineStart === before) break;
       }
 
-      if (lineEnd - lineStart === dLen && src.startsWith(delimiter, lineStart)) {
+      let afterDelim = this.matchHereDocDelimiter(delimiter, lineStart, lineEnd, !quoted);
+      if (afterDelim !== -1 && !quoted) afterDelim = skipLineContinuations(src, afterDelim, lineEnd);
+      if (afterDelim === lineEnd) {
         const bodyEnd = this.pos;
+        if (!parenEnds || !this.parenBoundary || lineEnd !== len) {
+          this.hereDocClosingPos = lineStart;
+          this.hereDocClosingEnd = lineEnd;
+        }
         this.pos = lineEnd < len ? lineEnd + 1 : lineEnd;
         return bodyEnd;
       }
 
       // A line starting with the delimiter also ends the body when a `)` follows on the same
       // logical line; the scan then resumes mid-line, right after the delimiter.
-      if (parenEnds) {
-        const afterDelim = this.matchHereDocDelimiter(delimiter, lineStart, len, !quoted);
-        if (afterDelim !== -1) {
-          const paren = src.indexOf(")", afterDelim);
-          if (paren !== -1 && paren < this.logicalLineEnd(lineStart, len, !quoted)) {
-            const bodyEnd = this.pos;
-            this.pos = afterDelim;
-            return bodyEnd;
-          }
+      if (parenEnds && afterDelim !== -1) {
+        let paren = afterDelim;
+        while (paren < lineEnd && src.charCodeAt(paren) !== CH_RPAREN) paren++;
+        if (paren < lineEnd || (this.parenBoundary && lineEnd === len)) {
+          const bodyEnd = this.pos;
+          this.pos = afterDelim;
+          return bodyEnd;
         }
       }
 
       this.pos = lineEnd < len ? lineEnd + 1 : lineEnd;
     }
     return this.pos;
-  }
-
-  // Scan an unquoted heredoc body for expansions ($var, ${...}, $(...), `...`).
-  // Returns a Word (without parts — use computeWordParts for those) if expansions exist.
-  private parseHereDocBody(body: string, bodyPos: number): Word | null {
-    // Quick scan: if no $ or backtick, no expansions possible
-    let hasExpansion = false;
-    for (let i = 0; i < body.length; i++) {
-      const c = body.charCodeAt(i);
-      if (c === CH_BACKTICK) {
-        hasExpansion = true;
-        break;
-      }
-      if (c === CH_DOLLAR) {
-        // Check next char — bare $ at end or before space/newline is literal
-        const next = i + 1 < body.length ? body.charCodeAt(i + 1) : 0;
-        if (
-          next === CH_LBRACE ||
-          next === CH_LPAREN ||
-          next === CH_DOLLAR ||
-          (next >= CH_a && next <= CH_z) ||
-          (next >= CH_A && next <= CH_Z) ||
-          next === CH_UNDERSCORE ||
-          next === CH_BANG ||
-          next === CH_HASH ||
-          next === CH_AT ||
-          next === CH_STAR ||
-          next === CH_QUESTION ||
-          next === CH_DASH ||
-          (next >= CH_0 && next <= CH_9)
-        ) {
-          hasExpansion = true;
-          break;
-        }
-      }
-      if (c === CH_BACKSLASH) i++; // skip escaped char
-    }
-    if (!hasExpansion) return null;
-    return new WordImpl(
-      body,
-      bodyPos,
-      bodyPos + body.length,
-      this.src,
-      WordImpl._resolveHeredocBody,
-      this._nestingDepth,
-    );
   }
 
   private _wordText = "";
@@ -1896,6 +1931,15 @@ export class Lexer {
     return end > start;
   }
 
+  private readArrayElement(out: TokenValue, tokenStart: number): boolean {
+    const close = this.findClosingBracket(tokenStart + 1);
+    if (close === -1) return false;
+    this.pos = close + 1;
+    this.readWordText();
+    setSpanToken(out, Token.Word, tokenStart, this.pos, true);
+    return true;
+  }
+
   private classifyWord(out: TokenValue, ctx: LexContext, tokenStart: number): void {
     const src = this.src;
     const raw = this._wordRaw;
@@ -1948,7 +1992,7 @@ export class Lexer {
         }
       }
     }
-    if (ctx === LexContext.CommandStart || ctx === LexContext.CommandPrefix) {
+    if (ctx === LexContext.CommandStart || ctx === LexContext.CommandPrefix || ctx === LexContext.Declaration) {
       if (isAssignment === undefined) {
         // Fast-path word (value === raw span): detect assignment positionally.
         let eq = -1;
@@ -1965,6 +2009,7 @@ export class Lexer {
           const state = scanAssignmentPrefix(src, tokenStart, wordEnd, ASSIGNMENT_NAME_START);
           if (isMatchedAssignment(state)) assignmentOpPos = assignmentOperatorPos(state);
         } else if (
+          ctx !== LexContext.Declaration &&
           bracket &&
           wordEnd < this.srcEnd &&
           scanAssignmentPrefix(src, tokenStart, wordEnd, ASSIGNMENT_NAME_START) >= ASSIGNMENT_INDEX_BASE
@@ -2012,6 +2057,7 @@ export class Lexer {
             const fd = Number.parseInt(src.slice(tokenStart, wordEnd), 10);
             if (this.readRedirection(out, tokenStart)) {
               out.fileDescriptor = fd;
+              out.descriptorEnd = wordEnd;
               return;
             }
           }
@@ -2023,6 +2069,7 @@ export class Lexer {
             const varname = src.slice(tokenStart + 1, wordEnd - 1);
             if (this.readRedirection(out, tokenStart)) {
               out.variableName = varname;
+              out.descriptorEnd = wordEnd;
               return;
             }
           }
@@ -2130,17 +2177,29 @@ export class Lexer {
             text += eg;
             // Create ExtendedGlob part for real extglob operators (not = which is array assignment)
             if (bp && prefixChar !== CH_EQ) {
+              let prefixPos = innerStart - 2;
+              while (src.charCodeAt(prefixPos) === CH_NL && src.charCodeAt(prefixPos - 1) === CH_BACKSLASH) {
+                prefixPos -= 2;
+              }
               // Remove the prefix char from litBuf (it was appended in the previous iteration)
               if (litBuf.length > 0) {
                 const trimmed = litBuf.slice(0, -1);
-                if (trimmed)
-                  parts!.push({ type: "Literal", value: trimmed, text: src.slice(litStart, innerStart - 2) });
+                if (prefixPos > litStart)
+                  parts!.push({
+                    type: "Literal",
+                    pos: litStart,
+                    end: prefixPos,
+                    value: trimmed,
+                    text: src.slice(litStart, prefixPos),
+                  });
                 litBuf = "";
               }
               const op = extglobOp[prefixChar];
               parts!.push({
                 type: "ExtendedGlob",
-                text: op + eg,
+                pos: prefixPos,
+                end: pos,
+                text: src.slice(prefixPos, pos),
                 operator: op,
                 pattern: src.slice(innerStart, patternEnd),
                 parts: hasEmbeddedWordStructure(src, innerStart, patternEnd)
@@ -2219,11 +2278,17 @@ export class Lexer {
         if (pos < len) pos++;
         else this.errors.push({ message: "unterminated single quote", pos: start - 1 });
         if (bp) {
-          if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, sqStart) });
+          if (sqStart > litStart) {
+            parts!.push({
+              type: "Literal",
+              pos: litStart,
+              end: sqStart,
+              value: litBuf,
+              text: src.slice(litStart, sqStart),
+            });
             litBuf = "";
           }
-          parts!.push({ type: "SingleQuoted", value, text: src.slice(sqStart, pos) });
+          parts!.push({ type: "SingleQuoted", pos: sqStart, end: pos, value, text: src.slice(sqStart, pos) });
           litStart = pos;
         }
         continue;
@@ -2243,16 +2308,30 @@ export class Lexer {
         if (this._dqHasExpansions) hasExpansions = true;
         if (bt) text += this._dqText;
         if (bp) {
-          if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, dqStart) });
+          if (dqStart > litStart) {
+            parts!.push({
+              type: "Literal",
+              pos: litStart,
+              end: dqStart,
+              value: litBuf,
+              text: src.slice(litStart, dqStart),
+            });
             litBuf = "";
           }
           const dqText = src.slice(dqStart, pos);
           parts!.push({
             type: "DoubleQuoted",
+            pos: dqStart,
+            end: pos,
             text: dqText,
             parts: this._dqParts ?? [
-              { type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, this._dqEnd) },
+              {
+                type: "Literal",
+                pos: dqStart + 1,
+                end: this._dqEnd,
+                value: this._dqText,
+                text: src.slice(dqStart + 1, this._dqEnd),
+              },
             ],
           });
           litStart = pos;
@@ -2273,8 +2352,14 @@ export class Lexer {
         if (bt) text += this._resultText;
         if (bp) {
           if (this._resultPart) {
-            if (litBuf) {
-              parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, dollarStart) });
+            if (dollarStart > litStart) {
+              parts!.push({
+                type: "Literal",
+                pos: litStart,
+                end: dollarStart,
+                value: litBuf,
+                text: src.slice(litStart, dollarStart),
+              });
               litBuf = "";
             }
             parts!.push(this._resultPart);
@@ -2298,8 +2383,14 @@ export class Lexer {
         hasExpansions = true;
         if (bt) text += this._resultText;
         if (bp) {
-          if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, btStart) });
+          if (btStart > litStart) {
+            parts!.push({
+              type: "Literal",
+              pos: litStart,
+              end: btStart,
+              value: litBuf,
+              text: src.slice(litStart, btStart),
+            });
             litBuf = "";
           }
           parts!.push(this._resultPart!);
@@ -2318,12 +2409,20 @@ export class Lexer {
             const braceText = src.slice(pos, braceEnd);
             text += braceText;
             if (bp) {
-              if (litBuf) {
-                parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, pos) });
+              if (pos > litStart) {
+                parts!.push({
+                  type: "Literal",
+                  pos: litStart,
+                  end: pos,
+                  value: litBuf,
+                  text: src.slice(litStart, pos),
+                });
                 litBuf = "";
               }
               parts!.push({
                 type: "BraceExpansion",
+                pos,
+                end: braceEnd,
                 text: braceText,
                 parts: hasEmbeddedWordStructure(src, pos + 1, braceEnd - 1)
                   ? this.parseSubFieldWord(pos + 1, braceEnd - 1).parts
@@ -2347,7 +2446,8 @@ export class Lexer {
       pos++;
     }
 
-    if (bp && litBuf) parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, pos) });
+    if (bp && pos > litStart)
+      parts!.push({ type: "Literal", pos: litStart, end: pos, value: litBuf, text: src.slice(litStart, pos) });
 
     this.pos = pos;
     this._wordText = text;
@@ -2403,11 +2503,17 @@ export class Lexer {
         text += value;
         if (pos < len) pos++;
         if (bp) {
-          if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, sqStart) });
+          if (sqStart > litStart) {
+            parts!.push({
+              type: "Literal",
+              pos: litStart,
+              end: sqStart,
+              value: litBuf,
+              text: src.slice(litStart, sqStart),
+            });
             litBuf = "";
           }
-          parts!.push({ type: "SingleQuoted", value, text: src.slice(sqStart, pos) });
+          parts!.push({ type: "SingleQuoted", pos: sqStart, end: pos, value, text: src.slice(sqStart, pos) });
           litStart = pos;
         }
         continue;
@@ -2421,16 +2527,30 @@ export class Lexer {
         pos = this.pos;
         text += this._dqText;
         if (bp) {
-          if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, dqStart) });
+          if (dqStart > litStart) {
+            parts!.push({
+              type: "Literal",
+              pos: litStart,
+              end: dqStart,
+              value: litBuf,
+              text: src.slice(litStart, dqStart),
+            });
             litBuf = "";
           }
           const dqText = src.slice(dqStart, pos);
           parts!.push({
             type: "DoubleQuoted",
+            pos: dqStart,
+            end: pos,
             text: dqText,
             parts: this._dqParts ?? [
-              { type: "Literal", value: this._dqText, text: src.slice(dqStart + 1, this._dqEnd) },
+              {
+                type: "Literal",
+                pos: dqStart + 1,
+                end: this._dqEnd,
+                value: this._dqText,
+                text: src.slice(dqStart + 1, this._dqEnd),
+              },
             ],
           });
           litStart = pos;
@@ -2446,8 +2566,14 @@ export class Lexer {
         text += this._resultText;
         if (bp) {
           if (this._resultPart) {
-            if (litBuf) {
-              parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, dollarStart) });
+            if (dollarStart > litStart) {
+              parts!.push({
+                type: "Literal",
+                pos: litStart,
+                end: dollarStart,
+                value: litBuf,
+                text: src.slice(litStart, dollarStart),
+              });
               litBuf = "";
             }
             parts!.push(this._resultPart);
@@ -2466,8 +2592,14 @@ export class Lexer {
         pos = this.pos;
         text += this._resultText;
         if (bp) {
-          if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, btStart) });
+          if (btStart > litStart) {
+            parts!.push({
+              type: "Literal",
+              pos: litStart,
+              end: btStart,
+              value: litBuf,
+              text: src.slice(litStart, btStart),
+            });
             litBuf = "";
           }
           parts!.push(this._resultPart!);
@@ -2484,20 +2616,26 @@ export class Lexer {
         const raw = src.slice(psStart, pos);
         text += raw;
         if (bp) {
-          if (litBuf) {
-            parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, psStart) });
+          if (psStart > litStart) {
+            parts!.push({
+              type: "Literal",
+              pos: litStart,
+              end: psStart,
+              value: litBuf,
+              text: src.slice(litStart, psStart),
+            });
             litBuf = "";
           }
-          const part: import("./types.ts").ProcessSubstitutionPart = {
+          const part: import("./internal-types.ts").ProcessSubstitutionPart = {
             type: "ProcessSubstitution",
+            pos: psStart,
+            end: pos,
             text: raw,
             operator: ch === CH_LT ? "<" : ">",
             script: undefined,
-            inner,
-            innerStart: psStart + 2,
           };
           parts!.push(part);
-          this.collect(part);
+          this.collect(part, inner, psStart + 2, !this._unbalanced);
           litStart = pos;
         }
         continue;
@@ -2508,7 +2646,8 @@ export class Lexer {
       pos++;
     }
 
-    if (bp && litBuf) parts!.push({ type: "Literal", value: litBuf, text: src.slice(litStart, pos) });
+    if (bp && pos > litStart)
+      parts!.push({ type: "Literal", pos: litStart, end: pos, value: litBuf, text: src.slice(litStart, pos) });
 
     this.pos = pos;
     this._wordText = text;
@@ -2738,8 +2877,14 @@ export class Lexer {
           const rp = this._resultPart;
           if (rp && isDQChild(rp)) {
             if (!parts) parts = [];
-            if (litBuf) {
-              parts.push({ type: "Literal", value: litBuf, text: src.slice(litStart, expStart) });
+            if (expStart > litStart) {
+              parts.push({
+                type: "Literal",
+                pos: litStart,
+                end: expStart,
+                value: litBuf,
+                text: src.slice(litStart, expStart),
+              });
               litBuf = "";
             }
             parts.push(rp);
@@ -2758,8 +2903,14 @@ export class Lexer {
         hasExpansions = true;
         if (bp && this._resultPart && isDQChild(this._resultPart)) {
           if (!parts) parts = [];
-          if (litBuf) {
-            parts.push({ type: "Literal", value: litBuf, text: src.slice(litStart, btStart) });
+          if (btStart > litStart) {
+            parts.push({
+              type: "Literal",
+              pos: litStart,
+              end: btStart,
+              value: litBuf,
+              text: src.slice(litStart, btStart),
+            });
             litBuf = "";
           }
           parts.push(this._resultPart);
@@ -2769,7 +2920,8 @@ export class Lexer {
       }
     }
 
-    if (bp && parts && litBuf) parts.push({ type: "Literal", value: litBuf, text: src.slice(litStart, this.pos) });
+    if (bp && parts && this.pos > litStart)
+      parts.push({ type: "Literal", pos: litStart, end: this.pos, value: litBuf, text: src.slice(litStart, this.pos) });
 
     this._dqEnd = this.pos;
     if (this.pos < len)
@@ -2836,7 +2988,7 @@ export class Lexer {
         const value = this.readAnsiCQuoted();
         this._resultText = value;
         this._resultPart = this._buildParts
-          ? { type: "AnsiCQuoted", text: src.slice(dollarPos, this.pos), value }
+          ? { type: "AnsiCQuoted", pos: dollarPos, end: this.pos, text: src.slice(dollarPos, this.pos), value }
           : undefined;
       } else {
         this.skipAnsiCQuoted();
@@ -2858,9 +3010,17 @@ export class Lexer {
         const text = src.slice(dollarPos, this.pos);
         this._resultPart = {
           type: "LocaleString",
+          pos: dollarPos,
+          end: this.pos,
           text,
           parts: this._dqParts ?? [
-            { type: "Literal", value: this._dqText, text: src.slice(dollarPos + 2, this._dqEnd) },
+            {
+              type: "Literal",
+              pos: dollarPos + 2,
+              end: this._dqEnd,
+              value: this._dqText,
+              text: src.slice(dollarPos + 2, this._dqEnd),
+            },
           ],
         };
       } else {
@@ -2884,7 +3044,9 @@ export class Lexer {
       this._resultText = text;
       this._resultIsRaw = true;
       this._resultHasExpansion = false;
-      this._resultPart = this._buildParts ? { type: "SimpleExpansion", text } : undefined;
+      this._resultPart = this._buildParts
+        ? { type: "SimpleExpansion", pos: dollarPos, end: this.pos, text }
+        : undefined;
       return;
     }
 
@@ -2899,7 +3061,9 @@ export class Lexer {
       this._resultText = text;
       this._resultIsRaw = true;
       this._resultHasExpansion = false;
-      this._resultPart = this._buildParts ? { type: "SimpleExpansion", text } : undefined;
+      this._resultPart = this._buildParts
+        ? { type: "SimpleExpansion", pos: dollarPos, end: this.pos, text }
+        : undefined;
       return;
     }
 
@@ -2916,7 +3080,13 @@ export class Lexer {
         this._resultIsRaw = true;
         this._resultHasExpansion = false;
         this._resultPart = this._buildParts
-          ? { type: "ArithmeticExpansion", text, expression: this.buildArithmeticExpression(body, bodyStart) }
+          ? {
+              type: "ArithmeticExpansion",
+              pos: bodyStart - 2,
+              end: this.pos,
+              text,
+              expression: this.buildArithmeticExpression(body, bodyStart),
+            }
           : undefined;
         return;
       }
@@ -2977,7 +3147,7 @@ export class Lexer {
       } else if (c === CH_LPAREN) {
         if (src.charCodeAt(this.pos - 1) === CH_DOLLAR && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
           if (depth === 1) parentParenDepth = parenDepth;
-          else (parenDepths ??= []).push(parenDepth);
+          else (parenDepths ?? (parenDepths = [])).push(parenDepth);
           depth++;
           parenDepth = 0;
           // Nested $((...)) — count it against the shared budget (the expansion this scan
@@ -3026,13 +3196,18 @@ export class Lexer {
     const body = this.scanArithmeticBody();
     if (this._notArithmetic) return;
     if (this._arithUnterminated) this.errors.push({ message: "unterminated arithmetic expansion", pos: dollarPos });
-    const closing = this._arithUnterminated ? "" : "))";
-    const text = this._buildParts || this._buildValue ? "$((" + body + closing : "";
+    const text = this._buildParts || this._buildValue ? this.src.slice(dollarPos, this.pos) : "";
     this._resultText = text;
     this._resultIsRaw = true;
     this._resultHasExpansion = false;
     this._resultPart = this._buildParts
-      ? { type: "ArithmeticExpansion", text, expression: this.buildArithmeticExpression(body, bodyStart) }
+      ? {
+          type: "ArithmeticExpansion",
+          pos: dollarPos,
+          end: this.pos,
+          text,
+          expression: this.buildArithmeticExpression(body, bodyStart),
+        }
       : undefined;
   }
 
@@ -3042,12 +3217,12 @@ export class Lexer {
   private buildArithmeticExpression(
     body: string,
     bodyStart: number,
-  ): import("./types.ts").ArithmeticExpression | undefined {
+  ): import("./internal-types.ts").ArithmeticExpression | undefined {
     if (!hasEmbeddedWordStructure(this.src, bodyStart, bodyStart + body.length)) {
       return parseArithmeticExpression(body, bodyStart) ?? undefined;
     }
-    const commandExpansions: import("./types.ts").ArithmeticCommandExpansion[] = [];
-    const embeddedWords: import("./types.ts").ArithmeticWord[] = [];
+    const commandExpansions: import("./internal-types.ts").ArithmeticCommandExpansion[] = [];
+    const embeddedWords: import("./internal-types.ts").ArithmeticWord[] = [];
     const expr =
       parseArithmeticExpression(body, bodyStart, {
         commandExpansions,
@@ -3059,8 +3234,7 @@ export class Lexer {
         findArithmeticWordEnd: (start, end) => this.findArithmeticWordEnd(start, end),
       }) ?? undefined;
     for (const node of commandExpansions) {
-      node.innerStart = node.pos + 2;
-      this.collect(node);
+      this.collect(node, node.text.slice(2, -1), node.pos + 2, true);
     }
     for (const node of embeddedWords) node.parts = this.parseSubFieldWord(node.pos, node.end).parts;
     return expr;
@@ -3089,8 +3263,8 @@ export class Lexer {
     this._resultIsRaw = openPos === dollarPos + 1;
     this._resultHasExpansion = true;
     if (this._buildParts) {
-      this._resultPart = { type: "CommandExpansion", text: rawText, script: undefined, inner, innerStart: openPos + 1 };
-      this.collect(this._resultPart);
+      this._resultPart = { type: "CommandExpansion", pos: dollarPos, end: this.pos, text: rawText, script: undefined };
+      this.collect(this._resultPart, inner, openPos + 1, !this._unbalanced);
     } else {
       this._resultPart = undefined;
     }
@@ -3139,8 +3313,8 @@ export class Lexer {
       this._resultText = text;
       if (this._buildParts) {
         const innerStart = start + (rawInner.length - rawInner.trimStart().length);
-        this._resultPart = { type: "CommandExpansion", text, script: undefined, inner, innerStart };
-        this.collect(this._resultPart);
+        this._resultPart = { type: "CommandExpansion", pos: dollarPos, end: this.pos, text, script: undefined };
+        this.collect(this._resultPart, inner, innerStart);
       } else {
         this._resultPart = undefined;
       }
@@ -3217,12 +3391,12 @@ export class Lexer {
       // longer map linearly onto the source — leave innerStart undefined there.
       this._resultPart = {
         type: "CommandExpansion",
+        pos: start - 1,
+        end: this.pos,
         text,
         script: undefined,
-        inner,
-        innerStart: hasEscapes ? undefined : start,
       };
-      this.collect(this._resultPart);
+      this.collect(this._resultPart, inner, hasEscapes ? undefined : start);
     } else {
       this._resultPart = undefined;
     }
@@ -3274,7 +3448,7 @@ export class Lexer {
           break;
         }
       } else if (ch === CH_BACKSLASH) {
-        this.pos++;
+        if (this.pos + 1 < len) this.pos++;
       } else if (ch === CH_SQUOTE) {
         this.pos++;
         if (this.pos > start + 1 && src.charCodeAt(this.pos - 2) === CH_DOLLAR) this.skipAnsiCQuoted();
@@ -3307,16 +3481,15 @@ export class Lexer {
   private parseParamInner(text: string, inner: string, innerStart: number): ParameterExpansionPart {
     const result: ParameterExpansionPart = {
       type: "ParameterExpansion",
+      pos: innerStart - 2,
+      end: this.pos,
       text,
       parameter: "",
+      parameterPos: innerStart,
+      parameterEnd: innerStart,
+      prefix: undefined,
       index: undefined,
-      indexParts: undefined,
-      indirect: undefined,
-      length: undefined,
-      operator: undefined,
-      operand: undefined,
-      slice: undefined,
-      replace: undefined,
+      operation: undefined,
     };
     const ilen = inner.length;
     if (ilen === 0) return result;
@@ -3327,202 +3500,160 @@ export class Lexer {
     };
 
     let i = 0;
-
-    // Check for ! prefix (indirect)
-    if (inner.charCodeAt(0) === CH_BANG) {
-      result.indirect = true;
+    if (ilen > 1 && inner.charCodeAt(0) === CH_BANG) {
+      result.prefix = "!";
       i = 1;
     }
 
-    // Check for # prefix (length) — only when not indirect
-    if (!result.indirect && inner.charCodeAt(0) === CH_HASH) {
-      if (ilen === 1) {
-        // ${#} = special variable
-        result.parameter = "#";
+    if (ilen > 1 && inner.charCodeAt(0) === CH_HASH) {
+      const nameEnd = this.scanParamName(inner, 1);
+      let parameterEnd = nameEnd;
+      let indexEnd = -1;
+      if (parameterEnd < ilen && inner.charCodeAt(parameterEnd) === CH_LBRACKET) {
+        indexEnd = closeBracket(parameterEnd + 1);
+        if (indexEnd !== -1) parameterEnd = indexEnd + 1;
+      }
+      if (nameEnd > 1 && parameterEnd === ilen) {
+        result.prefix = "#";
+        result.parameter = inner.slice(1, nameEnd);
+        result.parameterPos = innerStart + 1;
+        result.parameterEnd = innerStart + nameEnd;
+        if (indexEnd !== -1) result.index = sub(nameEnd + 1, indexEnd);
         return result;
       }
-      // ${##...} is always param="#" with operator (bash resolves ambiguity this way)
-      if (inner.charCodeAt(1) === CH_HASH) {
-        result.parameter = "#";
-        i = 1;
-      } else {
-        // Try as length operator: parse param after #, check if at end
-        const tryI = this.scanParamName(inner, 1);
-        if (tryI > 1) {
-          let endI = tryI;
-          if (endI < ilen && inner.charCodeAt(endI) === CH_LBRACKET) {
-            const closeB = closeBracket(endI + 1);
-            if (closeB !== -1) endI = closeB + 1;
-          }
-          if (endI >= ilen) {
-            // ${#param} or ${#param[idx]} — length
-            result.length = true;
-            result.parameter = inner.slice(1, tryI);
-            if (tryI < ilen && inner.charCodeAt(tryI) === CH_LBRACKET) {
-              const closeB = closeBracket(tryI + 1);
-              if (closeB !== -1) {
-                result.index = inner.slice(tryI + 1, closeB);
-                result.indexParts = sub(tryI + 1, closeB).parts;
-              }
-            }
-            return result;
-          }
-        }
-        // Not length — # is the parameter name
-        result.parameter = "#";
-        i = 1;
-      }
     }
 
-    // Parse parameter name if not set yet
-    if (!result.parameter) {
-      const nameStart = i;
-      i = this.scanParamName(inner, i);
-      result.parameter = inner.slice(nameStart, i);
-    }
+    const nameStart = i;
+    i = this.scanParamName(inner, i);
+    result.parameter = inner.slice(nameStart, i);
+    result.parameterPos = innerStart + nameStart;
+    result.parameterEnd = innerStart + i;
 
-    // Check for [index]
     if (i < ilen && inner.charCodeAt(i) === CH_LBRACKET) {
       const closeB = closeBracket(i + 1);
       if (closeB !== -1) {
-        result.index = inner.slice(i + 1, closeB);
-        result.indexParts = sub(i + 1, closeB).parts;
+        result.index = sub(i + 1, closeB);
         i = closeB + 1;
       }
     }
-
-    // Nothing more → simple expansion
     if (i >= ilen) return result;
 
-    // Determine operator
+    const pos = innerStart + i;
+    const end = innerStart + ilen;
     const opChar = inner.charCodeAt(i);
+    const nextChar = inner.charCodeAt(i + 1);
+    const defaultChar = inner[opChar === CH_COLON ? i + 1 : i];
+    if (defaultChar === "-" || defaultChar === "=" || defaultChar === "+" || defaultChar === "?") {
+      const operandStart = i + (opChar === CH_COLON ? 2 : 1);
+      result.operation = {
+        type: "Default",
+        pos,
+        end,
+        operatorEnd: innerStart + operandStart,
+        operator: opChar === CH_COLON ? `:${defaultChar}` : defaultChar,
+        operand: sub(operandStart, ilen),
+      };
+      return result;
+    }
 
-    // Colon variants: :-, :=, :+, :? or slice
     if (opChar === CH_COLON) {
-      if (i + 1 < ilen) {
-        const nc = inner.charCodeAt(i + 1);
-        if (nc === CH_DASH || nc === CH_EQ || nc === CH_PLUS || nc === CH_QUESTION) {
-          result.operator = inner.slice(i, i + 2);
-          result.operand = sub(i + 2, ilen);
-          return result;
-        }
-      }
-      // Slice: ${var:offset} or ${var:offset:length}
       i++;
-      const sliceRest = inner.slice(i);
       const sliceStart = innerStart + i;
-      const sliceEnd = innerStart + ilen;
-      const colonIdx = findUnnested(sliceRest, CH_COLON, true, (index, quoted) => {
-        return this.findNestedShellEnd(sliceStart + index, sliceEnd, quoted) - sliceStart;
+      const colonIdx = findUnnested(inner.slice(i), CH_COLON, true, (index, quoted) => {
+        return this.findNestedShellEnd(sliceStart + index, end, quoted) - sliceStart;
       });
-      if (colonIdx === -1) {
-        result.slice = { offset: sub(i, ilen), length: undefined };
-      } else {
-        result.slice = {
-          offset: sub(i, i + colonIdx),
-          length: sub(i + colonIdx + 1, ilen),
-        };
-      }
+      result.operation = {
+        type: "Slice",
+        pos,
+        end,
+        operatorEnd: sliceStart,
+        operator: ":",
+        offset: sub(i, colonIdx === -1 ? ilen : i + colonIdx),
+        length: colonIdx === -1 ? undefined : sub(i + colonIdx + 1, ilen),
+      };
       return result;
     }
 
-    // Default/assign/error/alt without colon
-    if (opChar === CH_DASH || opChar === CH_EQ || opChar === CH_PLUS || opChar === CH_QUESTION) {
-      result.operator = inner[i];
-      result.operand = sub(i + 1, ilen);
+    if (opChar === CH_HASH || opChar === CH_PERCENT) {
+      const doubled = nextChar === opChar;
+      const operator = opChar === CH_HASH ? (doubled ? "##" : "#") : doubled ? "%%" : "%";
+      const operandStart = i + (doubled ? 2 : 1);
+      result.operation = {
+        type: "Remove",
+        pos,
+        end,
+        operatorEnd: innerStart + operandStart,
+        operator,
+        operand: sub(operandStart, ilen),
+      };
       return result;
     }
 
-    // Prefix strip
-    if (opChar === CH_HASH) {
-      if (i + 1 < ilen && inner.charCodeAt(i + 1) === CH_HASH) {
-        result.operator = "##";
-        result.operand = sub(i + 2, ilen);
-      } else {
-        result.operator = "#";
-        result.operand = sub(i + 1, ilen);
-      }
-      return result;
-    }
-
-    // Suffix strip
-    if (opChar === CH_PERCENT) {
-      if (i + 1 < ilen && inner.charCodeAt(i + 1) === CH_PERCENT) {
-        result.operator = "%%";
-        result.operand = sub(i + 2, ilen);
-      } else {
-        result.operator = "%";
-        result.operand = sub(i + 1, ilen);
-      }
-      return result;
-    }
-
-    // Replacement
     if (opChar === CH_SLASH) {
       i++;
-      let replOp = "/";
-      if (i < ilen) {
-        const nc = inner.charCodeAt(i);
-        if (nc === CH_SLASH) {
-          replOp = "//";
-          i++;
-        } else if (nc === CH_HASH) {
-          replOp = "/#";
-          i++;
-        } else if (nc === CH_PERCENT) {
-          replOp = "/%";
-          i++;
-        }
+      let operator: import("./internal-types.ts").ParameterReplaceOperation["operator"] = "/";
+      if (nextChar === CH_SLASH || nextChar === CH_HASH || nextChar === CH_PERCENT) {
+        operator = nextChar === CH_SLASH ? "//" : nextChar === CH_HASH ? "/#" : "/%";
+        i++;
       }
-      result.operator = replOp;
-      const rest = inner.slice(i);
-      const sepIdx = findUnnested(rest, CH_SLASH);
-      if (sepIdx === -1) {
-        result.replace = {
-          pattern: sub(i, ilen),
-          replacement: new WordImpl("", innerStart + ilen, innerStart + ilen),
-        };
-      } else {
-        result.replace = {
-          pattern: sub(i, i + sepIdx),
-          replacement: sub(i + sepIdx + 1, ilen),
-        };
+      let separatorStart = i;
+      if (nextChar === CH_SLASH) {
+        // After // a leading slash belongs to the pattern; /# and /% allow empty patterns.
+        separatorStart = skipLineContinuations(inner, i, ilen);
+        if (inner.charCodeAt(separatorStart) === CH_SLASH) separatorStart++;
       }
+      const sepIdx = findUnnested(inner.slice(separatorStart), CH_SLASH);
+      const patternEnd = sepIdx === -1 ? ilen : separatorStart + sepIdx;
+      result.operation = {
+        type: "Replace",
+        pos,
+        end,
+        operatorEnd: innerStart + i,
+        operator,
+        pattern: sub(i, patternEnd),
+        replacement: sub(sepIdx === -1 ? ilen : patternEnd + 1, ilen),
+      };
       return result;
     }
 
-    // Case modification: ^ ^^ , ,,
-    if (opChar === CH_CARET) {
-      if (i + 1 < ilen && inner.charCodeAt(i + 1) === CH_CARET) {
-        result.operator = "^^";
-        if (i + 2 < ilen) result.operand = sub(i + 2, ilen);
-      } else {
-        result.operator = "^";
-        if (i + 1 < ilen) result.operand = sub(i + 1, ilen);
-      }
+    if (opChar === CH_CARET || opChar === CH_COMMA) {
+      const doubled = nextChar === opChar;
+      const operator = opChar === CH_CARET ? (doubled ? "^^" : "^") : doubled ? ",," : ",";
+      const operandStart = i + (doubled ? 2 : 1);
+      result.operation = {
+        type: "CaseModification",
+        pos,
+        end,
+        operatorEnd: innerStart + operandStart,
+        operator,
+        operand: operandStart === ilen ? undefined : sub(operandStart, ilen),
+      };
       return result;
     }
 
-    if (opChar === CH_COMMA) {
-      if (i + 1 < ilen && inner.charCodeAt(i + 1) === CH_COMMA) {
-        result.operator = ",,";
-        if (i + 2 < ilen) result.operand = sub(i + 2, ilen);
-      } else {
-        result.operator = ",";
-        if (i + 1 < ilen) result.operand = sub(i + 1, ilen);
-      }
+    if (
+      result.prefix === "!" &&
+      result.index === undefined &&
+      i + 1 === ilen &&
+      (opChar === CH_AT || opChar === CH_STAR)
+    ) {
+      result.operation = { type: "Names", pos, end, operatorEnd: end, operator: opChar === CH_AT ? "@" : "*" };
       return result;
     }
 
-    // Transform: @
     if (opChar === CH_AT) {
-      result.operator = "@";
-      result.operand = sub(i + 1, ilen);
+      result.operation = {
+        type: "Transform",
+        pos,
+        end,
+        operatorEnd: pos + 1,
+        operator: "@",
+        operand: sub(i + 1, ilen),
+      };
       return result;
     }
 
-    // Unknown operator — store remaining as op
-    result.operator = inner.slice(i);
+    result.operation = { type: "Unknown", pos, end, operatorEnd: end, operator: inner.slice(i) };
     return result;
   }
 
@@ -3775,7 +3906,11 @@ export class Lexer {
           this.readHereDocDelimiter();
           // Empty unquoted delimiter means there was no delimiter word (`<< )`)
           if (this._hereDelim || this._hereQuoted) {
-            (pendingDelims ??= []).push({ delimiter: this._hereDelim, strip, quoted: this._hereQuoted });
+            (pendingDelims ?? (pendingDelims = [])).push({
+              delimiter: this._hereDelim,
+              strip,
+              quoted: this._hereQuoted,
+            });
           }
         }
         wordStart = false;
