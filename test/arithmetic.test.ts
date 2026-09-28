@@ -862,3 +862,24 @@ test("unparsed arithmetic tokens keep the whole body as one word", () => {
     assert.equal(expression.parts, undefined, source);
   }
 });
+
+test("unterminated arithmetic reports an error and keeps its body", () => {
+  for (const [source, message, pos] of [
+    ["(( 1", "unterminated arithmetic command", 0],
+    ["((", "unterminated arithmetic command", 0],
+    ["echo $(( 1 +", "unterminated arithmetic expansion", 5],
+    ["x=$((", "unterminated arithmetic expansion", 2],
+  ] as const) {
+    assert.deepEqual(parse(source).errors, [{ message, pos }], source);
+  }
+  assert.deepEqual(parse('echo "$(( 1"').errors, [
+    { message: "unterminated double quote", pos: 5 },
+    { message: "unterminated arithmetic expansion", pos: 6 },
+  ]);
+  const command = parse("(( 1").commands[0].command as ArithmeticCommand;
+  assert.equal(command.body, " 1");
+  assert.equal(command.expression?.type, "ArithmeticWord");
+  const word = getCmd(parse("echo $(( 1 +")).suffix[0];
+  assert.equal(word.text, "$(( 1 +");
+  assert.equal(word.value, "$(( 1 +");
+});

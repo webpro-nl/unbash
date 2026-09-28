@@ -1849,6 +1849,7 @@ export class Lexer {
   // Set by scanArithmeticBody when the construct turns out not to be arithmetic, so the
   // caller can re-read it as a subshell or command substitution instead.
   private _notArithmetic = false;
+  private _arithUnterminated = false;
   private _dqText = "";
   private _dqHasExpansions = false;
   private _dqParts: DoubleQuotedChild[] | null = null;
@@ -2784,7 +2785,7 @@ export class Lexer {
       if (this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
         const savedPos = this.pos;
         const savedErrors = this.errors.length;
-        this.readArithmeticExpansion();
+        this.readArithmeticExpansion(dollarPos);
         if (!this._notArithmetic) return;
         this.errors.length = savedErrors;
         this.pos = savedPos;
@@ -2907,6 +2908,7 @@ export class Lexer {
 
   private scanArithmeticBody(): string {
     this._notArithmetic = false;
+    this._arithUnterminated = false;
     this.pos += 2;
     let depth = 1;
     let parenDepth = 0;
@@ -2920,7 +2922,7 @@ export class Lexer {
     while (this.pos < len && depth > 0) {
       const c = src.charCodeAt(this.pos);
       if (c === CH_BACKSLASH) {
-        this.pos += 2;
+        this.pos += this.pos + 1 < len ? 2 : 1;
       } else if (c === CH_SQUOTE) {
         this.pos++;
         this.skipSQ();
@@ -2989,14 +2991,21 @@ export class Lexer {
         this.pos++;
       }
     }
-    return this._buildParts || this._buildValue ? src.slice(start, this.pos - 2) : "";
+    const bt = this._buildParts || this._buildValue;
+    if (depth > 0) {
+      this._arithUnterminated = true;
+      return bt ? src.slice(start, this.pos) : "";
+    }
+    return bt ? src.slice(start, this.pos - 2) : "";
   }
 
-  private readArithmeticExpansion(): void {
+  private readArithmeticExpansion(dollarPos: number): void {
     const bodyStart = this.pos + 2; // absolute offset of the body, past the "((" at this.pos
     const body = this.scanArithmeticBody();
     if (this._notArithmetic) return;
-    const text = this._buildParts || this._buildValue ? "$((" + body + "))" : "";
+    if (this._arithUnterminated) this.errors.push({ message: "unterminated arithmetic expansion", pos: dollarPos });
+    const closing = this._arithUnterminated ? "" : "))";
+    const text = this._buildParts || this._buildValue ? "$((" + body + closing : "";
     this._resultText = text;
     this._resultIsRaw = true;
     this._resultHasExpansion = false;
@@ -3040,6 +3049,7 @@ export class Lexer {
     this._buildValue = true;
     const body = this.scanArithmeticBody();
     this._buildValue = savedBuildValue;
+    if (this._arithUnterminated) this.errors.push({ message: "unterminated arithmetic command", pos: tokenStart });
     setToken(out, Token.ArithCmd, body, tokenStart, this.pos);
   }
 

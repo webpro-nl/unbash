@@ -371,6 +371,11 @@ test("case pattern esac keeps its opening parenthesis", () => {
   assert.equal(fmt("case x in (a|esac) :;; esac"), "case x in\n  a | esac)\n    :\n    ;;\nesac");
 });
 
+test("unterminated arithmetic prints its retained body", () => {
+  assert.equal(fmt("(( 1"), "(( 1 ))");
+  assert.equal(fmt("echo $(( 1 +"), "echo $(( 1 +");
+});
+
 // --- Multiple statements ---
 
 test("multiple statements", () => {
