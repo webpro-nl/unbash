@@ -2924,8 +2924,7 @@ export class Lexer {
       parts.push({ type: "Literal", pos: litStart, end: this.pos, value: litBuf, text: src.slice(litStart, this.pos) });
 
     this._dqEnd = this.pos;
-    if (this.pos < len)
-      this.pos++; // closing "
+    if (this.pos < len) this.pos++; // closing "
     else this.errors.push({ message: "unterminated double quote", pos: contentStart - 1 });
     this._dqText = text;
     this._dqHasExpansions = hasExpansions;
@@ -3379,8 +3378,7 @@ export class Lexer {
         }
       }
     }
-    if (this.pos < len)
-      this.pos++; // closing `
+    if (this.pos < len) this.pos++; // closing `
     else this.errors.push({ message: "unterminated backtick", pos: start - 1 });
 
     const text = src.slice(start - 1, this.pos); // raw source including backticks

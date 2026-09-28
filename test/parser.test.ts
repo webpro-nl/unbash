@@ -1,10 +1,11 @@
+import { nodeOfType } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parse } from "../src/parser.ts";
+import { parse, parseRegion } from "../src/parser.ts";
 import type { Command } from "../src/types.ts";
 
 const getCmd = (ast: ReturnType<typeof parse>, i = 0) => ast.commands[i].command as Command;
-const args = (c: Command) => c.suffix.map((s) => s.text);
+const args = (c: Command) => c.suffix.map((s) => nodeOfType(s, "Assignment", "Word").text);
 
 // ── Commands ──────────────────────────────────────────────────────────
 
@@ -15,14 +16,14 @@ test("simple command", () => {
 });
 
 test("empty command collections are owned by their AST", () => {
-  const first = parse("echo").commands[0].command;
-  const second = parse("date").commands[0].command;
+  const first = parseRegion("echo", 0, 4).commands[0].command;
+  const second = parseRegion("date", 0, 4).commands[0].command;
   assert.equal(first.type, "Command");
   assert.equal(second.type, "Command");
   if (first.type !== "Command" || second.type !== "Command") return;
   assert.notEqual(first.prefix, second.prefix);
   assert.notEqual(first.suffix, second.suffix);
-  assert.notEqual(first.redirects, second.redirects);
+  assert.equal(Object.hasOwn(first, "redirects"), false);
 
   assert.ok(first.name);
   first.suffix.push(first.name);
@@ -31,9 +32,10 @@ test("empty command collections are owned by their AST", () => {
   assert.equal(third.type === "Command" ? third.suffix.length : undefined, 0);
 });
 
-test("empty statement redirects are owned by their statement", () => {
+test("statements do not own a second redirect list", () => {
   const statements = parse("echo; date").commands;
-  assert.notEqual(statements[0].redirects, statements[1].redirects);
+  assert.equal("redirects" in statements[0], false);
+  assert.equal("redirects" in statements[1], false);
 });
 
 test("command with flags", () => {

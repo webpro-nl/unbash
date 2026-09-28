@@ -1,32 +1,36 @@
+import { nodeOfType } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
-import type { Assignment, Command, ParameterExpansionPart, Word } from "../src/types.ts";
+import type { Assignment, Command, ParameterExpansionPart, ParameterOperation, Word } from "../src/types.ts";
 import { computeWordParts } from "../src/parts.ts";
 
-const getCmd = (ast: ReturnType<typeof parse>, i = 0) => ast.commands[i].command as Command;
+const getCmd = (ast: ReturnType<typeof parse>, i = 0) => nodeOfType(ast.commands[i].command, "Command");
 const getPart = (input: string): ParameterExpansionPart => {
   const c = getCmd(parse(input));
   const parts = computeWordParts(input, c.suffix[0])!;
-  return parts[0] as ParameterExpansionPart;
+  return nodeOfType(parts[0], "ParameterExpansion");
 };
 const getAssignment = (ast: ReturnType<typeof parse>, i = 0): Assignment => {
-  const assignment = getCmd(ast, i).prefix[0];
-  assert.equal(assignment?.type, "Assignment");
-  return assignment as Assignment;
+  return nodeOfType(getCmd(ast, i).prefix[0], "Assignment");
 };
 const getParam = (word: Word): ParameterExpansionPart => {
-  const part = word.parts?.[0];
-  assert.equal(part?.type, "ParameterExpansion");
-  return part as ParameterExpansionPart;
+  return nodeOfType(word.parts?.[0], "ParameterExpansion");
 };
 const getQuotedParam = (word: Word): ParameterExpansionPart => {
-  const quoted = word.parts?.[0];
-  assert.equal(quoted?.type, "DoubleQuoted");
-  const part = quoted?.type === "DoubleQuoted" ? quoted.parts[0] : undefined;
-  assert.equal(part?.type, "ParameterExpansion");
-  return part as ParameterExpansionPart;
+  const quoted = nodeOfType(word.parts?.[0], "DoubleQuoted");
+  return nodeOfType(quoted.parts[0], "ParameterExpansion");
 };
+
+function getOperand(part: ParameterExpansionPart): Word | undefined {
+  const operation = part.operation;
+  assert.ok(operation && "operand" in operation);
+  return operation.operand;
+}
+
+function getOperation<T extends ParameterOperation["type"]>(part: ParameterExpansionPart, type: T) {
+  return nodeOfType(part.operation, type);
+}
 
 // --- Simple expansions ---
 
@@ -35,15 +39,14 @@ test("simple ${var}", () => {
   assert.equal(p.type, "ParameterExpansion");
   assert.equal(p.parameter, "var");
   assert.equal(p.text, "${var}");
-  assert.equal(p.operator, undefined);
-  assert.equal(p.indirect, undefined);
-  assert.equal(p.length, undefined);
+  assert.equal(p.operation?.operator, undefined);
+  assert.equal(p.prefix, undefined);
 });
 
 test("${#} special variable", () => {
   const p = getPart("echo ${#}");
   assert.equal(p.parameter, "#");
-  assert.equal(p.length, undefined);
+  assert.equal(p.prefix, undefined);
 });
 
 test("${@} special variable", () => {
@@ -61,8 +64,8 @@ test("${?} special variable", () => {
 test("${var:-default}", () => {
   const p = getPart("echo ${var:-default}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, ":-");
-  assert.equal(p.operand!.text, "default");
+  assert.equal(p.operation?.operator, ":-");
+  assert.equal(getOperand(p)!.text, "default");
 });
 
 test("ANSI-C \\c operand ends where the skip and decode paths agree", () => {
@@ -70,37 +73,41 @@ test("ANSI-C \\c operand ends where the skip and decode paths agree", () => {
   const c = getCmd(parse(src));
   const p = computeWordParts(src, c.suffix[0])![0] as ParameterExpansionPart;
   assert.equal(p.text, "${u:-$'\\c'}");
-  assert.equal(p.operand!.text, "$'\\c'");
-  assert.deepEqual(p.operand!.parts, [{ type: "AnsiCQuoted", text: "$'\\c'", value: "\\c" }]);
-  assert.equal(c.suffix[1].value, "x");
+  assert.equal(getOperand(p)!.text, "$'\\c'");
+  assert.deepEqual(getOperand(p)!.parts, [{ type: "AnsiCQuoted", pos: 10, end: 15, text: "$'\\c'", value: "\\c" }]);
+  assert.equal(nodeOfType(c.suffix[1], "Assignment", "Word").value, "x");
 
   const pairSrc = "echo ${u:-$'\\c\\\\'} y";
   const c2 = getCmd(parse(pairSrc));
   const p2 = computeWordParts(pairSrc, c2.suffix[0])![0] as ParameterExpansionPart;
   assert.equal(p2.text, "${u:-$'\\c\\\\'}");
-  assert.deepEqual(p2.operand!.parts, [{ type: "AnsiCQuoted", text: "$'\\c\\\\'", value: "\x1c" }]);
-  assert.equal(c2.suffix[1].value, "y");
+  assert.deepEqual(getOperand(p2)!.parts, [
+    { type: "AnsiCQuoted", pos: 10, end: 17, text: "$'\\c\\\\'", value: "\x1c" },
+  ]);
+  assert.equal(nodeOfType(c2.suffix[1], "Assignment", "Word").value, "y");
 
   const escapedQuoteSrc = "echo ${u:-$'\\c\\''} z";
   const c3 = getCmd(parse(escapedQuoteSrc));
   const p3 = computeWordParts(escapedQuoteSrc, c3.suffix[0])![0] as ParameterExpansionPart;
   assert.equal(p3.text, "${u:-$'\\c\\''}");
-  assert.deepEqual(p3.operand!.parts, [{ type: "AnsiCQuoted", text: "$'\\c\\''", value: "\x1c'" }]);
-  assert.equal(c3.suffix[1].value, "z");
+  assert.deepEqual(getOperand(p3)!.parts, [
+    { type: "AnsiCQuoted", pos: 10, end: 17, text: "$'\\c\\''", value: "\x1c'" },
+  ]);
+  assert.equal(nodeOfType(c3.suffix[1], "Assignment", "Word").value, "z");
 });
 
 test("${var:=assigned}", () => {
   const p = getPart("echo ${var:=assigned}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, ":=");
-  assert.equal(p.operand!.text, "assigned");
+  assert.equal(p.operation?.operator, ":=");
+  assert.equal(getOperand(p)!.text, "assigned");
 });
 
 test("${var:+alternate}", () => {
   const p = getPart("echo ${var:+alternate}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, ":+");
-  assert.equal(p.operand!.text, "alternate");
+  assert.equal(p.operation?.operator, ":+");
+  assert.equal(getOperand(p)!.text, "alternate");
 });
 
 test("semicolon in parameter expansion operand (#267)", () => {
@@ -117,17 +124,17 @@ test("semicolon in parameter expansion operand (#267)", () => {
     assert.equal(part?.type, "ParameterExpansion", source);
     if (part?.type !== "ParameterExpansion") continue;
     assert.equal(part.parameter, "a", source);
-    assert.equal(part.operator, ":+", source);
+    assert.equal(part.operation?.operator, ":+", source);
     assert.deepEqual(
-      [part.operand?.pos, part.operand?.end, part.operand?.text],
+      [getOperand(part)?.pos, getOperand(part)?.end, getOperand(part)?.text],
       [5, operandEnd, `$a${literal}`],
       source,
     );
     assert.deepEqual(
-      part.operand?.parts,
+      getOperand(part)?.parts,
       [
-        { type: "SimpleExpansion", text: "$a" },
-        { type: "Literal", value: literal, text: literal },
+        { type: "SimpleExpansion", pos: 5, end: 7, text: "$a" },
+        { type: "Literal", pos: 7, end: operandEnd, value: literal, text: literal },
       ],
       source,
     );
@@ -137,8 +144,8 @@ test("semicolon in parameter expansion operand (#267)", () => {
 test("${var:?error msg}", () => {
   const p = getPart("echo ${var:?error msg}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, ":?");
-  assert.equal(p.operand!.text, "error msg");
+  assert.equal(p.operation?.operator, ":?");
+  assert.equal(getOperand(p)!.text, "error msg");
 });
 
 test("punctuation remains part of parameter operands (#280)", () => {
@@ -156,13 +163,19 @@ test("punctuation remains part of parameter operands (#280)", () => {
     "",
   ].join("\n");
   const ast = parse(source);
-  const words = ast.commands.map((_, i) => (i === 2 ? getAssignment(ast, i).value! : getCmd(ast, i).suffix[0]));
+  const words = ast.commands.map((_, i) => (i === 2 ? getAssignment(ast, i).value : getCmd(ast, i).suffix[0]));
 
   assert.equal(ast.errors, undefined);
   assert.deepEqual(
     words.map((word) => {
-      const part = getParam(word);
-      return [part.operator, part.operand?.text, part.operand?.pos, part.operand?.end, part.operand?.parts];
+      const part = getParam(nodeOfType(word, "Word"));
+      return [
+        part.operation?.operator,
+        getOperand(part)?.text,
+        getOperand(part)?.pos,
+        getOperand(part)?.end,
+        getOperand(part)?.parts,
+      ];
     }),
     [
       [":=", "qwer-zxcv", 31, 40, undefined],
@@ -182,29 +195,29 @@ test("punctuation remains part of parameter operands (#280)", () => {
 test("${var-default}", () => {
   const p = getPart("echo ${var-default}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, "-");
-  assert.equal(p.operand!.text, "default");
+  assert.equal(p.operation?.operator, "-");
+  assert.equal(getOperand(p)!.text, "default");
 });
 
 test("${var=default}", () => {
   const p = getPart("echo ${var=default}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, "=");
-  assert.equal(p.operand!.text, "default");
+  assert.equal(p.operation?.operator, "=");
+  assert.equal(getOperand(p)!.text, "default");
 });
 
 test("${var+alt}", () => {
   const p = getPart("echo ${var+alt}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, "+");
-  assert.equal(p.operand!.text, "alt");
+  assert.equal(p.operation?.operator, "+");
+  assert.equal(getOperand(p)!.text, "alt");
 });
 
 test("${var?err}", () => {
   const p = getPart("echo ${var?err}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, "?");
-  assert.equal(p.operand!.text, "err");
+  assert.equal(p.operation?.operator, "?");
+  assert.equal(getOperand(p)!.text, "err");
 });
 
 // --- Length ---
@@ -212,21 +225,21 @@ test("${var?err}", () => {
 test("${#var} length", () => {
   const p = getPart("echo ${#var}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.length, true);
-  assert.equal(p.operator, undefined);
+  assert.equal(p.prefix, "#");
+  assert.equal(p.operation?.operator, undefined);
 });
 
 test("${#arr[@]} array length", () => {
   const p = getPart("echo ${#arr[@]}");
   assert.equal(p.parameter, "arr");
-  assert.equal(p.index, "@");
-  assert.equal(p.length, true);
+  assert.equal(p.index?.text, "@");
+  assert.equal(p.prefix, "#");
 });
 
 test("${#path} length of path var", () => {
   const p = getPart("echo ${#path}");
   assert.equal(p.parameter, "path");
-  assert.equal(p.length, true);
+  assert.equal(p.prefix, "#");
 });
 
 // --- Prefix strip ---
@@ -234,15 +247,15 @@ test("${#path} length of path var", () => {
 test("${path#*/} shortest prefix strip", () => {
   const p = getPart("echo ${path#*/}");
   assert.equal(p.parameter, "path");
-  assert.equal(p.operator, "#");
-  assert.equal(p.operand!.text, "*/");
+  assert.equal(p.operation?.operator, "#");
+  assert.equal(getOperand(p)!.text, "*/");
 });
 
 test("${path##*/} longest prefix strip", () => {
   const p = getPart("echo ${path##*/}");
   assert.equal(p.parameter, "path");
-  assert.equal(p.operator, "##");
-  assert.equal(p.operand!.text, "*/");
+  assert.equal(p.operation?.operator, "##");
+  assert.equal(getOperand(p)!.text, "*/");
 });
 
 // --- Suffix strip ---
@@ -250,30 +263,33 @@ test("${path##*/} longest prefix strip", () => {
 test("${path%/*} shortest suffix strip", () => {
   const p = getPart("echo ${path%/*}");
   assert.equal(p.parameter, "path");
-  assert.equal(p.operator, "%");
-  assert.equal(p.operand!.text, "/*");
+  assert.equal(p.operation?.operator, "%");
+  assert.equal(getOperand(p)!.text, "/*");
 });
 
 test("${path%%/*} longest suffix strip", () => {
   const p = getPart("echo ${path%%/*}");
   assert.equal(p.parameter, "path");
-  assert.equal(p.operator, "%%");
-  assert.equal(p.operand!.text, "/*");
+  assert.equal(p.operation?.operator, "%%");
+  assert.equal(getOperand(p)!.text, "/*");
 });
 
 test("escaped braces remain complete strip operands (#259)", () => {
   const source = 'name="${value#\\{sd.cicd.}"\necho "${name%\\}}"';
   const ast = parse(source);
-  const operands = [getQuotedParam(getAssignment(ast).value!), getQuotedParam(getCmd(ast, 1).suffix[0])];
+  const operands = [
+    getQuotedParam(nodeOfType(getAssignment(ast).value, "Word")),
+    getQuotedParam(nodeOfType(getCmd(ast, 1).suffix[0], "Word")),
+  ];
 
   assert.equal(ast.errors, undefined);
   assert.deepEqual(
     operands.map((part) => [
-      part.operator,
-      part.operand?.text,
-      part.operand?.value,
-      part.operand?.pos,
-      part.operand?.end,
+      part.operation?.operator,
+      getOperand(part)?.text,
+      getOperand(part)?.value,
+      getOperand(part)?.pos,
+      getOperand(part)?.end,
     ]),
     [
       ["#", "\\{sd.cicd.", "{sd.cicd.", 14, 24],
@@ -285,21 +301,30 @@ test("escaped braces remain complete strip operands (#259)", () => {
 test("a quoted expansion remains inside a quoted suffix pattern (#254)", () => {
   const source = 'echo "${1%"$2"*}"';
   const ast = parse(source);
-  const word = getCmd(ast).suffix[0];
+  const word = nodeOfType(getCmd(ast).suffix[0], "Word");
   const part = getQuotedParam(word);
 
   assert.equal(ast.errors, undefined);
   assert.deepEqual(
-    [part.parameter, part.operator, part.operand?.text, part.operand?.value, part.operand?.pos, part.operand?.end],
+    [
+      part.parameter,
+      part.operation?.operator,
+      getOperand(part)?.text,
+      getOperand(part)?.value,
+      getOperand(part)?.pos,
+      getOperand(part)?.end,
+    ],
     ["1", "%", '"$2"*', "$2*", 10, 15],
   );
-  assert.deepEqual(part.operand?.parts, [
+  assert.deepEqual(getOperand(part)?.parts, [
     {
       type: "DoubleQuoted",
+      pos: 10,
+      end: 14,
       text: '"$2"',
-      parts: [{ type: "SimpleExpansion", text: "$2" }],
+      parts: [{ type: "SimpleExpansion", pos: 11, end: 13, text: "$2" }],
     },
-    { type: "Literal", value: "*", text: "*" },
+    { type: "Literal", pos: 14, end: 15, value: "*", text: "*" },
   ]);
 });
 
@@ -354,7 +379,7 @@ test("closing brackets stay in suffix operands without swallowing later roots (#
   ] as const) {
     const ast = parse(source);
     const assigned = getAssignment(ast, assignmentIndex);
-    const part = getQuotedParam(assigned.value!);
+    const part = getQuotedParam(nodeOfType(assigned.value, "Word"));
 
     assert.equal(ast.errors, undefined, source);
     assert.deepEqual(
@@ -363,7 +388,7 @@ test("closing brackets stay in suffix operands without swallowing later roots (#
       source,
     );
     assert.deepEqual([assigned.name, assigned.pos, assigned.end], assignment, source);
-    assert.deepEqual([part.operand?.text, part.operand?.pos, part.operand?.end], operand, source);
+    assert.deepEqual([getOperand(part)?.text, getOperand(part)?.pos, getOperand(part)?.end], operand, source);
   }
 });
 
@@ -372,69 +397,138 @@ test("closing brackets stay in suffix operands without swallowing later roots (#
 test("${var/pat/rep} replace first", () => {
   const p = getPart("echo ${version/beta/rc}");
   assert.equal(p.parameter, "version");
-  assert.equal(p.operator, "/");
-  assert.equal(p.replace!.pattern.text, "beta");
-  assert.equal(p.replace!.replacement.text, "rc");
+  assert.equal(p.operation?.operator, "/");
+  assert.equal(getOperation(p, "Replace")!.pattern.text, "beta");
+  assert.equal(getOperation(p, "Replace")!.replacement.text, "rc");
 });
 
 test("${var//pat/rep} replace all", () => {
   const p = getPart("echo ${version//./,}");
   assert.equal(p.parameter, "version");
-  assert.equal(p.operator, "//");
-  assert.equal(p.replace!.pattern.text, ".");
-  assert.equal(p.replace!.replacement.text, ",");
+  assert.equal(p.operation?.operator, "//");
+  assert.equal(getOperation(p, "Replace")!.pattern.text, ".");
+  assert.equal(getOperation(p, "Replace")!.replacement.text, ",");
+});
+
+test("literal slash replacement patterns own their spelling and ranges", () => {
+  for (const [source, pattern, patternEnd, replacement, replacementPos, replacementEnd] of [
+    ["echo ${v////X}", "/", 11, "X", 12, 13],
+    ["echo ${v///X}", "/X", 12, "", 12, 12],
+    ["echo ${v///}", "/", 11, "", 11, 11],
+    ["echo ${v////}", "/", 11, "", 12, 12],
+    ["echo ${v//}", "", 10, "", 10, 10],
+    ["echo ${v//\\\n//X}", "\\\n/", 13, "X", 14, 15],
+  ] as const) {
+    const operation = getOperation(getPart(source), "Replace");
+    assert.equal(operation.operator, "//", source);
+    assert.equal(operation.operatorEnd, 10, source);
+    assert.deepEqual(
+      [operation.pattern.text, operation.pattern.pos, operation.pattern.end],
+      [pattern, 10, patternEnd],
+      source,
+    );
+    assert.deepEqual(
+      [operation.replacement.text, operation.replacement.pos, operation.replacement.end],
+      [replacement, replacementPos, replacementEnd],
+      source,
+    );
+  }
+});
+
+test("slash pattern handling preserves escaped, quoted, and empty anchored patterns", () => {
+  for (const [source, operator, pattern, replacement] of [
+    ["echo ${v//\\//X}", "//", "\\/", "X"],
+    ['echo ${v//"/"/X}', "//", '"/"', "X"],
+    ["echo ${v/#/X}", "/#", "", "X"],
+    ["echo ${v/#//X}", "/#", "", "/X"],
+    ["echo ${v/%/X}", "/%", "", "X"],
+    ["echo ${v/%//X}", "/%", "", "/X"],
+  ] as const) {
+    const operation = getOperation(getPart(source), "Replace");
+    assert.deepEqual(
+      [operation.operator, operation.pattern.text, operation.replacement.text],
+      [operator, pattern, replacement],
+    );
+  }
+});
+
+test("slash patterns retain nested syntax in their replacement", () => {
+  const source = 'echo "${v////$(printf X)}"';
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  const operation = getOperation(getQuotedParam(nodeOfType(getCmd(ast).suffix[0], "Word")), "Replace");
+  assert.deepEqual([operation.pattern.text, operation.pattern.pos, operation.pattern.end], ["/", 11, 12]);
+  assert.deepEqual(
+    [operation.replacement.text, operation.replacement.pos, operation.replacement.end],
+    ["$(printf X)", 13, 24],
+  );
+  const part = operation.replacement.parts?.[0];
+  assert.equal(part?.type, "CommandExpansion");
+  if (part?.type !== "CommandExpansion" || !part.script) assert.fail();
+  assert.equal(getCmd(part.script).name?.text, "printf");
+  const serialized = JSON.parse(JSON.stringify(ast));
+  const restored = serialized.commands[0].command.suffix[0].parts[0].parts[0].operation;
+  assert.equal(restored.pattern.text, "/");
+  assert.equal(restored.replacement.parts[0].script.commands[0].command.name.text, "printf");
 });
 
 test("${var/#pat/rep} replace prefix", () => {
   const p = getPart("echo ${paths/#/-i }");
   assert.equal(p.parameter, "paths");
-  assert.equal(p.operator, "/#");
-  assert.equal(p.replace!.pattern.text, "");
-  assert.equal(p.replace!.replacement.text, "-i ");
+  assert.equal(p.operation?.operator, "/#");
+  assert.equal(getOperation(p, "Replace")!.pattern.text, "");
+  assert.equal(getOperation(p, "Replace")!.replacement.text, "-i ");
 });
 
 test("${var/%pat/rep} replace suffix", () => {
   const p = getPart("echo ${paths/%/-end}");
   assert.equal(p.parameter, "paths");
-  assert.equal(p.operator, "/%");
-  assert.equal(p.replace!.pattern.text, "");
-  assert.equal(p.replace!.replacement.text, "-end");
+  assert.equal(p.operation?.operator, "/%");
+  assert.equal(getOperation(p, "Replace")!.pattern.text, "");
+  assert.equal(getOperation(p, "Replace")!.replacement.text, "-end");
 });
 
 test("${var/pat} replace with empty", () => {
   const p = getPart("echo ${pv/\\.}");
   assert.equal(p.parameter, "pv");
-  assert.equal(p.operator, "/");
-  assert.equal(p.replace!.pattern.text, "\\."); // raw source span
-  assert.equal(p.replace!.replacement.text, "");
+  assert.equal(p.operation?.operator, "/");
+  assert.equal(getOperation(p, "Replace")!.pattern.text, "\\."); // raw source span
+  assert.equal(getOperation(p, "Replace")!.replacement.text, "");
 });
 
 test("a terminal ampersand remains in a quoted replacement (#279)", () => {
   const source = "echo \"${LIST[@]/*/'prefix'&}\"";
   const ast = parse(source);
   const word = getCmd(ast).suffix[0];
-  const part = getQuotedParam(word);
+  const part = getQuotedParam(nodeOfType(word, "Word"));
 
   assert.equal(ast.errors, undefined);
-  assert.deepEqual([ast.commands.length, word.text, word.pos, word.end], [1, "\"${LIST[@]/*/'prefix'&}\"", 5, 29]);
+  assert.deepEqual(
+    [ast.commands.length, nodeOfType(word, "Assignment", "Word").text, word.pos, word.end],
+    [1, "\"${LIST[@]/*/'prefix'&}\"", 5, 29],
+  );
   assert.deepEqual(
     [
       part.parameter,
-      part.index,
-      part.operator,
-      part.replace?.pattern.text,
-      part.replace?.pattern.pos,
-      part.replace?.pattern.end,
+      part.index?.text,
+      part.operation?.operator,
+      getOperation(part, "Replace")?.pattern.text,
+      getOperation(part, "Replace")?.pattern.pos,
+      getOperation(part, "Replace")?.pattern.end,
     ],
     ["LIST", "@", "/", "*", 16, 17],
   );
   assert.deepEqual(
-    [part.replace?.replacement.text, part.replace?.replacement.pos, part.replace?.replacement.end],
+    [
+      getOperation(part, "Replace")?.replacement.text,
+      getOperation(part, "Replace")?.replacement.pos,
+      getOperation(part, "Replace")?.replacement.end,
+    ],
     ["'prefix'&", 18, 27],
   );
-  assert.deepEqual(part.replace?.replacement.parts, [
-    { type: "SingleQuoted", value: "prefix", text: "'prefix'" },
-    { type: "Literal", value: "&", text: "&" },
+  assert.deepEqual(getOperation(part, "Replace")?.replacement.parts, [
+    { type: "SingleQuoted", pos: 18, end: 26, value: "prefix", text: "'prefix'" },
+    { type: "Literal", pos: 26, end: 27, value: "&", text: "&" },
   ]);
 });
 
@@ -443,41 +537,41 @@ test("a terminal ampersand remains in a quoted replacement (#279)", () => {
 test("${var:0:5} substring", () => {
   const p = getPart("echo ${var:0:5}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.slice!.offset.text, "0");
-  assert.equal(p.slice!.length!.text, "5");
+  assert.equal(getOperation(p, "Slice")!.offset.text, "0");
+  assert.equal(getOperation(p, "Slice")!.length!.text, "5");
 });
 
 test("${var:6} substring offset only", () => {
   const p = getPart("echo ${var:6}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.slice!.offset.text, "6");
-  assert.equal(p.slice!.length, undefined);
+  assert.equal(getOperation(p, "Slice")!.offset.text, "6");
+  assert.equal(getOperation(p, "Slice")!.length, undefined);
 });
 
 test("${var:1:4} substring", () => {
   const p = getPart("echo ${path:1:4}");
   assert.equal(p.parameter, "path");
-  assert.equal(p.slice!.offset.text, "1");
-  assert.equal(p.slice!.length!.text, "4");
+  assert.equal(getOperation(p, "Slice")!.offset.text, "1");
+  assert.equal(getOperation(p, "Slice")!.length!.text, "4");
 });
 
 test("${PN::-1} empty offset, negative length", () => {
   const p = getPart("echo ${PN::-1}");
   assert.equal(p.parameter, "PN");
-  assert.equal(p.slice!.offset.text, "");
-  assert.equal(p.slice!.length!.text, "-1");
+  assert.equal(getOperation(p, "Slice")!.offset.text, "");
+  assert.equal(getOperation(p, "Slice")!.length!.text, "-1");
 });
 
 test("${parameter: -1} space before negative offset", () => {
   const p = getPart("echo ${parameter: -1}");
   assert.equal(p.parameter, "parameter");
-  assert.equal(p.slice!.offset.text, " -1");
+  assert.equal(getOperation(p, "Slice")!.offset.text, " -1");
 });
 
 test("${parameter:(-1)} parens for negative offset", () => {
   const p = getPart("echo ${parameter:(-1)}");
   assert.equal(p.parameter, "parameter");
-  assert.equal(p.slice!.offset.text, "(-1)");
+  assert.equal(getOperation(p, "Slice")!.offset.text, "(-1)");
 });
 
 for (const [label, source, expectedOffset, expectedLength] of [
@@ -505,8 +599,8 @@ for (const [label, source, expectedOffset, expectedLength] of [
   test(`ternary expression in slice ${label} (#317)`, () => {
     const ast = parse(source);
     assert.equal(ast.errors, undefined);
-    const word = label === "A" ? getAssignment(ast).value! : getCmd(ast).suffix[0];
-    const slice = getParam(word).slice!;
+    const word = nodeOfType(label === "A" ? getAssignment(ast).value : getCmd(ast).suffix[0], "Word");
+    const slice = getOperation(getParam(word), "Slice")!;
     assert.deepEqual([slice.offset.text, slice.offset.pos, slice.offset.end], expectedOffset);
     assert.deepEqual(slice.length && [slice.length.text, slice.length.pos, slice.length.end], expectedLength);
   });
@@ -517,39 +611,39 @@ for (const [label, source, expectedOffset, expectedLength] of [
 test("${var^} capitalize first", () => {
   const p = getPart("echo ${var^}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, "^");
+  assert.equal(p.operation?.operator, "^");
 });
 
 test("${var^^} capitalize all", () => {
   const p = getPart("echo ${var^^}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, "^^");
+  assert.equal(p.operation?.operator, "^^");
 });
 
 test("${var,} lowercase first", () => {
   const p = getPart("echo ${var,}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, ",");
+  assert.equal(p.operation?.operator, ",");
 });
 
 test("${var,,} lowercase all", () => {
   const p = getPart("echo ${var,,}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, ",,");
+  assert.equal(p.operation?.operator, ",,");
 });
 
 test("${var,,[pattern]} case with pattern", () => {
   const p = getPart("echo ${H,,[I]}");
   assert.equal(p.parameter, "H");
-  assert.equal(p.operator, ",,");
-  assert.equal(p.operand!.text, "[I]");
+  assert.equal(p.operation?.operator, ",,");
+  assert.equal(getOperand(p)!.text, "[I]");
 });
 
 test("${var^^[pattern]} case with pattern", () => {
   const p = getPart("echo ${K^^[L]}");
   assert.equal(p.parameter, "K");
-  assert.equal(p.operator, "^^");
-  assert.equal(p.operand!.text, "[L]");
+  assert.equal(p.operation?.operator, "^^");
+  assert.equal(getOperand(p)!.text, "[L]");
 });
 
 // --- Transform ---
@@ -557,22 +651,22 @@ test("${var^^[pattern]} case with pattern", () => {
 test("${var@Q} transform", () => {
   const p = getPart("echo ${var@Q}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, "@");
-  assert.equal(p.operand!.text, "Q");
+  assert.equal(p.operation?.operator, "@");
+  assert.equal(getOperand(p)!.text, "Q");
 });
 
 test("${var@E} transform", () => {
   const p = getPart("echo ${var@E}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, "@");
-  assert.equal(p.operand!.text, "E");
+  assert.equal(p.operation?.operator, "@");
+  assert.equal(getOperand(p)!.text, "E");
 });
 
 test("${var@A} transform", () => {
   const p = getPart("echo ${var@A}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.operator, "@");
-  assert.equal(p.operand!.text, "A");
+  assert.equal(p.operation?.operator, "@");
+  assert.equal(getOperand(p)!.text, "A");
 });
 
 // --- Array ---
@@ -580,26 +674,26 @@ test("${var@A} transform", () => {
 test("${arr[@]} array all", () => {
   const p = getPart("echo ${arr[@]}");
   assert.equal(p.parameter, "arr");
-  assert.equal(p.index, "@");
-  assert.equal(p.operator, undefined);
+  assert.equal(p.index?.text, "@");
+  assert.equal(p.operation?.operator, undefined);
 });
 
 test("${arr[*]} array all joined", () => {
   const p = getPart("echo ${arr[*]}");
   assert.equal(p.parameter, "arr");
-  assert.equal(p.index, "*");
+  assert.equal(p.index?.text, "*");
 });
 
 test("${arr[0]} array index", () => {
   const p = getPart("echo ${arr[0]}");
   assert.equal(p.parameter, "arr");
-  assert.equal(p.index, "0");
+  assert.equal(p.index?.text, "0");
 });
 
 test("${arr[index]} keeps command substitutions in the index structured", () => {
   const p = getPart("echo ${arr[1+$(danger)]}");
-  assert.equal(p.index, "1+$(danger)");
-  const expansion = p.indexParts?.find((part) => part.type === "CommandExpansion");
+  assert.equal(p.index?.text, "1+$(danger)");
+  const expansion = p.index?.parts?.find((part) => part.type === "CommandExpansion");
   assert.equal(expansion?.type, "CommandExpansion");
   if (expansion?.type !== "CommandExpansion") return;
   const command = expansion.script?.commands[0].command;
@@ -609,12 +703,12 @@ test("${arr[index]} keeps command substitutions in the index structured", () => 
 
 test("${arr[index]} keeps nested parameter expansions inside the index", () => {
   const p = getPart("echo ${arr[${x:-]}+$(danger)]}");
-  assert.equal(p.index, "${x:-]}+$(danger)");
+  assert.equal(p.index?.text, "${x:-]}+$(danger)");
   assert.deepEqual(
-    p.indexParts?.map((part) => part.type),
+    p.index?.parts?.map((part) => part.type),
     ["ParameterExpansion", "Literal", "CommandExpansion"],
   );
-  const expansion = p.indexParts?.find((part) => part.type === "CommandExpansion");
+  const expansion = p.index?.parts?.find((part) => part.type === "CommandExpansion");
   assert.equal(expansion?.type, "CommandExpansion");
   if (expansion?.type !== "CommandExpansion") return;
   const command = expansion.script?.commands[0].command;
@@ -624,8 +718,8 @@ test("${arr[index]} keeps nested parameter expansions inside the index", () => {
 
 test("${#arr[index]} keeps quoted closing brackets inside substitutions", () => {
   const p = getPart('echo ${#arr[$(printf "]")]}');
-  assert.equal(p.index, '$(printf "]")');
-  const expansion = p.indexParts?.find((part) => part.type === "CommandExpansion");
+  assert.equal(p.index?.text, '$(printf "]")');
+  const expansion = p.index?.parts?.find((part) => part.type === "CommandExpansion");
   assert.equal(expansion?.type, "CommandExpansion");
   if (expansion?.type !== "CommandExpansion") return;
   const command = expansion.script?.commands[0].command;
@@ -636,39 +730,39 @@ test("${#arr[index]} keeps quoted closing brackets inside substitutions", () => 
 test("${map[name]} assoc array", () => {
   const p = getPart("echo ${map[name]}");
   assert.equal(p.parameter, "map");
-  assert.equal(p.index, "name");
+  assert.equal(p.index?.text, "name");
 });
 
 test("${arr[@]:2:3} array slice", () => {
   const p = getPart("echo ${arr[@]:2:3}");
   assert.equal(p.parameter, "arr");
-  assert.equal(p.index, "@");
-  assert.equal(p.slice!.offset.text, "2");
-  assert.equal(p.slice!.length!.text, "3");
+  assert.equal(p.index?.text, "@");
+  assert.equal(getOperation(p, "Slice")!.offset.text, "2");
+  assert.equal(getOperation(p, "Slice")!.length!.text, "3");
 });
 
 test("${arr[@]^^} array case mod", () => {
   const p = getPart("echo ${arr[@]^^}");
   assert.equal(p.parameter, "arr");
-  assert.equal(p.index, "@");
-  assert.equal(p.operator, "^^");
+  assert.equal(p.index?.text, "@");
+  assert.equal(p.operation?.operator, "^^");
 });
 
 test("${arr[@]/a/A} array replace", () => {
   const p = getPart("echo ${arr[@]/a/A}");
   assert.equal(p.parameter, "arr");
-  assert.equal(p.index, "@");
-  assert.equal(p.operator, "/");
-  assert.equal(p.replace!.pattern.text, "a");
-  assert.equal(p.replace!.replacement.text, "A");
+  assert.equal(p.index?.text, "@");
+  assert.equal(p.operation?.operator, "/");
+  assert.equal(getOperation(p, "Replace")!.pattern.text, "a");
+  assert.equal(getOperation(p, "Replace")!.replacement.text, "A");
 });
 
 test("${arr[@]%o*} array strip", () => {
   const p = getPart("echo ${arr[@]%o*}");
   assert.equal(p.parameter, "arr");
-  assert.equal(p.index, "@");
-  assert.equal(p.operator, "%");
-  assert.equal(p.operand!.text, "o*");
+  assert.equal(p.index?.text, "@");
+  assert.equal(p.operation?.operator, "%");
+  assert.equal(getOperand(p)!.text, "o*");
 });
 
 // --- Indirect ---
@@ -676,26 +770,26 @@ test("${arr[@]%o*} array strip", () => {
 test("${!var} indirect", () => {
   const p = getPart("echo ${!var}");
   assert.equal(p.parameter, "var");
-  assert.equal(p.indirect, true);
+  assert.equal(p.prefix, "!");
 });
 
 test("${!prefix*} indirect prefix matching", () => {
   const p = getPart("echo ${!BASH*}");
   assert.equal(p.parameter, "BASH");
-  assert.equal(p.indirect, true);
+  assert.equal(p.prefix, "!");
 });
 
 test("${!arr[@]} array keys", () => {
   const p = getPart("echo ${!map[@]}");
   assert.equal(p.parameter, "map");
-  assert.equal(p.index, "@");
-  assert.equal(p.indirect, true);
+  assert.equal(p.index?.text, "@");
+  assert.equal(p.prefix, "!");
 });
 
 test("${!#} indirect last positional", () => {
   const p = getPart("echo ${!#}");
   assert.equal(p.parameter, "#");
-  assert.equal(p.indirect, true);
+  assert.equal(p.prefix, "!");
 });
 
 // --- Edge cases ---
@@ -703,44 +797,44 @@ test("${!#} indirect last positional", () => {
 test("${#} is special var, not length", () => {
   const p = getPart("echo ${#}");
   assert.equal(p.parameter, "#");
-  assert.equal(p.length, undefined);
+  assert.equal(p.prefix, undefined);
 });
 
-test("${##} is # with # strip", () => {
+test("${##} is the length of # (Bash 5.3.20)", () => {
   const p = getPart("echo ${##}");
   assert.equal(p.parameter, "#");
-  assert.equal(p.operator, "#");
-  assert.equal(p.operand!.text, "");
+  assert.equal(p.prefix, "#");
+  assert.equal(p.operation, undefined);
 });
 
 test("${##pattern} is # with ## strip", () => {
   // ${##/} = param '#', op '#', operand '/'
   const p = getPart("echo ${##/}");
   assert.equal(p.parameter, "#");
-  assert.equal(p.operator, "#");
-  assert.equal(p.operand!.text, "/");
+  assert.equal(p.operation?.operator, "#");
+  assert.equal(getOperand(p)!.text, "/");
 });
 
 test("${abc:- } default with space", () => {
   const p = getPart("echo ${abc:- }");
   assert.equal(p.parameter, "abc");
-  assert.equal(p.operator, ":-");
-  assert.equal(p.operand!.text, " ");
+  assert.equal(p.operation?.operator, ":-");
+  assert.equal(getOperand(p)!.text, " ");
 });
 
 test("${B[0]# } strip space from array element", () => {
   const p = getPart("echo ${B[0]# }");
   assert.equal(p.parameter, "B");
-  assert.equal(p.index, "0");
-  assert.equal(p.operator, "#");
-  assert.equal(p.operand!.text, " ");
+  assert.equal(p.index?.text, "0");
+  assert.equal(p.operation?.operator, "#");
+  assert.equal(getOperand(p)!.text, " ");
 });
 
 test("${p_key#*=} strip up to equals", () => {
   const p = getPart("echo ${p_key#*=}");
   assert.equal(p.parameter, "p_key");
-  assert.equal(p.operator, "#");
-  assert.equal(p.operand!.text, "*=");
+  assert.equal(p.operation?.operator, "#");
+  assert.equal(getOperand(p)!.text, "*=");
 });
 
 test("text field always preserved", () => {
@@ -751,105 +845,105 @@ test("text field always preserved", () => {
 test("nested expansion in operand", () => {
   const p = getPart("echo ${A:-$B/c}");
   assert.equal(p.parameter, "A");
-  assert.equal(p.operator, ":-");
-  assert.equal(p.operand!.text, "$B/c");
+  assert.equal(p.operation?.operator, ":-");
+  assert.equal(getOperand(p)!.text, "$B/c");
 });
 
 test("replace with quoted pattern", () => {
   const p = getPart("echo ${f%'-roff2html'*}");
   assert.equal(p.parameter, "f");
-  assert.equal(p.operator, "%");
-  assert.equal(p.operand!.text, "'-roff2html'*"); // raw source span
-  assert.equal(p.operand!.value, "-roff2html*"); // interpreted (quotes resolved)
-  assert.equal(p.operand!.parts![0].type, "SingleQuoted");
+  assert.equal(p.operation?.operator, "%");
+  assert.equal(getOperand(p)!.text, "'-roff2html'*"); // raw source span
+  assert.equal(getOperand(p)!.value, "-roff2html*"); // interpreted (quotes resolved)
+  assert.equal(getOperand(p)!.parts![0].type, "SingleQuoted");
 });
 
 test("${comp[@]:start:end*2-start} complex slice", () => {
   const p = getPart("echo ${comp[@]:start:end*2-start}");
   assert.equal(p.parameter, "comp");
-  assert.equal(p.index, "@");
-  assert.equal(p.slice!.offset.text, "start");
-  assert.equal(p.slice!.length!.text, "end*2-start");
+  assert.equal(p.index?.text, "@");
+  assert.equal(getOperation(p, "Slice")!.offset.text, "start");
+  assert.equal(getOperation(p, "Slice")!.length!.text, "end*2-start");
 });
 
 test("${2+ ${2}} positional with alternate", () => {
   const p = getPart("echo ${2+ ${2}}");
   assert.equal(p.parameter, "2");
-  assert.equal(p.operator, "+");
-  assert.equal(p.operand!.text, " ${2}");
+  assert.equal(p.operation?.operator, "+");
+  assert.equal(getOperand(p)!.text, " ${2}");
 });
 
 // --- Structured operand tests ---
 
 test("nested param expansion in operand", () => {
   const p = getPart("echo ${var:-${other:-fallback}}");
-  assert.equal(p.operand!.text, "${other:-fallback}");
-  assert.equal(p.operand!.parts![0].type, "ParameterExpansion");
-  const inner = p.operand!.parts![0] as ParameterExpansionPart;
+  assert.equal(getOperand(p)!.text, "${other:-fallback}");
+  assert.equal(getOperand(p)!.parts![0].type, "ParameterExpansion");
+  const inner = getOperand(p)!.parts![0] as ParameterExpansionPart;
   assert.equal(inner.parameter, "other");
-  assert.equal(inner.operator, ":-");
-  assert.equal(inner.operand!.text, "fallback");
+  assert.equal(inner.operation?.operator, ":-");
+  assert.equal(getOperand(inner)!.text, "fallback");
 });
 
 test("double-quoted operand with expansion", () => {
   const p = getPart('echo ${var:-"default $value"}');
-  assert.equal(p.operand!.parts![0].type, "DoubleQuoted");
-  const dq = p.operand!.parts![0] as import("../src/types.ts").DoubleQuotedPart;
+  assert.equal(getOperand(p)!.parts![0].type, "DoubleQuoted");
+  const dq = getOperand(p)!.parts![0] as import("../src/types.ts").DoubleQuotedPart;
   assert.equal(dq.parts[0].type, "Literal");
   assert.equal(dq.parts[1].type, "SimpleExpansion");
 });
 
 test("command substitution in operand", () => {
   const p = getPart("echo ${var:-$(whoami)}");
-  assert.equal(p.operand!.parts![0].type, "CommandExpansion");
-  assert.ok((p.operand!.parts![0] as import("../src/types.ts").CommandExpansionPart).script);
+  assert.equal(getOperand(p)!.parts![0].type, "CommandExpansion");
+  assert.ok((getOperand(p)!.parts![0] as import("../src/types.ts").CommandExpansionPart).script);
 });
 
 test("simple expansion in operand", () => {
   const p = getPart("echo ${var:-$HOME/bin}");
-  assert.equal(p.operand!.text, "$HOME/bin");
-  assert.equal(p.operand!.parts![0].type, "SimpleExpansion");
-  assert.equal(p.operand!.parts![1].type, "Literal");
+  assert.equal(getOperand(p)!.text, "$HOME/bin");
+  assert.equal(getOperand(p)!.parts![0].type, "SimpleExpansion");
+  assert.equal(getOperand(p)!.parts![1].type, "Literal");
 });
 
 test("expansion in replace pattern", () => {
   const p = getPart("echo ${var//$pat/rep}");
-  assert.equal(p.replace!.pattern.parts![0].type, "SimpleExpansion");
-  assert.equal(p.replace!.replacement.text, "rep");
+  assert.equal(getOperation(p, "Replace")!.pattern.parts![0].type, "SimpleExpansion");
+  assert.equal(getOperation(p, "Replace")!.replacement.text, "rep");
 });
 
 test("expansion in replace replacement", () => {
   const p = getPart("echo ${var//old/$new}");
-  assert.equal(p.replace!.pattern.text, "old");
-  assert.equal(p.replace!.replacement.parts![0].type, "SimpleExpansion");
+  assert.equal(getOperation(p, "Replace")!.pattern.text, "old");
+  assert.equal(getOperation(p, "Replace")!.replacement.parts![0].type, "SimpleExpansion");
 });
 
 test("expansion in slice length", () => {
   const p = getPart("echo ${var:0:${#var}}");
-  assert.equal(p.slice!.offset.text, "0");
-  assert.equal(p.slice!.length!.parts![0].type, "ParameterExpansion");
-  const inner = p.slice!.length!.parts![0] as ParameterExpansionPart;
+  assert.equal(getOperation(p, "Slice")!.offset.text, "0");
+  assert.equal(getOperation(p, "Slice")!.length!.parts![0].type, "ParameterExpansion");
+  const inner = getOperation(p, "Slice")!.length!.parts![0] as ParameterExpansionPart;
   assert.equal(inner.parameter, "var");
-  assert.equal(inner.length, true);
+  assert.equal(inner.prefix, "#");
 });
 
 test("empty operand is Word with empty text", () => {
   const p = getPart("echo ${var:-}");
-  assert.equal(p.operand!.text, "");
-  assert.equal(p.operand!.parts, undefined);
+  assert.equal(getOperand(p)!.text, "");
+  assert.equal(getOperand(p)!.parts, undefined);
 });
 
 test("plain operand has no parts", () => {
   const p = getPart("echo ${var:-default}");
-  assert.equal(p.operand!.text, "default");
-  assert.equal(p.operand!.parts, undefined);
+  assert.equal(getOperand(p)!.text, "default");
+  assert.equal(getOperand(p)!.parts, undefined);
 });
 
 test("deeply nested param expansion", () => {
   const p = getPart("echo ${a:-${b:-${c}}}");
-  const b = p.operand!.parts![0] as ParameterExpansionPart;
+  const b = getOperand(p)!.parts![0] as ParameterExpansionPart;
   assert.equal(b.parameter, "b");
-  const c = b.operand!.parts![0] as ParameterExpansionPart;
+  const c = getOperand(b)!.parts![0] as ParameterExpansionPart;
   assert.equal(c.parameter, "c");
 });
 
@@ -908,7 +1002,7 @@ test("a parameter expansion scans over nested command substitutions", () => {
     ["echo ${x:-$((1+2))}", "${x:-$((1+2))}"],
   ] as const) {
     const command = parse(source).commands[0].command as Command;
-    assert.equal(command.suffix[0].text, text, source);
+    assert.equal(nodeOfType(command.suffix[0], "Assignment", "Word").text, text, source);
     assert.equal(computeWordParts(source, command.suffix[0])?.[0].type, "ParameterExpansion", source);
     assert.equal(parse(source).errors, undefined, source);
   }

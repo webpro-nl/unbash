@@ -1,8 +1,9 @@
+import { argumentsOf, nodeOfType, redirectsOf } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
 import { verify } from "./verify.ts";
-import type { Command, Redirect, Statement } from "../src/types.ts";
+import type { Command, Redirection } from "../src/types.ts";
 
 const roundtrip = (src: string) => {
   const ast = parse(src);
@@ -10,22 +11,25 @@ const roundtrip = (src: string) => {
   return ast;
 };
 
-const getRedirects = (src: string): Redirect[] => {
+const getRedirects = (src: string): readonly Redirection[] => {
   const ast = parse(src);
-  const cmd = ast.commands[0].command as Command;
-  return cmd.redirects;
+  const cmd = nodeOfType(ast.commands[0].command, "Command");
+  return redirectsOf(cmd);
 };
 
 const redirectShape = (command: Command) =>
-  command.redirects.map(({ operator, pos, end, target, content }) => [
-    operator,
-    pos,
-    end,
-    target?.text,
-    target?.pos,
-    target?.end,
-    content,
-  ]);
+  redirectsOf(command).map((redirect) => {
+    const target = redirect.type === "HereDoc" ? redirect.delimiter : redirect.target;
+    return [
+      redirect.operator,
+      redirect.pos,
+      redirect.end,
+      target?.text,
+      target?.pos,
+      target?.end,
+      redirect.type === "HereDoc" ? redirect.body.text : undefined,
+    ];
+  });
 
 test("leading heredoc redirect stays on the following command (#305)", () => {
   const source = `#!/bin/bash
@@ -35,7 +39,7 @@ test("leading heredoc redirect stays on the following command (#305)", () => {
 EOF
 `;
   const ast = parse(source);
-  const command = ast.commands[0].command as Command;
+  const command = nodeOfType(ast.commands[0].command, "Command");
 
   assert.equal(ast.errors, undefined);
   assert.deepEqual(
@@ -49,7 +53,7 @@ EOF
 test("nameless leading heredoc keeps the following redirect (#305)", () => {
   const source = "<< 'EOF' > scratch.ts\nhello\nEOF";
   const ast = parse(source);
-  const command = ast.commands[0].command as Command;
+  const command = nodeOfType(ast.commands[0].command, "Command");
 
   assert.equal(ast.errors, undefined);
   assert.deepEqual(
@@ -59,7 +63,7 @@ test("nameless leading heredoc keeps the following redirect (#305)", () => {
   assert.equal(command.name, undefined);
   assert.deepEqual(redirectShape(command), [
     ["<<", 0, 8, "'EOF'", 3, 8, "hello\n"],
-    [">", 9, 21, "scratch.ts", 11, 21, "scratch.ts"],
+    [">", 9, 21, "scratch.ts", 11, 21, undefined],
   ]);
 });
 
@@ -68,19 +72,19 @@ test("nameless leading heredoc keeps the following redirect (#305)", () => {
 test("two heredocs on one command", () => {
   const src = "cmd <<A <<B\nfirst\nA\nsecond\nB\n";
   const ast = roundtrip(src);
-  const cmd = ast.commands[0].command as Command;
-  assert.equal(cmd.redirects.length, 2);
-  assert.equal(cmd.redirects[0].content, "first\n");
-  assert.equal(cmd.redirects[1].content, "second\n");
+  const cmd = nodeOfType(ast.commands[0].command, "Command");
+  assert.equal(redirectsOf(cmd).length, 2);
+  assert.equal(nodeOfType(redirectsOf(cmd)[0], "HereDoc").body.text, "first\n");
+  assert.equal(nodeOfType(redirectsOf(cmd)[1], "HereDoc").body.text, "second\n");
 });
 
 test("two heredocs on separate commands", () => {
   const src = "cat <<A; cat <<B\ncontentA\nA\ncontentB\nB\n";
   const ast = roundtrip(src);
-  const r0 = (ast.commands[0].command as Command).redirects[0];
-  const r1 = (ast.commands[1].command as Command).redirects[0];
-  assert.equal(r0.content, "contentA\n");
-  assert.equal(r1.content, "contentB\n");
+  const r0 = nodeOfType(redirectsOf(nodeOfType(ast.commands[0].command, "Command"))[0], "HereDoc");
+  const r1 = nodeOfType(redirectsOf(nodeOfType(ast.commands[1].command, "Command"))[0], "HereDoc");
+  assert.equal(r0.body.text, "contentA\n");
+  assert.equal(r1.body.text, "contentB\n");
 });
 
 test("heredoc after pipe with second heredoc", () => {
@@ -98,9 +102,9 @@ test("heredoc inside if body", () => {
 test("heredoc inside while loop", () => {
   const src = "while read line; do echo $line; done <<EOF\nline1\nline2\nEOF\n";
   const ast = roundtrip(src);
-  const stmt = ast.commands[0] as Statement;
-  assert.equal(stmt.redirects.length, 1);
-  assert.equal(stmt.redirects[0].content, "line1\nline2\n");
+  const stmt = ast.commands[0];
+  assert.equal(redirectsOf(stmt).length, 1);
+  assert.equal(nodeOfType(redirectsOf(stmt)[0], "HereDoc").body.text, "line1\nline2\n");
 });
 
 test("heredoc inside function", () => {
@@ -112,20 +116,20 @@ test("heredoc inside function", () => {
 
 test("heredoc with hyphenated delimiter", () => {
   const src = "cat <<END-OF-DATA\nstuff\nEND-OF-DATA\n";
-  const r = getRedirects(src)[0];
-  assert.equal(r.content, "stuff\n");
+  const r = nodeOfType(getRedirects(src)[0], "HereDoc");
+  assert.equal(r.body.text, "stuff\n");
 });
 
 test("heredoc with underscore delimiter", () => {
   const src = "cat <<__EOF__\nstuff\n__EOF__\n";
-  const r = getRedirects(src)[0];
-  assert.equal(r.content, "stuff\n");
+  const r = nodeOfType(getRedirects(src)[0], "HereDoc");
+  assert.equal(r.body.text, "stuff\n");
 });
 
 test("heredoc with numeric delimiter", () => {
   const src = "cat <<123\nstuff\n123\n";
-  const r = getRedirects(src)[0];
-  assert.equal(r.content, "stuff\n");
+  const r = nodeOfType(getRedirects(src)[0], "HereDoc");
+  assert.equal(r.body.text, "stuff\n");
 });
 
 test("heredoc with an empty delimiter stops at the next blank line (#283)", () => {
@@ -133,15 +137,15 @@ test("heredoc with an empty delimiter stops at the next blank line (#283)", () =
   assert.equal(ast.errors, undefined);
   assert.equal(ast.end, 26);
   assert.equal(ast.commands.length, 2);
-  const redirect = (ast.commands[0].command as Command).redirects[0];
-  assert.equal(redirect.target?.text, "''");
-  assert.equal(redirect.target?.value, "");
-  assert.equal(redirect.heredocQuoted, true);
-  assert.equal(redirect.content, "hello\n");
-  const next = ast.commands[1].command as Command;
+  const redirect = nodeOfType(redirectsOf(nodeOfType(ast.commands[0].command, "Command"))[0], "HereDoc");
+  assert.equal(redirect.delimiter?.text, "''");
+  assert.equal(redirect.delimiter?.value, "");
+  assert.equal(redirect.delimiter?.quoted, true);
+  assert.equal(redirect.body.text, "hello\n");
+  const next = nodeOfType(ast.commands[1].command, "Command");
   assert.equal(next.name?.text, "echo");
   assert.deepEqual(
-    next.suffix.map((word) => word.text),
+    next.suffix.map((word) => nodeOfType(word, "Assignment", "Word").text),
     ["after"],
   );
 });
@@ -152,27 +156,27 @@ test("<<- strips leading tabs from content and delimiter", () => {
   const src = "cat <<-EOF\n\t\thello\n\t\tworld\n\tEOF\n";
   const r = getRedirects(src)[0];
   assert.equal(r.operator, "<<-");
-  assert.ok(r.content!.includes("hello"));
+  assert.ok(r.body.text!.includes("hello"));
 });
 
 // --- Heredoc content edge cases ---
 
 test("heredoc with line matching delimiter prefix", () => {
   const src = "cat <<EOF\nEOFoo is not the end\nEOF\n";
-  const r = getRedirects(src)[0];
-  assert.equal(r.content, "EOFoo is not the end\n");
+  const r = nodeOfType(getRedirects(src)[0], "HereDoc");
+  assert.equal(r.body.text, "EOFoo is not the end\n");
 });
 
 test("heredoc with blank lines", () => {
   const src = "cat <<EOF\n\n\nbetween blanks\n\n\nEOF\n";
-  const r = getRedirects(src)[0];
-  assert.equal(r.content, "\n\nbetween blanks\n\n\n");
+  const r = nodeOfType(getRedirects(src)[0], "HereDoc");
+  assert.equal(r.body.text, "\n\nbetween blanks\n\n\n");
 });
 
 test("heredoc with only newlines", () => {
   const src = "cat <<EOF\n\n\n\nEOF\n";
-  const r = getRedirects(src)[0];
-  assert.equal(r.content, "\n\n\n");
+  const r = nodeOfType(getRedirects(src)[0], "HereDoc");
+  assert.equal(r.body.text, "\n\n\n");
 });
 
 // --- Herestring edge cases ---
@@ -180,8 +184,8 @@ test("heredoc with only newlines", () => {
 test("herestring with double-quoted value", () => {
   const src = 'read x <<< "hello world"';
   const ast = roundtrip(src);
-  const cmd = ast.commands[0].command as Command;
-  assert.equal(cmd.redirects[0].operator, "<<<");
+  const cmd = nodeOfType(ast.commands[0].command, "Command");
+  assert.equal(redirectsOf(cmd)[0].operator, "<<<");
 });
 
 test("herestring with variable expansion", () => {
@@ -199,8 +203,8 @@ test("herestring with command substitution", () => {
 test("heredoc with stderr redirect on same command", () => {
   const src = "cmd <<EOF 2>/dev/null\nbody\nEOF\n";
   const ast = roundtrip(src);
-  const cmd = ast.commands[0].command as Command;
-  assert.equal(cmd.redirects.length, 2);
+  const cmd = nodeOfType(ast.commands[0].command, "Command");
+  assert.equal(redirectsOf(cmd).length, 2);
 });
 
 test("heredoc after pipe", () => {
@@ -212,32 +216,32 @@ test("heredoc after pipe", () => {
 
 test("single-quoted heredoc delimiter suppresses expansion", () => {
   const ast = parse("cat <<'END'\n$not_expanded\nEND");
-  const cmd = ast.commands[0].command as Command;
-  assert.equal(cmd.redirects?.[0].content, "$not_expanded\n");
+  const cmd = nodeOfType(ast.commands[0].command, "Command");
+  assert.equal(nodeOfType(redirectsOf(cmd)?.[0], "HereDoc").body.text, "$not_expanded\n");
 });
 
 test("double-quoted heredoc delimiter", () => {
   const ast = parse('cat <<"END"\n$not_expanded\nEND');
-  const cmd = ast.commands[0].command as Command;
-  assert.ok(cmd.redirects?.[0].content?.includes("$not_expanded"));
+  const cmd = nodeOfType(ast.commands[0].command, "Command");
+  assert.ok(nodeOfType(redirectsOf(cmd)?.[0], "HereDoc").body.text?.includes("$not_expanded"));
 });
 
 test("backslash-escaped heredoc delimiter", () => {
   const ast = parse("cat <<\\EOF\nbody\nEOF");
-  const cmd = ast.commands[0].command as Command;
-  assert.equal(cmd.redirects?.[0].content, "body\n");
+  const cmd = nodeOfType(ast.commands[0].command, "Command");
+  assert.equal(nodeOfType(redirectsOf(cmd)?.[0], "HereDoc").body.text, "body\n");
 });
 
 test("heredoc delimiter with underscores", () => {
   const ast = parse("cat <<_LONG_DELIMITER_\nbody\n_LONG_DELIMITER_");
-  const cmd = ast.commands[0].command as Command;
-  assert.equal(cmd.redirects?.[0].content, "body\n");
+  const cmd = nodeOfType(ast.commands[0].command, "Command");
+  assert.equal(nodeOfType(redirectsOf(cmd)?.[0], "HereDoc").body.text, "body\n");
 });
 
 test("heredoc delimiter partial match is not terminator", () => {
   const ast = parse("cat <<EOF\nEOF_not_end\nEOF");
-  const cmd = ast.commands[0].command as Command;
-  assert.equal(cmd.redirects?.[0].content, "EOF_not_end\n");
+  const cmd = nodeOfType(ast.commands[0].command, "Command");
+  assert.equal(nodeOfType(redirectsOf(cmd)?.[0], "HereDoc").body.text, "EOF_not_end\n");
 });
 
 test("two heredocs on one line (tokenizer)", () => {
@@ -252,12 +256,12 @@ test("two heredocs on one line (tokenizer)", () => {
 
 test("escaped space inside heredoc delimiter", () => {
   const src = "cat <<E\\ OF\nbody\nE OF";
-  const cmd = parse(src).commands[0].command as Command;
-  assert.equal(cmd.suffix.length, 0);
-  const r = cmd.redirects[0];
-  assert.equal(r.target?.value, "E OF");
-  assert.equal(r.heredocQuoted, true);
-  assert.equal(r.content, "body\n");
+  const cmd = nodeOfType(parse(src).commands[0].command, "Command");
+  assert.equal(argumentsOf(cmd).length, 0);
+  const r = nodeOfType(redirectsOf(cmd)[0], "HereDoc");
+  assert.equal(r.delimiter?.value, "E OF");
+  assert.equal(r.delimiter?.quoted, true);
+  assert.equal(r.body.text, "body\n");
 });
 
 test("mid-word escape and quotes in heredoc delimiter", () => {
@@ -267,20 +271,26 @@ test("mid-word escape and quotes in heredoc delimiter", () => {
     ["cat <<E'O F'\nbody\nEO F", "EO F"],
     ["cat <<'E'x\nbody\nEx", "Ex"],
   ] as const) {
-    const r = (parse(src).commands[0].command as Command).redirects[0];
-    assert.equal(r.target?.value, value, src);
-    assert.equal(r.heredocQuoted, true, src);
-    assert.equal(r.content, "body\n", src);
+    const r = nodeOfType(redirectsOf(nodeOfType(parse(src).commands[0].command, "Command"))[0], "HereDoc");
+    assert.equal(r.delimiter?.value, value, src);
+    assert.equal(r.delimiter?.quoted, true, src);
+    assert.equal(r.body.text, "body\n", src);
   }
 });
 
 test("double-quoted heredoc delimiter keeps non-special backslashes", () => {
-  const r = (parse('cat <<"E\\OF"\nbody\nE\\OF').commands[0].command as Command).redirects[0];
-  assert.equal(r.target?.value, "E\\OF");
-  assert.equal(r.content, "body\n");
-  const dq = (parse('cat <<"E\\\\OF"\nbody\nE\\OF').commands[0].command as Command).redirects[0];
-  assert.equal(dq.target?.value, "E\\OF");
-  assert.equal(dq.content, "body\n");
+  const r = nodeOfType(
+    redirectsOf(nodeOfType(parse('cat <<"E\\OF"\nbody\nE\\OF').commands[0].command, "Command"))[0],
+    "HereDoc",
+  );
+  assert.equal(r.delimiter?.value, "E\\OF");
+  assert.equal(r.body.text, "body\n");
+  const dq = nodeOfType(
+    redirectsOf(nodeOfType(parse('cat <<"E\\\\OF"\nbody\nE\\OF').commands[0].command, "Command"))[0],
+    "HereDoc",
+  );
+  assert.equal(dq.delimiter?.value, "E\\OF");
+  assert.equal(dq.body.text, "body\n");
 });
 
 test("unquoted delimiter forms stay unquoted", () => {
@@ -288,28 +298,31 @@ test("unquoted delimiter forms stay unquoted", () => {
     ["cat <<EOF\nbody\nEOF", "EOF"],
     ["cat <<$var\nbody\n$var", "$var"],
   ] as const) {
-    const r = (parse(src).commands[0].command as Command).redirects[0];
-    assert.equal(r.target?.value, value, src);
-    assert.notEqual(r.heredocQuoted, true, src);
-    assert.equal(r.content, "body\n", src);
+    const r = nodeOfType(redirectsOf(nodeOfType(parse(src).commands[0].command, "Command"))[0], "HereDoc");
+    assert.equal(r.delimiter?.value, value, src);
+    assert.notEqual(r.delimiter?.quoted, true, src);
+    assert.equal(r.body.text, "body\n", src);
   }
 });
 
 test("leading backslash heredoc delimiter still quotes", () => {
-  const r = (parse("cat <<\\EOF\nbody\nEOF").commands[0].command as Command).redirects[0];
-  assert.equal(r.target?.value, "EOF");
-  assert.equal(r.heredocQuoted, true);
-  assert.equal(r.content, "body\n");
+  const r = nodeOfType(
+    redirectsOf(nodeOfType(parse("cat <<\\EOF\nbody\nEOF").commands[0].command, "Command"))[0],
+    "HereDoc",
+  );
+  assert.equal(r.delimiter?.value, "EOF");
+  assert.equal(r.delimiter?.quoted, true);
+  assert.equal(r.body.text, "body\n");
 });
 
 test("dollar-quoted heredoc delimiters use their decoded value", () => {
   for (const src of ["cat <<$'\\x45OF'\nbody\nEOF", 'cat <<$"EOF"\nbody\nEOF']) {
     const ast = parse(src);
     assert.equal(ast.errors, undefined, src);
-    const r = (ast.commands[0].command as Command).redirects[0];
-    assert.equal(r.target?.value, "EOF", src);
-    assert.equal(r.heredocQuoted, true, src);
-    assert.equal(r.content, "body\n", src);
+    const r = nodeOfType(redirectsOf(nodeOfType(ast.commands[0].command, "Command"))[0], "HereDoc");
+    assert.equal(r.delimiter?.value, "EOF", src);
+    assert.equal(r.delimiter?.quoted, true, src);
+    assert.equal(r.body.text, "body\n", src);
   }
 });
 
@@ -320,10 +333,10 @@ test("backslash-newline joins heredoc delimiter words", () => {
   ] as const) {
     const ast = parse(src);
     assert.equal(ast.errors, undefined, src);
-    const r = (ast.commands[0].command as Command).redirects[0];
-    assert.equal(r.target?.value, "EOF", src);
-    assert.equal(r.heredocQuoted === true, quoted, src);
-    assert.equal(r.content, "body\n", src);
+    const r = nodeOfType(redirectsOf(nodeOfType(ast.commands[0].command, "Command"))[0], "HereDoc");
+    assert.equal(r.delimiter?.value, "EOF", src);
+    assert.equal(r.delimiter?.quoted === true, quoted, src);
+    assert.equal(r.body.text, "body\n", src);
   }
 });
 
@@ -332,10 +345,10 @@ test("substitution syntax remains literal in heredoc delimiters", () => {
     const src = `cat <<${delimiter}\nbody\n${delimiter}`;
     const ast = parse(src);
     assert.equal(ast.errors, undefined, src);
-    const r = (ast.commands[0].command as Command).redirects[0];
-    assert.equal(r.target?.value, delimiter, src);
-    assert.notEqual(r.heredocQuoted, true, src);
-    assert.equal(r.content, "body\n", src);
+    const r = nodeOfType(redirectsOf(nodeOfType(ast.commands[0].command, "Command"))[0], "HereDoc");
+    assert.equal(r.delimiter?.value, delimiter, src);
+    assert.notEqual(r.delimiter?.quoted, true, src);
+    assert.equal(r.body.text, "body\n", src);
   }
 });
 
@@ -368,18 +381,27 @@ test("inside a substitution a delimiter line with a later paren ends the body", 
 test("a backquoted heredoc delimiter is literal, newlines and all", () => {
   // Bash never expands a delimiter: `cat <<`x`` wants the literal delimiter `` `x` ``, and
   // a backquoted run is taken whole, so it can span lines without being run as a command.
-  const backtick = (parse(": <<`'\n`\n\n").commands[0].command as Command).redirects[0];
-  assert.equal(backtick.target?.text, "`'\n`");
-  assert.equal(backtick.target?.value, "`'\n`");
-  assert.equal(backtick.target?.parts, undefined);
+  const backtick = nodeOfType(
+    redirectsOf(nodeOfType(parse(": <<`'\n`\n\n").commands[0].command, "Command"))[0],
+    "HereDoc",
+  );
+  assert.equal(backtick.delimiter?.text, "`'\n`");
+  assert.equal(backtick.delimiter?.value, "`'\n`");
+  assert.equal("parts" in nodeOfType(backtick.delimiter, "HereDocDelimiter"), false);
   assert.equal(parse(": <<`'\n`\n\n").errors, undefined);
 
-  const command = (parse("cat <<`echo D`\nbody\n`echo D`\n").commands[0].command as Command).redirects[0];
-  assert.equal(command.target?.value, "`echo D`");
-  assert.equal(command.content, "body\n");
+  const command = nodeOfType(
+    redirectsOf(nodeOfType(parse("cat <<`echo D`\nbody\n`echo D`\n").commands[0].command, "Command"))[0],
+    "HereDoc",
+  );
+  assert.equal(command.delimiter?.value, "`echo D`");
+  assert.equal(command.body.text, "body\n");
 
   // Quote removal still applies, and it does not make the delimiter expandable.
-  const dollar = (parse("cat <<$x\nbody\n$x").commands[0].command as Command).redirects[0];
-  assert.equal(dollar.target?.value, "$x");
-  assert.equal(dollar.target?.parts, undefined);
+  const dollar = nodeOfType(
+    redirectsOf(nodeOfType(parse("cat <<$x\nbody\n$x").commands[0].command, "Command"))[0],
+    "HereDoc",
+  );
+  assert.equal(dollar.delimiter?.value, "$x");
+  assert.equal("parts" in nodeOfType(dollar.delimiter, "HereDocDelimiter"), false);
 });

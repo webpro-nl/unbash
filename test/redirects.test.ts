@@ -1,11 +1,11 @@
+import { argumentsOf, nodeOfType, redirectsOf } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
 import { print } from "../src/printer.ts";
-import type { Command } from "../src/types.ts";
 import { computeWordParts } from "../src/parts.ts";
 
-const getCmd = (ast: ReturnType<typeof parse>, i = 0) => ast.commands[i].command as Command;
+const getCmd = (ast: ReturnType<typeof parse>, i = 0) => nodeOfType(ast.commands[i].command, "Command");
 const wp = (s: string, w: import("../src/types.ts").Word) => computeWordParts(s, w);
 
 // --- Basic redirects ---
@@ -14,44 +14,44 @@ test("simple > redirect captured", () => {
   const c = getCmd(parse("echo hello > out.txt"));
   assert.equal(c.name?.text, "echo");
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    argumentsOf(c).map((s) => s.text),
     ["hello"],
   );
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, ">");
-  assert.equal(c.redirects![0].target?.text, "out.txt");
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, ">");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target?.text, "out.txt");
 });
 
 test(">> append redirect", () => {
   const c = getCmd(parse("echo x >> log"));
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, ">>");
-  assert.equal(c.redirects![0].target?.text, "log");
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, ">>");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target?.text, "log");
 });
 
 test("< input redirect", () => {
   const c = getCmd(parse("sort < data.txt"));
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, "<");
-  assert.equal(c.redirects![0].target?.text, "data.txt");
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, "<");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target?.text, "data.txt");
 });
 
 test("multiple redirects on one command", () => {
   const c = getCmd(parse("cmd < in.txt > out.txt 2>&1"));
-  assert.equal(c.redirects?.length, 3);
-  assert.equal(c.redirects![0].operator, "<");
-  assert.equal(c.redirects![1].operator, ">");
-  assert.equal(c.redirects![2].operator, ">&");
+  assert.equal(redirectsOf(c)?.length, 3);
+  assert.equal(redirectsOf(c)![0].operator, "<");
+  assert.equal(redirectsOf(c)![1].operator, ">");
+  assert.equal(redirectsOf(c)![2].operator, ">&");
 });
 
-test("redirections not in suffix", () => {
+test("redirect items remain distinct from arguments", () => {
   const c = getCmd(parse("echo hello > out.txt"));
   assert.equal(c.name?.text, "echo");
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    argumentsOf(c).map((s) => s.text),
     ["hello"],
   );
-  assert.equal(c.redirects?.length, 1);
+  assert.equal(redirectsOf(c)?.length, 1);
 });
 
 test("single-bracket commands stay separate around a redirect (#316)", () => {
@@ -59,14 +59,14 @@ test("single-bracket commands stay separate around a redirect (#316)", () => {
   const ast = parse(source);
   assert.equal(ast.errors, undefined);
   assert.deepEqual(
-    ast.commands.map(({ command }) => [(command as Command).name?.text, command.pos, command.end]),
+    ast.commands.map(({ command }) => [nodeOfType(command, "Command").name?.text, command.pos, command.end]),
     [
       ["[", 0, 11],
       ["echo", 12, 19],
       ["[", 20, 23],
     ],
   );
-  const redirect = getCmd(ast, 1).redirects[0];
+  const redirect = nodeOfType(redirectsOf(getCmd(ast, 1))[0], "HereString", "Redirect");
   assert.deepEqual(
     [redirect.operator, redirect.pos, redirect.end, redirect.target?.text, redirect.target?.pos, redirect.target?.end],
     [">", 17, 19, "1", 18, 19],
@@ -74,29 +74,29 @@ test("single-bracket commands stay separate around a redirect (#316)", () => {
 });
 
 test("missing redirect targets do not reuse word state", () => {
-  const redirect = getCmd(parse("echo >")).redirects?.[0];
-  assert.equal(redirect?.target, undefined);
+  const redirect = nodeOfType(redirectsOf(getCmd(parse("echo >")))?.[0], "HereString", "Redirect");
+  assert.equal(redirect.target, undefined);
 });
 
 test("redirect-only command keeps its redirects", () => {
   const c = getCmd(parse("< input.txt"));
   assert.equal(c.name, undefined);
-  assert.equal(c.prefix.length, 0);
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, "<");
-  assert.equal(c.redirects![0].target?.text, "input.txt");
+  assert.equal(c.prefix.length, 1);
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, "<");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target?.text, "input.txt");
 
   const t = getCmd(parse("> out.txt"));
-  assert.equal(t.redirects?.length, 1);
-  assert.equal(t.redirects![0].operator, ">");
-  assert.equal(t.redirects![0].target?.text, "out.txt");
+  assert.equal(redirectsOf(t)?.length, 1);
+  assert.equal(redirectsOf(t)![0].operator, ">");
+  assert.equal(nodeOfType(redirectsOf(t)![0], "HereString", "Redirect").target?.text, "out.txt");
 });
 
 test("escaped and quoted hashes remain redirect targets", () => {
   for (const source of ["echo >\\#file", "echo >'#file'", 'echo >"#file"']) {
     const ast = parse(source);
     assert.equal(ast.errors, undefined, source);
-    assert.equal(getCmd(ast).redirects?.[0].target?.value, "#file", source);
+    assert.equal(nodeOfType(redirectsOf(getCmd(ast))?.[0], "HereString", "Redirect").target?.value, "#file", source);
   }
 });
 
@@ -104,9 +104,9 @@ test("escaped and quoted hashes remain redirect targets", () => {
 
 test("&> redirect captured", () => {
   const c = getCmd(parse("cmd &> /dev/null"));
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, "&>");
-  assert.equal(c.redirects![0].target?.text, "/dev/null");
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, "&>");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target?.text, "/dev/null");
 });
 
 test("&> does not background command", () => {
@@ -125,39 +125,39 @@ test("&>> does not background command", () => {
 
 test("FD redirect 2>&1", () => {
   const c = getCmd(parse("cmd 2>&1"));
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, ">&");
-  assert.equal(c.redirects![0].fileDescriptor, 2);
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, ">&");
+  assert.equal(nodeOfType(redirectsOf(c)![0].descriptor, "FileDescriptor").value, 2);
 });
 
 test("{fd}>file redirect with varname", () => {
   const c = getCmd(parse("cmd {fd}>out.txt"));
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, ">");
-  assert.equal(c.redirects![0].variableName, "fd");
-  assert.equal(c.redirects![0].target?.text, "out.txt");
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, ">");
+  assert.equal(nodeOfType(redirectsOf(c)![0].descriptor, "FileDescriptorVariable").name, "fd");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target?.text, "out.txt");
 });
 
 test("{fd}<file redirect with varname", () => {
   const c = getCmd(parse("cmd {myfd}<input.txt"));
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, "<");
-  assert.equal(c.redirects![0].variableName, "myfd");
-  assert.equal(c.redirects![0].target?.text, "input.txt");
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, "<");
+  assert.equal(nodeOfType(redirectsOf(c)![0].descriptor, "FileDescriptorVariable").name, "myfd");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target?.text, "input.txt");
 });
 
 test("{fd}>>file append redirect with varname", () => {
   const c = getCmd(parse("cmd {fd}>>log.txt"));
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, ">>");
-  assert.equal(c.redirects![0].variableName, "fd");
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, ">>");
+  assert.equal(nodeOfType(redirectsOf(c)![0].descriptor, "FileDescriptorVariable").name, "fd");
 });
 
 test("{fd}>&- close redirect with varname", () => {
   const c = getCmd(parse("cmd {fd}>&-"));
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, ">&");
-  assert.equal(c.redirects![0].variableName, "fd");
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, ">&");
+  assert.equal(nodeOfType(redirectsOf(c)![0].descriptor, "FileDescriptorVariable").name, "fd");
 });
 
 test("array redirect descriptors preserve their source range and printed form", () => {
@@ -165,13 +165,12 @@ test("array redirect descriptors preserve their source range and printed form", 
   const ast = parse(source);
   const command = getCmd(ast);
   assert.equal(ast.errors, undefined);
-  assert.deepEqual(command.suffix, []);
-  assert.equal(command.redirects.length, 1);
-  const redirect = command.redirects[0];
-  assert.deepEqual(
-    [redirect.variableName, redirect.fileDescriptor, redirect.operator, redirect.pos, redirect.end],
-    ["foo[1]", undefined, ">&", 5, 16],
-  );
+  assert.deepEqual(argumentsOf(command), []);
+  assert.equal(redirectsOf(command).length, 1);
+  const redirect = nodeOfType(redirectsOf(command)[0], "Redirect");
+  assert.equal(command.suffix[0], redirect);
+  assert.deepEqual(redirect.descriptor, { type: "FileDescriptorVariable", pos: 5, end: 13, name: "foo[1]" });
+  assert.deepEqual([redirect.operator, redirect.pos, redirect.end], [">&", 5, 16]);
   assert.deepEqual([redirect.target?.text, redirect.target?.pos, redirect.target?.end], ["-", 15, 16]);
   assert.equal(print(ast), "exec {foo[1]}>&-");
   assert.equal(print(parse(print(ast))), "exec {foo[1]}>&-");
@@ -191,9 +190,9 @@ test("array redirect descriptors accept arithmetic and nested indexes", () => {
     const ast = parse(source);
     const command = getCmd(ast);
     assert.equal(ast.errors, undefined, source);
-    assert.deepEqual(command.suffix, [], source);
-    assert.equal(command.redirects.length, 1, source);
-    assert.equal(command.redirects[0].variableName, variableName, source);
+    assert.deepEqual(argumentsOf(command), [], source);
+    assert.equal(redirectsOf(command).length, 1, source);
+    assert.equal(nodeOfType(redirectsOf(command)[0].descriptor, "FileDescriptorVariable").name, variableName, source);
     assert.equal(print(ast), printed, source);
     assert.equal(print(parse(printed)), printed, source);
   }
@@ -201,7 +200,7 @@ test("array redirect descriptors accept arithmetic and nested indexes", () => {
 
 test("multiple fd redirections on one command", () => {
   const c = getCmd(parse("foo >&2 <&0 2>file"));
-  assert.ok((c.redirects?.length ?? 0) >= 3);
+  assert.ok((redirectsOf(c)?.length ?? 0) >= 3);
 });
 
 test("exec close file descriptors", () => {
@@ -211,41 +210,41 @@ test("exec close file descriptors", () => {
 
 // --- Heredocs ---
 
-test("heredoc body not in suffix", () => {
+test("heredoc body is not an argument", () => {
   const c = getCmd(parse("cat <<EOF\nbody\nEOF"));
   assert.equal(c.name?.text, "cat");
-  assert.equal(c.suffix.length, 0);
+  assert.equal(argumentsOf(c).length, 0);
 });
 
 test("heredoc redirect captured with body", () => {
   const c = getCmd(parse("cat << EOF\nhello\nworld\nEOF"));
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, "<<");
-  assert.equal(c.redirects![0].target?.text, "EOF");
-  assert.equal(c.redirects![0].content, "hello\nworld\n");
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, "<<");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereDoc").delimiter?.text, "EOF");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereDoc").body.text, "hello\nworld\n");
 });
 
 test("heredoc strip (<<-) captures body", () => {
   const c = getCmd(parse("cat <<-END\n\tindented\nEND"));
-  assert.equal(c.redirects![0].operator, "<<-");
-  assert.equal(c.redirects![0].content, "\tindented\n");
+  assert.equal(redirectsOf(c)![0].operator, "<<-");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereDoc").body.text, "\tindented\n");
 });
 
 test("heredoc empty delimiter captures body", () => {
   const c = getCmd(parse('cat <<""\nhello\n'));
-  assert.equal(c.redirects![0].target?.text, '""');
-  assert.equal(c.redirects![0].target?.value, "");
-  assert.equal(c.redirects![0].content, "hello\n");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereDoc").delimiter?.text, '""');
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereDoc").delimiter?.value, "");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereDoc").body.text, "hello\n");
 });
 
 test("quoted heredoc delimiter preserves raw source text", () => {
   const source = "cat <<'EOF'\n$name\nEOF";
-  const redirect = getCmd(parse(source)).redirects[0];
-  assert.ok(redirect.target);
-  assert.equal(redirect.target.text, "'EOF'");
-  assert.equal(redirect.target.value, "EOF");
-  assert.equal(source.slice(redirect.target.pos, redirect.target.end), redirect.target.text);
-  assert.equal(redirect.heredocQuoted, true);
+  const redirect = nodeOfType(redirectsOf(getCmd(parse(source)))[0], "HereDoc");
+  const delimiter = nodeOfType(redirect.delimiter, "HereDocDelimiter");
+  assert.equal(delimiter.text, "'EOF'");
+  assert.equal(delimiter.value, "EOF");
+  assert.equal(source.slice(delimiter.pos, delimiter.end), delimiter.text);
+  assert.equal(delimiter.quoted, true);
 });
 
 test("heredoc with quoted delimiter", () => {
@@ -288,21 +287,24 @@ test("multiple heredocs in while loop", () => {
 test("herestring consumed", () => {
   const c = getCmd(parse("cmd <<< value"));
   assert.equal(c.name?.text, "cmd");
-  assert.equal(c.suffix.length, 0);
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, "<<<");
+  assert.equal(argumentsOf(c).length, 0);
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, "<<<");
 });
 
 test("herestring redirect captured", () => {
   const c = getCmd(parse("cmd <<< value"));
-  assert.equal(c.redirects?.length, 1);
-  assert.equal(c.redirects![0].operator, "<<<");
-  assert.equal(c.redirects![0].target?.text, "value");
+  assert.equal(redirectsOf(c)?.length, 1);
+  assert.equal(redirectsOf(c)![0].operator, "<<<");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target?.text, "value");
 });
 
 test("multi-digit fd herestring (#226)", () => {
-  const redirect = getCmd(parse('cat /dev/fd/10 10<<<"test"')).redirects[0];
-  assert.deepEqual([redirect.fileDescriptor, redirect.operator, redirect.target?.text], [10, "<<<", '"test"']);
+  const redirect = nodeOfType(redirectsOf(getCmd(parse('cat /dev/fd/10 10<<<"test"')))[0], "HereString", "Redirect");
+  assert.deepEqual(
+    [nodeOfType(redirect.descriptor, "FileDescriptor").value, redirect.operator, redirect.target?.text],
+    [10, "<<<", '"test"'],
+  );
 });
 
 for (const { issue, source, name, suffix, redirects } of [
@@ -360,18 +362,14 @@ for (const { issue, source, name, suffix, redirects } of [
     assert.equal(ast.errors, undefined);
     assert.equal(command.name?.text, name);
     assert.deepEqual(
-      command.suffix.map(({ text }) => text),
+      argumentsOf(command).map(({ text }) => text),
       suffix,
     );
     assert.deepEqual(
-      command.redirects.map(({ operator, target, pos, end }) => [
-        operator,
-        target?.text,
-        pos,
-        end,
-        target?.pos,
-        target?.end,
-      ]),
+      redirectsOf(command).map((redirect) => {
+        const { operator, target, pos, end } = nodeOfType(redirect, "Redirect", "HereString");
+        return [operator, target?.text, pos, end, target?.pos, target?.end];
+      }),
       redirects,
     );
   });
@@ -396,29 +394,32 @@ test("herestring with complex quoting", () => {
 
 test("brace group with redirect", () => {
   const stmt = parse("{ echo a; } >&2").commands[0];
-  assert.equal(stmt.command.type, "BraceGroup");
-  assert.equal(stmt.redirects.length, 1);
-  assert.equal(stmt.redirects[0].operator, ">&");
+  assert.equal(stmt.command.type, "Redirected");
+  assert.equal(stmt.command.type === "Redirected" && stmt.command.command.type, "BraceGroup");
+  assert.equal(redirectsOf(stmt).length, 1);
+  assert.equal(redirectsOf(stmt)[0].operator, ">&");
 });
 
 test("subshell with redirect", () => {
   const stmt = parse("(cmd1) > out.txt").commands[0];
-  assert.equal(stmt.command.type, "Subshell");
-  assert.equal(stmt.redirects.length, 1);
-  assert.equal(stmt.redirects[0].operator, ">");
+  assert.equal(stmt.command.type, "Redirected");
+  assert.equal(stmt.command.type === "Redirected" && stmt.command.command.type, "Subshell");
+  assert.equal(redirectsOf(stmt).length, 1);
+  assert.equal(redirectsOf(stmt)[0].operator, ">");
 });
 
 test("function with redirect", () => {
-  const fn = parse("function f { echo ok; } 2>&1").commands[0].command as import("../src/types.ts").Function;
+  const fn = nodeOfType(parse("function f { echo ok; } 2>&1").commands[0].command, "Function");
   assert.equal(fn.type, "Function");
-  assert.equal(fn.redirects.length, 1);
+  assert.equal(redirectsOf(fn).length, 1);
 });
 
 test("while loop with input redirect", () => {
   const ast = parse('while IFS= read -r line; do\n    echo "$line"\ndone < input.txt');
   const stmt = ast.commands[0];
-  assert.equal(stmt.command.type, "While");
-  assert.equal(stmt.redirects.length, 1);
+  assert.equal(stmt.command.type, "Redirected");
+  assert.equal(stmt.command.type === "Redirected" && stmt.command.command.type, "While");
+  assert.equal(redirectsOf(stmt).length, 1);
 });
 
 // --- Redirect target word parts ---
@@ -426,33 +427,36 @@ test("while loop with input redirect", () => {
 test("redirect target carries parts for variable expansion", () => {
   const src = "echo hello > $outfile";
   const c = getCmd(parse(src));
-  assert.equal(c.redirects![0].target?.text, "$outfile");
-  assert.ok(wp(src, c.redirects![0].target!));
-  assert.equal(wp(src, c.redirects![0].target!)![0].type, "SimpleExpansion");
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target?.text, "$outfile");
+  assert.ok(wp(src, nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target!));
+  assert.equal(wp(src, nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target!)![0].type, "SimpleExpansion");
 });
 
 test("redirect target carries parts for param expansion", () => {
   const src = "echo hello > ${dir}/out.txt";
   const c = getCmd(parse(src));
-  assert.equal(wp(src, c.redirects![0].target!)![0].type, "ParameterExpansion");
+  assert.equal(
+    wp(src, nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target!)![0].type,
+    "ParameterExpansion",
+  );
 });
 
 test("redirect target carries parts for command substitution", () => {
   const src = "echo hello > $(mktemp)";
   const c = getCmd(parse(src));
-  assert.equal(wp(src, c.redirects![0].target!)![0].type, "CommandExpansion");
-  assert.ok((wp(src, c.redirects![0].target!)![0] as any).script);
+  assert.equal(wp(src, nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target!)![0].type, "CommandExpansion");
+  assert.ok((wp(src, nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target!)![0] as any).script);
 });
 
 test("redirect target carries parts for quoted string", () => {
   const src = 'echo hello > "out file.txt"';
   const c = getCmd(parse(src));
-  assert.equal(wp(src, c.redirects![0].target!)![0].type, "DoubleQuoted");
+  assert.equal(wp(src, nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target!)![0].type, "DoubleQuoted");
 });
 
 test("redirect target preserves raw source text", () => {
   const source = 'echo > "file name"';
-  const target = getCmd(parse(source)).redirects[0].target;
+  const target = nodeOfType(redirectsOf(getCmd(parse(source)))[0], "HereString", "Redirect").target;
   assert.ok(target);
   assert.equal(target.text, '"file name"');
   assert.equal(target.value, "file name");
@@ -462,58 +466,63 @@ test("redirect target preserves raw source text", () => {
 test("herestring target carries parts", () => {
   const src = 'cmd <<< "$value"';
   const c = getCmd(parse(src));
-  assert.equal(c.redirects![0].operator, "<<<");
-  assert.ok(wp(src, c.redirects![0].target!));
-  assert.equal(wp(src, c.redirects![0].target!)![0].type, "DoubleQuoted");
+  assert.equal(redirectsOf(c)![0].operator, "<<<");
+  assert.ok(wp(src, nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target!));
+  assert.equal(wp(src, nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target!)![0].type, "DoubleQuoted");
 });
 
 test("&> redirect target carries parts", () => {
   const src = "cmd &> $logfile";
   const c = getCmd(parse(src));
-  assert.equal(c.redirects![0].operator, "&>");
-  assert.ok(wp(src, c.redirects![0].target!));
-  assert.equal(wp(src, c.redirects![0].target!)![0].type, "SimpleExpansion");
+  assert.equal(redirectsOf(c)![0].operator, "&>");
+  assert.ok(wp(src, nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target!));
+  assert.equal(wp(src, nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target!)![0].type, "SimpleExpansion");
 });
 
 test("plain redirect target has no parts", () => {
   const src = "echo hello > out.txt";
   const c = getCmd(parse(src));
-  assert.equal(c.redirects![0].target?.text, "out.txt");
-  assert.equal(wp(src, c.redirects![0].target!), undefined);
+  assert.equal(nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target?.text, "out.txt");
+  assert.equal(wp(src, nodeOfType(redirectsOf(c)![0], "HereString", "Redirect").target!), undefined);
 });
 
 // --- FD number before redirect (tokenizer) ───────────────────────────
 
 test("digit before > becomes fd redirect", () => {
   const c = getCmd(parse("echo 2>/dev/null"));
-  assert.equal(c.redirects?.[0].fileDescriptor, 2);
-  assert.equal(c.redirects?.[0].operator, ">");
+  assert.equal(nodeOfType(redirectsOf(c)?.[0].descriptor, "FileDescriptor").value, 2);
+  assert.equal(redirectsOf(c)?.[0].operator, ">");
 });
 
 test("digit before < becomes fd redirect", () => {
   const c = getCmd(parse("cmd 0<input"));
-  assert.equal(c.redirects?.[0].fileDescriptor, 0);
-  assert.equal(c.redirects?.[0].operator, "<");
+  assert.equal(nodeOfType(redirectsOf(c)?.[0].descriptor, "FileDescriptor").value, 0);
+  assert.equal(redirectsOf(c)?.[0].operator, "<");
 });
 
 test("multi-digit fd", () => {
   const c = getCmd(parse("cmd 10>file"));
-  assert.equal(c.redirects?.[0].fileDescriptor, 10);
+  assert.equal(nodeOfType(redirectsOf(c)?.[0].descriptor, "FileDescriptor").value, 10);
 });
 
 test("a trailing backslash is a literal redirect target", () => {
   // Bash escapes nothing with a backslash at end of input: `>\` writes to a file named `\`.
-  const command = parse(">\\").commands[0].command as Command;
-  assert.equal(command.redirects.length, 1);
-  assert.equal(command.redirects[0].operator, ">");
-  assert.equal(command.redirects[0].target?.text, "\\");
+  const command = nodeOfType(parse(">\\").commands[0].command, "Command");
+  assert.equal(redirectsOf(command).length, 1);
+  assert.equal(redirectsOf(command)[0].operator, ">");
+  assert.equal(nodeOfType(redirectsOf(command)[0], "HereString", "Redirect").target?.text, "\\");
   assert.equal(parse(">\\").errors, undefined);
 
-  const read = parse("cat <a\\").commands[0].command as Command;
-  assert.equal(read.redirects[0].target?.text, "a\\");
+  const read = nodeOfType(parse("cat <a\\").commands[0].command, "Command");
+  assert.equal(nodeOfType(redirectsOf(read)[0], "HereString", "Redirect").target?.text, "a\\");
 
-  assert.equal((parse("echo a\\").commands[0].command as Command).suffix[0].text, "a\\");
-  assert.equal((parse("cat <<x\\").commands[0].command as Command).redirects[0].target?.text, "x\\");
+  assert.equal(
+    nodeOfType(nodeOfType(parse("echo a\\").commands[0].command, "Command").suffix[0], "Assignment", "Word").text,
+    "a\\",
+  );
+  const heredoc = redirectsOf(nodeOfType(parse("cat <<x\\").commands[0].command, "Command"))[0];
+  assert.ok(heredoc.type === "HereDoc");
+  assert.equal(heredoc.delimiter?.text, "x\\");
 });
 
 test("redirect descriptors require unquoted digits or a valid variable reference", () => {
@@ -532,16 +541,17 @@ test("redirect descriptors require unquoted digits or a valid variable reference
     ['echo x "{fds[1]}">out', ["x", '"{fds[1]}"'], 'echo x "{fds[1]}" > out'],
     ["echo x {_a1}>out", ["x"], "echo x {_a1}> out"],
     ["echo x 2>out", ["x"], "echo x 2> out"],
-  ]) {
+  ] as const) {
     const ast = parse(source);
     const command = getCmd(ast);
     assert.deepEqual(
-      command.suffix.map((word) => word.text),
+      argumentsOf(command).map((word) => word.text),
       words,
       source,
     );
-    assert.equal(command.redirects.length, 1, source);
-    assert.equal(command.redirects[0].target?.text, "out", source);
+    const redirects = redirectsOf(command);
+    assert.equal(redirects.length, 1, source);
+    assert.equal(nodeOfType(redirects[0], "Redirect").target?.text, "out", source);
     assert.equal(print(ast), printed, source);
     assert.equal(ast.errors, undefined, source);
   }

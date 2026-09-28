@@ -1,3 +1,4 @@
+import { nodeOfType } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
@@ -113,7 +114,7 @@ test("for loop", () => {
   const f = parse("for x in a b c; do echo $x; done").commands[0].command as For;
   assert.equal(f.type, "For");
   assert.equal(f.name.text, "x");
-  assert.equal(f.wordlist.length, 3);
+  assert.equal(f.wordlist?.length, 3);
   assert.equal(f.body.commands.length, 1);
 });
 
@@ -271,7 +272,7 @@ test("select produces Select node", () => {
   const s = ast.commands[0].command as import("../src/types.ts").Select;
   assert.equal(s.type, "Select");
   assert.equal(s.name.text, "i");
-  assert.equal(s.wordlist.length, 3);
+  assert.equal(s.wordlist?.length, 3);
   assert.equal(s.body.commands.length, 1);
   assert.equal((s.body.commands[0].command as Command).name?.text, "echo");
 });
@@ -363,7 +364,7 @@ test("coproc simple command with arguments", () => {
   const cmd = cp.body as Command;
   assert.equal(cmd.name?.text, "foo");
   assert.deepEqual(
-    cmd.suffix.map((s) => s.text),
+    cmd.suffix.map((s) => nodeOfType(s, "Assignment", "Word").text),
     ["bar"],
   );
 });
@@ -374,19 +375,42 @@ test("coproc simple command with multiple arguments", () => {
   const cmd = cp.body as Command;
   assert.equal(cmd.name?.text, "foo");
   assert.deepEqual(
-    cmd.suffix.map((s) => s.text),
+    cmd.suffix.map((s) => nodeOfType(s, "Assignment", "Word").text),
     ["bar", "baz"],
   );
 });
 
-test("coproc named with pipeline body", () => {
-  const cp = parse("coproc name foo | bar").commands[0].command as Coproc;
-  assert.equal(cp.name?.text, "name");
-  assert.equal(cp.body.type, "Pipeline");
-  const pl = cp.body as Pipeline;
+test("a coprocess name requires a compound command", () => {
+  const pl = parse("coproc name foo | bar").commands[0].command as Pipeline;
+  assert.equal(pl.type, "Pipeline");
   assert.equal(pl.commands.length, 2);
-  assert.equal((pl.commands[0] as Command).name?.text, "foo");
+  const cp = pl.commands[0] as Coproc;
+  assert.equal(cp.type, "Coproc");
+  assert.equal(cp.name, undefined);
+  assert.equal(cp.body.type, "Command");
+  assert.equal((cp.body as Command).name?.text, "name");
+  assert.deepEqual(
+    (cp.body as Command).suffix.map((word) => nodeOfType(word, "Assignment", "Word").text),
+    ["foo"],
+  );
   assert.equal((pl.commands[1] as Command).name?.text, "bar");
+});
+
+test("time is an ordinary command or coprocess name after coproc", () => {
+  const simple = parse("coproc time true").commands[0].command;
+  assert.equal(simple.type, "Coproc");
+  if (simple.type !== "Coproc" || simple.body.type !== "Command") assert.fail();
+  assert.equal(simple.name, undefined);
+  assert.equal(simple.body.name?.text, "time");
+  assert.deepEqual(
+    simple.body.suffix.map((argument) => nodeOfType(argument, "Assignment", "Word").text),
+    ["true"],
+  );
+  const named = parse("coproc time { :; }").commands[0].command;
+  assert.equal(named.type, "Coproc");
+  if (named.type !== "Coproc") assert.fail();
+  assert.equal(named.name?.text, "time");
+  assert.equal(named.body.type, "BraceGroup");
 });
 
 test("coproc without name — pipe goes to outer pipeline", () => {

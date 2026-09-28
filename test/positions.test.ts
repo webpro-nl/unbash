@@ -1,3 +1,4 @@
+import { redirectsOf } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
@@ -18,7 +19,7 @@ import type {
   Coproc,
   CompoundList,
 } from "../src/types.ts";
-import type { Node } from "../src/types.ts";
+import type { SyntaxNode } from "../src/types.ts";
 
 function slice(source: string, node: { pos: number; end: number }) {
   return source.slice(node.pos, node.end);
@@ -174,14 +175,16 @@ test("pipeline positions", () => {
 test("pipeline with time", () => {
   const src = "time echo hello | cat";
   const ast = parse(src);
-  const pipe = ast.commands[0].command as Pipeline;
+  const pipe = ast.commands[0].command;
+  assert.equal(pipe.type, "Time");
   assert.equal(slice(src, pipe), src);
 });
 
 test("pipeline with negation", () => {
   const src = "! echo hello | cat";
   const ast = parse(src);
-  const pipe = ast.commands[0].command as Pipeline;
+  const pipe = ast.commands[0].command;
+  assert.equal(pipe.type, "Negation");
   assert.equal(slice(src, pipe), src);
 });
 
@@ -214,14 +217,14 @@ test("redirect positions", () => {
   const src = "echo hello > /tmp/out";
   const ast = parse(src);
   const cmd = ast.commands[0].command as Command;
-  assert.equal(slice(src, cmd.redirects[0]), "> /tmp/out");
+  assert.equal(slice(src, redirectsOf(cmd)[0]), "> /tmp/out");
 });
 
 test("redirect with fd positions", () => {
   const src = "cmd 2>/dev/null";
   const ast = parse(src);
   const cmd = ast.commands[0].command as Command;
-  assert.equal(slice(src, cmd.redirects[0]), "2>/dev/null");
+  assert.equal(slice(src, redirectsOf(cmd)[0]), "2>/dev/null");
 });
 
 // --- Arithmetic expression positions ---
@@ -328,7 +331,7 @@ test("coproc positions", () => {
 
 // --- Invariant walker ---
 
-function walkNode(node: Node, source: string, path: string) {
+function walkNode(node: SyntaxNode, source: string, path: string) {
   assert.ok(node.pos >= 0, `${path}: pos >= 0 (got ${node.pos})`);
   assert.ok(node.end >= node.pos, `${path}: end >= pos (got pos=${node.pos}, end=${node.end})`);
   assert.ok(node.end <= source.length, `${path}: end <= source.length (got ${node.end}, len=${source.length})`);
@@ -340,12 +343,24 @@ function walkNode(node: Node, source: string, path: string) {
         const a = node.prefix[i];
         assert.ok(a.pos >= 0 && a.end >= a.pos && a.end <= source.length, `${path}.prefix[${i}]`);
       }
-      for (let i = 0; i < node.suffix.length; i++) walkWord(node.suffix[i], source, `${path}.suffix[${i}]`);
+      for (let i = 0; i < node.suffix.length; i++) {
+        const item = node.suffix[i];
+        if (item.type === "Word") walkWord(item, source, `${path}.suffix[${i}]`);
+      }
+      for (let i = 0; i < redirectsOf(node).length; i++)
+        walkRedirect(redirectsOf(node)[i], source, `${path}.redirects[${i}]`);
+      break;
+    case "Redirected":
+      walkNode(node.command, source, `${path}.command`);
       for (let i = 0; i < node.redirects.length; i++)
         walkRedirect(node.redirects[i], source, `${path}.redirects[${i}]`);
       break;
     case "Pipeline":
       for (let i = 0; i < node.commands.length; i++) walkNode(node.commands[i], source, `${path}.commands[${i}]`);
+      break;
+    case "Time":
+    case "Negation":
+      if (node.command) walkNode(node.command, source, `${path}.command`);
       break;
     case "AndOr":
       for (let i = 0; i < node.commands.length; i++) walkNode(node.commands[i], source, `${path}.commands[${i}]`);
@@ -360,7 +375,8 @@ function walkNode(node: Node, source: string, path: string) {
       break;
     case "For":
       walkWord(node.name, source, `${path}.name`);
-      for (let i = 0; i < node.wordlist.length; i++) walkWord(node.wordlist[i], source, `${path}.wordlist[${i}]`);
+      if (node.wordlist)
+        for (let i = 0; i < node.wordlist.length; i++) walkWord(node.wordlist[i], source, `${path}.wordlist[${i}]`);
       walkCompoundList(node.body, source, `${path}.body`);
       break;
     case "ArithmeticFor":
@@ -385,8 +401,6 @@ function walkNode(node: Node, source: string, path: string) {
     case "Function":
       walkWord(node.name, source, `${path}.name`);
       walkNode(node.body, source, `${path}.body`);
-      for (let i = 0; i < node.redirects.length; i++)
-        walkRedirect(node.redirects[i], source, `${path}.redirects[${i}]`);
       break;
     case "Subshell":
       walkCompoundList(node.body, source, `${path}.body`);
@@ -409,8 +423,6 @@ function walkNode(node: Node, source: string, path: string) {
       break;
     case "Statement":
       walkNode(node.command, source, `${path}.command`);
-      for (let i = 0; i < node.redirects.length; i++)
-        walkRedirect(node.redirects[i], source, `${path}.redirects[${i}]`);
       break;
   }
 }

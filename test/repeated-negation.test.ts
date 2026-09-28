@@ -1,3 +1,4 @@
+import { nodeOfType, redirectsOf } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
@@ -8,31 +9,35 @@ test("repeated negation applies to the entire pipeline", () => {
   const andOr = ast.commands[0].command;
   assert.ok(andOr.type === "AndOr");
   assert.deepEqual(andOr.operators, ["&&"]);
-  const pipeline = andOr.commands[0];
+  const negation = andOr.commands[0];
+  assert.ok(negation.type === "Negation");
+  assert.ok(negation.command?.type === "Negation");
+  const pipeline = negation.command.command;
+  assert.ok(pipeline);
   assert.ok(pipeline.type === "Pipeline");
-  assert.equal(pipeline.negated, false);
-  assert.deepEqual([pipeline.pos, pipeline.end], [0, 16]);
+  assert.deepEqual([negation.pos, negation.end, pipeline.pos, pipeline.end], [0, 16, 4, 16]);
   assert.deepEqual(pipeline.operators, ["|"]);
   assert.deepEqual(
     pipeline.commands.map((command) => command.type === "Command" && command.name?.text),
     ["false", "true"],
   );
   assert.equal(ast.errors, undefined);
-  assert.equal(print(ast), "false | true && echo yes");
+  assert.equal(print(ast), "! ! false | true && echo yes");
 });
 
 test("quoted and escaped bangs remain command words after negation", () => {
   for (const name of ["'!'", '"!"', "\\!"]) {
     const ast = parse(`! ! ${name} arg !`);
-    const pipeline = ast.commands[0].command;
-    assert.ok(pipeline.type === "Pipeline");
-    assert.equal(pipeline.negated, false);
-    const command = pipeline.commands[0];
+    const negation = ast.commands[0].command;
+    assert.ok(negation.type === "Negation");
+    assert.ok(negation.command?.type === "Negation");
+    const command = negation.command.command;
+    assert.ok(command);
     assert.ok(command.type === "Command");
     assert.equal(command.name?.text, name);
     assert.equal(command.name.value, "!");
     assert.deepEqual(
-      command.suffix.map((word) => word.text),
+      command.suffix.map((word) => nodeOfType(word, "Assignment", "Word").text),
       ["arg", "!"],
     );
     assert.equal(ast.errors, undefined);
@@ -40,21 +45,25 @@ test("quoted and escaped bangs remain command words after negation", () => {
 });
 
 test("bare negation runs preserve null commands and source ranges", () => {
-  const cases: [string, boolean, number, number, string][] = [
-    ["!", true, 0, 1, "!"],
-    ["  ! !  ", false, 2, 5, "! !"],
-    ["! ! !", true, 0, 5, "!"],
-    ["! ! ! !", false, 0, 7, "! !"],
-    ["time ! !", false, 0, 8, "time"],
+  const cases: [string, number, number, number, string][] = [
+    ["!", 1, 0, 1, "!"],
+    ["  ! !  ", 2, 2, 5, "! !"],
+    ["! ! !", 3, 0, 5, "! ! !"],
+    ["! ! ! !", 4, 0, 7, "! ! ! !"],
+    ["time ! !", 2, 0, 8, "time ! !"],
   ];
-  for (const [source, negated, pos, end, printed] of cases) {
+  for (const [source, count, pos, end, printed] of cases) {
     const ast = parse(source);
-    const pipeline = ast.commands[0].command;
-    assert.ok(pipeline.type === "Pipeline");
-    assert.equal(pipeline.negated, negated, source);
-    assert.deepEqual([pipeline.pos, pipeline.end], [pos, end], source);
-    assert.deepEqual(pipeline.commands, [], source);
-    assert.deepEqual(pipeline.operators, [], source);
+    const prefix = ast.commands[0].command;
+    assert.deepEqual([prefix.pos, prefix.end], [pos, end], source);
+    let node = prefix.type === "Time" ? prefix.command : prefix;
+    let actual = 0;
+    while (node?.type === "Negation") {
+      actual++;
+      node = node.command;
+    }
+    assert.equal(actual, count, source);
+    assert.equal(node, undefined, source);
     assert.equal(ast.errors, undefined, source);
     assert.equal(print(ast), printed, source);
   }
@@ -80,20 +89,24 @@ test("bare even negation survives statement and conditional printing", () => {
 test("repeated negation retains compound redirects and background execution", () => {
   const ast = parse("! ! { echo yes; } > out &");
   const statement = ast.commands[0];
-  const pipeline = statement.command;
+  const negation = statement.command;
   assert.equal(statement.background, true);
-  assert.ok(pipeline.type === "Pipeline");
-  assert.equal(pipeline.negated, false);
-  assert.deepEqual([pipeline.pos, pipeline.end], [0, 23]);
-  const command = pipeline.commands[0];
-  assert.ok(command.type === "Statement");
+  assert.ok(negation.type === "Negation");
+  assert.ok(negation.command?.type === "Negation");
+  assert.deepEqual([negation.pos, negation.end], [0, 23]);
+  const command = negation.command.command;
+  assert.ok(command);
+  assert.ok(command.type === "Redirected");
   assert.equal(command.command.type, "BraceGroup");
   assert.deepEqual(
-    command.redirects.map((redirect) => [redirect.operator, redirect.target?.text]),
+    redirectsOf(command).map((redirect) => [
+      redirect.operator,
+      nodeOfType(redirect, "HereString", "Redirect").target?.text,
+    ]),
     [[">", "out"]],
   );
   assert.equal(ast.errors, undefined);
-  assert.equal(print(ast), "{\n  echo yes\n} > out &");
+  assert.equal(print(ast), "! ! {\n  echo yes\n} > out &");
 });
 
 test("repeated negation preserves errors and ranges for unfinished pipelines", () => {
@@ -104,11 +117,11 @@ test("repeated negation preserves errors and ranges for unfinished pipelines", (
   ];
   for (const [source, message, pos, end] of cases) {
     const ast = parse(source);
-    const pipeline = ast.commands[0].command;
-    assert.ok(pipeline.type === "Pipeline");
-    assert.equal(pipeline.negated, false, source);
-    assert.deepEqual([pipeline.pos, pipeline.end], [0, end], source);
-    assert.deepEqual(pipeline.operators, [], source);
+    const negation = ast.commands[0].command;
+    assert.ok(negation.type === "Negation");
+    assert.ok(negation.command?.type === "Negation");
+    assert.deepEqual([negation.pos, negation.end], [0, end], source);
+    assert.equal(negation.command.command?.type, source.includes("cmd") ? "Command" : undefined, source);
     assert.deepEqual(ast.errors, [{ message, pos }], source);
   }
 });

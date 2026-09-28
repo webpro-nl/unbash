@@ -1,7 +1,7 @@
+import { nodeOfType, redirectsOf } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
-import type { If } from "../src/types.ts";
 
 // ── Error recovery ──────────────────────────────────────────────────
 
@@ -27,7 +27,7 @@ test("truncated if (missing fi) doesn't throw", () => {
 
 test("truncated elif chain keeps valid branch spans", () => {
   const ast = parse("if a; then b; elif c; then d");
-  let branch = ast.commands[0].command as If;
+  let branch = nodeOfType(ast.commands[0].command, "If");
 
   for (;;) {
     assert.ok(branch.end >= branch.pos);
@@ -83,10 +83,10 @@ test("unclosed double quote slices its literal fully", () => {
   const command = ast.commands[0].command;
   assert.equal(command.type, "Command");
   const word = command.suffix[0];
-  assert.equal(word.value, "abc");
-  const quoted = word.parts?.[0];
+  assert.equal(nodeOfType(word, "Assignment", "Word").value, "abc");
+  const quoted = nodeOfType(word, "Word").parts?.[0];
   assert.equal(quoted?.type, "DoubleQuoted");
-  assert.deepEqual(quoted.parts, [{ type: "Literal", value: "abc", text: "abc" }]);
+  assert.deepEqual(quoted.parts, [{ type: "Literal", pos: 6, end: 9, value: "abc", text: "abc" }]);
   assert.ok(ast.errors?.some((e) => e.message.includes("unterminated double quote")));
 });
 
@@ -95,10 +95,10 @@ test("unclosed locale string slices its literal fully", () => {
   const command = ast.commands[0].command;
   assert.equal(command.type, "Command");
   const word = command.suffix[0];
-  assert.equal(word.value, "abc");
-  const quoted = word.parts?.[0];
+  assert.equal(nodeOfType(word, "Assignment", "Word").value, "abc");
+  const quoted = nodeOfType(word, "Word").parts?.[0];
   assert.equal(quoted?.type, "LocaleString");
-  assert.deepEqual(quoted.parts, [{ type: "Literal", value: "abc", text: "abc" }]);
+  assert.deepEqual(quoted.parts, [{ type: "Literal", pos: 7, end: 10, value: "abc", text: "abc" }]);
   assert.ok(ast.errors?.some((e) => e.message.includes("unterminated double quote")));
 });
 
@@ -107,11 +107,11 @@ test("unclosed double quote slices its trailing literal after expansions", () =>
   const command = ast.commands[0].command;
   assert.equal(command.type, "Command");
   const word = command.suffix[0];
-  assert.equal(word.value, "pre$(x) ab");
-  const quoted = word.parts?.[0];
+  assert.equal(nodeOfType(word, "Assignment", "Word").value, "pre$(x) ab");
+  const quoted = nodeOfType(word, "Word").parts?.[0];
   assert.equal(quoted?.type, "DoubleQuoted");
   assert.equal(quoted.parts.length, 3);
-  assert.deepEqual(quoted.parts[2], { type: "Literal", value: " ab", text: " ab" });
+  assert.deepEqual(quoted.parts[2], { type: "Literal", pos: 13, end: 16, value: " ab", text: " ab" });
   assert.ok(ast.errors?.some((e) => e.message.includes("unterminated double quote")));
 });
 
@@ -119,14 +119,14 @@ test("unclosed ANSI-C quote terminates at end of input", () => {
   const plain = parse("echo $'abc");
   const plainCommand = plain.commands[0].command;
   assert.equal(plainCommand.type, "Command");
-  assert.equal(plainCommand.suffix[0].value, "abc");
+  assert.equal(nodeOfType(plainCommand.suffix[0], "Assignment", "Word").value, "abc");
   assert.deepEqual(plain.errors, [{ message: "unterminated ANSI-C quote", pos: 6 }]);
 
   const trailing = parse("echo $'\\");
   const command = trailing.commands[0].command;
   assert.equal(command.type, "Command");
-  assert.equal(command.suffix[0].text, "$'\\");
-  assert.equal(command.suffix[0].value, "\\");
+  assert.equal(nodeOfType(command.suffix[0], "Assignment", "Word").text, "$'\\");
+  assert.equal(nodeOfType(command.suffix[0], "Assignment", "Word").value, "\\");
   assert.deepEqual(trailing.errors, [{ message: "unterminated ANSI-C quote", pos: 6 }]);
 });
 
@@ -236,7 +236,8 @@ test("quoted empty redirect targets are not missing targets", () => {
   for (const source of ['echo >""', "echo >''", 'echo <<< ""', "cat <<''"]) {
     const ast = parse(source);
     assert.equal(ast.errors, undefined, source);
-    const target = (ast.commands[0].command as any).redirects[0].target;
+    const redirect = redirectsOf(nodeOfType(ast.commands[0].command, "Command"))[0];
+    const target = redirect.type === "HereDoc" ? redirect.delimiter : redirect.target;
     assert.ok(target, source);
     assert.equal(target.value, "", source);
   }
@@ -307,7 +308,7 @@ test("unclosed parameter expansion collects error and preserves the partial word
   const command = ast.commands[0].command;
 
   assert.equal(command.type, "Command");
-  assert.equal(command.suffix[0].text, "${");
+  assert.equal(nodeOfType(command.suffix[0], "Assignment", "Word").text, "${");
   assert.deepEqual(ast.errors, [{ message: "unterminated parameter expansion", pos: 5 }]);
 });
 
@@ -318,12 +319,12 @@ test("unclosed parameter expansion preserves its complete partial structure", ()
 
   assert.equal(command.type, "Command");
   const word = command.suffix[0];
-  assert.equal(word.text, "pre${name");
+  assert.equal(nodeOfType(word, "Assignment", "Word").text, "pre${name");
   assert.deepEqual(
-    word.parts?.map((part) => part.type),
+    nodeOfType(word, "Word").parts?.map((part) => part.type),
     ["Literal", "ParameterExpansion"],
   );
-  const expansion = word.parts?.[1];
+  const expansion = nodeOfType(word, "Word").parts?.[1];
   assert.equal(expansion?.type, "ParameterExpansion");
   if (expansion?.type === "ParameterExpansion") assert.equal(expansion.parameter, "name");
   assert.deepEqual(ast.errors, [{ message: "unterminated parameter expansion", pos: source.indexOf("$") }]);
@@ -336,9 +337,9 @@ test("closed and empty parameter expansions do not report parse errors", () => {
 
 test("unclosed command substitution keeps the inner command name intact", () => {
   const ast = parse("curl $(foo");
-  const word = ast.commands[0].command.suffix[0];
-  const part = word.parts.find((p) => p.type === "CommandExpansion");
-  assert.equal(part.script.commands[0].command.name.text, "foo");
+  const word = nodeOfType(nodeOfType(ast.commands[0].command, "Command").suffix[0], "Word");
+  const part = word.parts?.find((p) => p.type === "CommandExpansion");
+  assert.equal(nodeOfType(part?.script?.commands[0].command, "Command").name?.text, "foo");
 });
 
 test("errors are ordered by source position", () => {

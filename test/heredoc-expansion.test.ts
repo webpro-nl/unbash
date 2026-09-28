@@ -1,15 +1,18 @@
+import { redirectsOf } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
-import type { Command, Redirect } from "../src/types.ts";
+import type { Command, HereDoc, HereDocBody } from "../src/types.ts";
 
-const wp = (_s: string, w: import("../src/types.ts").Word) => w.parts;
+const wp = (_s: string, w: HereDocBody) => w.parts;
 
-const getRedirect = (src: string, i = 0, ri = 0): Redirect => {
+const getRedirect = (src: string, i = 0, ri = 0): HereDoc => {
   const ast = parse(src);
   const cmd = ast.commands[i].command as Command;
-  assert.ok(cmd.redirects, "expected redirects");
-  return cmd.redirects![ri];
+  assert.ok(redirectsOf(cmd), "expected redirects");
+  const redirect = redirectsOf(cmd)[ri];
+  assert.ok(redirect.type === "HereDoc");
+  return redirect;
 };
 
 // --- Unquoted heredocs: expansions parsed ---
@@ -18,7 +21,7 @@ test("unquoted heredoc has body with parts", () => {
   const src = "cat <<EOF\nHello $name\nEOF\n";
   const r = getRedirect(src);
   assert.equal(r.operator, "<<");
-  assert.equal(r.content, "Hello $name\n");
+  assert.equal(r.body.text, "Hello $name\n");
   assert.ok(r.body);
   assert.ok(wp(src, r.body!));
   assert.equal(r.body!.text, "Hello $name\n");
@@ -90,36 +93,36 @@ test("unquoted heredoc with escaped dollar", () => {
   assert.equal((se[0] as any).text, "$real");
 });
 
-test("unquoted heredoc preserves content field", () => {
+test("unquoted heredoc preserves raw body text", () => {
   const r = getRedirect("cat <<EOF\nHello $name\nEOF\n");
-  assert.equal(r.content, "Hello $name\n");
+  assert.equal(r.body.text, "Hello $name\n");
   assert.ok(r.body);
 });
 
-test("unquoted heredoc no heredocQuoted", () => {
+test("unquoted heredoc delimiter stays unquoted", () => {
   const r = getRedirect("cat <<EOF\ntext\nEOF\n");
-  assert.equal(r.heredocQuoted, undefined);
+  assert.equal(r.delimiter?.quoted, false);
 });
 
 // --- Quoted heredocs: no expansion ---
 
 test("single-quoted delimiter suppresses expansion", () => {
   const r = getRedirect("cat <<'EOF'\n$name ${var}\nEOF\n");
-  assert.equal(r.heredocQuoted, true);
-  assert.equal(r.body, undefined);
-  assert.equal(r.content, "$name ${var}\n");
+  assert.equal(r.delimiter?.quoted, true);
+  assert.equal(r.body.parts, undefined);
+  assert.equal(r.body.text, "$name ${var}\n");
 });
 
 test("double-quoted delimiter suppresses expansion", () => {
   const r = getRedirect('cat <<"EOF"\n$name\nEOF\n');
-  assert.equal(r.heredocQuoted, true);
-  assert.equal(r.body, undefined);
+  assert.equal(r.delimiter?.quoted, true);
+  assert.equal(r.body.parts, undefined);
 });
 
 test("backslash-escaped delimiter suppresses expansion", () => {
   const r = getRedirect("cat <<\\EOF\n$name\nEOF\n");
-  assert.equal(r.heredocQuoted, true);
-  assert.equal(r.body, undefined);
+  assert.equal(r.delimiter?.quoted, true);
+  assert.equal(r.body.parts, undefined);
 });
 
 // --- Strip heredoc (<<-) ---
@@ -133,19 +136,19 @@ test("<<- with unquoted delimiter has body", () => {
   assert.ok(se);
 });
 
-test("<<- with quoted delimiter has no body", () => {
+test("<<- with quoted delimiter has no expansion parts", () => {
   const r = getRedirect("cat <<-'EOF'\n\t$name\nEOF\n");
-  assert.equal(r.heredocQuoted, true);
-  assert.equal(r.body, undefined);
+  assert.equal(r.delimiter?.quoted, true);
+  assert.equal(r.body.parts, undefined);
 });
 
 // --- Plain text heredocs ---
 
-test("unquoted heredoc with no expansions has no body", () => {
+test("unquoted heredoc with no expansions has no parts", () => {
   const r = getRedirect("cat <<EOF\njust plain text\nEOF\n");
   // No $, no `, so no expansion parts needed
-  assert.equal(r.body, undefined);
-  assert.equal(r.content, "just plain text\n");
+  assert.equal(r.body.parts, undefined);
+  assert.equal(r.body.text, "just plain text\n");
 });
 
 // --- Heredoc body has expansion field ---
@@ -163,17 +166,17 @@ test("unquoted heredoc body has CommandExpansion in parts", () => {
 
 test("empty heredoc body", () => {
   const r = getRedirect("cat <<EOF\nEOF\n");
-  assert.equal(r.content, "");
-  assert.equal(r.body, undefined);
+  assert.equal(r.body.text, "");
+  assert.equal(r.body.parts, undefined);
 });
 
 test("heredoc with only whitespace", () => {
   const r = getRedirect("cat <<EOF\n   \nEOF\n");
-  assert.equal(r.body, undefined);
+  assert.equal(r.body.parts, undefined);
 });
 
 test("heredoc with bare dollar at end of line", () => {
   const r = getRedirect("cat <<EOF\nprice: $\nEOF\n");
   // bare $ is literal
-  assert.equal(r.body, undefined);
+  assert.equal(r.body.parts, undefined);
 });

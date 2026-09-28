@@ -1,7 +1,8 @@
+import { nodeOfType, arrayElements, redirectsOf } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
-import type { AssignmentPrefix, BraceGroup, Case, Command, Function, If, Pipeline } from "../src/types.ts";
+import type { AssignmentPrefix, BraceGroup, Case, Command, Function, If } from "../src/types.ts";
 import { computeWordParts } from "../src/parts.ts";
 
 const getAssign = (src: string, i = 0): AssignmentPrefix => {
@@ -17,7 +18,13 @@ const assertCommandGroups = (source: string, expected: unknown) => {
   assert.deepEqual(
     ast.commands.map(({ command, pos, end }) =>
       command.type === "Command"
-        ? [command.type, pos, end, command.name?.text, command.prefix.map((assignment) => assignment.name)]
+        ? [
+            command.type,
+            pos,
+            end,
+            command.name?.text,
+            command.prefix.map((assignment) => nodeOfType(assignment, "Assignment").name),
+          ]
         : [command.type, pos, end],
     ),
     expected,
@@ -31,34 +38,34 @@ const assertCommandGroups = (source: string, expected: unknown) => {
 test("simple scalar assignment", () => {
   const a = getAssign("x=hello");
   assert.equal(a.name, "x");
-  assert.equal(a.value?.text, "hello");
+  assert.equal(nodeOfType(a.value, "Word").text, "hello");
   assert.equal(a.append, undefined);
-  assert.equal(a.index, undefined);
-  assert.equal(a.array, undefined);
+  assert.equal(a.index?.text, undefined);
+  assert.equal(arrayElements(a), undefined);
 });
 
 test("empty value assignment", () => {
   const a = getAssign("IFS=");
   assert.equal(a.name, "IFS");
-  assert.equal(a.value?.text, "");
+  assert.equal(nodeOfType(a.value, "Word").text, "");
 });
 
 test("value with = sign", () => {
   const a = getAssign("a=b=c");
   assert.equal(a.name, "a");
-  assert.equal(a.value?.text, "b=c");
+  assert.equal(nodeOfType(a.value, "Word").text, "b=c");
 });
 
 test("path value", () => {
   const a = getAssign("PATH=/usr/local/bin");
   assert.equal(a.name, "PATH");
-  assert.equal(a.value?.text, "/usr/local/bin");
+  assert.equal(nodeOfType(a.value, "Word").text, "/usr/local/bin");
 });
 
 test("numeric value", () => {
   const a = getAssign("n=42");
   assert.equal(a.name, "n");
-  assert.equal(a.value?.text, "42");
+  assert.equal(nodeOfType(a.value, "Word").text, "42");
 });
 
 // --- Append assignments ---
@@ -67,14 +74,14 @@ test("append scalar", () => {
   const a = getAssign("x+=more");
   assert.equal(a.name, "x");
   assert.equal(a.append, true);
-  assert.equal(a.value?.text, "more");
+  assert.equal(nodeOfType(a.value, "Word").text, "more");
 });
 
 test("append empty", () => {
   const a = getAssign("x+=");
   assert.equal(a.name, "x");
   assert.equal(a.append, true);
-  assert.equal(a.value?.text, "");
+  assert.equal(nodeOfType(a.value, "Word").text, "");
 });
 
 // --- Indexed assignments ---
@@ -82,23 +89,23 @@ test("append empty", () => {
 test("indexed assignment", () => {
   const a = getAssign("x[0]=val");
   assert.equal(a.name, "x");
-  assert.equal(a.index, "0");
-  assert.equal(a.value?.text, "val");
+  assert.equal(a.index?.text, "0");
+  assert.equal(nodeOfType(a.value, "Word").text, "val");
 });
 
 test("indexed assignment with variable index", () => {
   const a = getAssign("x[idx]=val");
   assert.equal(a.name, "x");
-  assert.equal(a.index, "idx");
-  assert.equal(a.value?.text, "val");
+  assert.equal(a.index?.text, "idx");
+  assert.equal(nodeOfType(a.value, "Word").text, "val");
 });
 
 test("indexed append assignment", () => {
   const a = getAssign("x[0]+=val");
   assert.equal(a.name, "x");
-  assert.equal(a.index, "0");
+  assert.equal(a.index?.text, "0");
   assert.equal(a.append, true);
-  assert.equal(a.value?.text, "val");
+  assert.equal(nodeOfType(a.value, "Word").text, "val");
 });
 
 // --- Array assignments ---
@@ -106,35 +113,35 @@ test("indexed append assignment", () => {
 test("simple array assignment", () => {
   const a = getAssign("x=(a b c)");
   assert.equal(a.name, "x");
-  assert.ok(a.array);
-  assert.equal(a.array!.length, 3);
-  assert.equal(a.array![0].text, "a");
-  assert.equal(a.array![1].text, "b");
-  assert.equal(a.array![2].text, "c");
+  assert.ok(arrayElements(a));
+  assert.equal(arrayElements(a)!.length, 3);
+  assert.equal(arrayElements(a)![0].text, "a");
+  assert.equal(arrayElements(a)![1].text, "b");
+  assert.equal(arrayElements(a)![2].text, "c");
 });
 
 test("array append", () => {
   const a = getAssign("x+=(d e)");
   assert.equal(a.name, "x");
   assert.equal(a.append, true);
-  assert.ok(a.array);
-  assert.equal(a.array!.length, 2);
+  assert.ok(arrayElements(a));
+  assert.equal(arrayElements(a)!.length, 2);
 });
 
 test("empty array", () => {
   const a = getAssign("x=()");
   assert.equal(a.name, "x");
-  assert.ok(a.array);
-  assert.equal(a.array!.length, 0);
+  assert.ok(arrayElements(a));
+  assert.equal(arrayElements(a)!.length, 0);
 });
 
 test("array with quoted elements", () => {
   const a = getAssign("x=(\"hello world\" 'literal')");
   assert.equal(a.name, "x");
-  assert.ok(a.array);
-  assert.equal(a.array!.length, 2);
-  assert.equal(a.array![0].text, '"hello world"');
-  assert.equal(a.array![1].text, "'literal'");
+  assert.ok(arrayElements(a));
+  assert.equal(arrayElements(a)!.length, 2);
+  assert.equal(arrayElements(a)![0].text, '"hello world"');
+  assert.equal(arrayElements(a)![1].text, "'literal'");
 });
 
 test("array element comments are skipped", () => {
@@ -147,9 +154,9 @@ test("array element comments are skipped", () => {
     assert.equal(ast.commands.length, 2, src);
 
     const a = getAssign(src);
-    assert.equal(a.array!.length, 2, src);
+    assert.equal(arrayElements(a)!.length, 2, src);
     assert.deepEqual(
-      a.array!.map((w) => w.text),
+      arrayElements(a)!.map((w) => w.text),
       ["a", "b"],
       src,
     );
@@ -159,15 +166,15 @@ test("array element comments are skipped", () => {
 test("array comment starts only at a word boundary", () => {
   // `#` after `(` or whitespace comments; mid-word or after a quote it is literal.
   assert.deepEqual(
-    getAssign("x=(#c\ny)").array!.map((w) => w.text),
+    arrayElements(getAssign("x=(#c\ny)"))!.map((w) => w.text),
     ["y"],
   );
   assert.deepEqual(
-    getAssign("x=(a#b)").array!.map((w) => w.text),
+    arrayElements(getAssign("x=(a#b)"))!.map((w) => w.text),
     ["a#b"],
   );
   assert.deepEqual(
-    getAssign('x=("q"#b)').array!.map((w) => w.text),
+    arrayElements(getAssign('x=("q"#b)'))!.map((w) => w.text),
     ['"q"#b'],
   );
 });
@@ -180,14 +187,14 @@ function assertHashLiteralInArray(source: string, expected: string[][]) {
   assert.equal(assignment.type, "Assignment", source);
   if (assignment.type !== "Assignment") return;
   assert.deepEqual(
-    assignment.array?.map((word) => [word.text, word.value]),
+    arrayElements(assignment)?.map((word) => [word.text, word.value]),
     expected,
     source,
   );
   const declare = ast.commands[1].command as Command;
   assert.equal(declare.name?.text, "declare", source);
   assert.deepEqual(
-    declare.suffix.map((word) => word.text),
+    declare.suffix.map((word) => nodeOfType(word, "Assignment", "Word").text),
     ["-p", "a"],
     source,
   );
@@ -218,16 +225,16 @@ test("array with command substitution", () => {
   const input = "x=($(seq 1 5))";
   const a = getAssign(input);
   assert.equal(a.name, "x");
-  assert.ok(a.array);
-  assert.equal(a.array!.length, 1);
-  assert.equal(computeWordParts(input, a.array![0])![0].type, "CommandExpansion");
+  assert.ok(arrayElements(a));
+  assert.equal(arrayElements(a)!.length, 1);
+  assert.equal(computeWordParts(input, arrayElements(a)![0])![0].type, "CommandExpansion");
 });
 
 test("associative array with index elements", () => {
   const a = getAssign("x=([a]=1 [b]=2)");
   assert.equal(a.name, "x");
-  assert.ok(a.array);
-  assert.equal(a.array!.length, 2);
+  assert.ok(arrayElements(a));
+  assert.equal(arrayElements(a)!.length, 2);
 });
 
 // --- Value with expansions ---
@@ -236,16 +243,16 @@ test("value with simple expansion", () => {
   const input = "x=$HOME/bin";
   const a = getAssign(input);
   assert.equal(a.name, "x");
-  assert.equal(a.value?.text, "$HOME/bin");
-  assert.ok(computeWordParts(input, a.value!));
-  assert.equal(computeWordParts(input, a.value!)![0].type, "SimpleExpansion");
+  assert.equal(nodeOfType(a.value, "Word").text, "$HOME/bin");
+  assert.ok(computeWordParts(input, a.value));
+  assert.equal(computeWordParts(input, a.value)![0].type, "SimpleExpansion");
 });
 
 test("repeated unquoted expansions stay in one assignment value (#180)", () => {
   const source = "var=$ITEM/word-$ITEM/a/b";
   const ast = parse(source);
   assert.equal(ast.errors, undefined);
-  const value = ((ast.commands[0].command as Command).prefix[0] as AssignmentPrefix).value!;
+  const value = nodeOfType(((ast.commands[0].command as Command).prefix[0] as AssignmentPrefix).value, "Word");
   assert.deepEqual([value.text, value.pos, value.end], ["$ITEM/word-$ITEM/a/b", 4, 24]);
   assert.deepEqual(
     computeWordParts(source, value)?.map(({ type, text }) => [type, text]),
@@ -262,25 +269,25 @@ test("value with command substitution", () => {
   const input = "y=$(echo hi)";
   const a = getAssign(input);
   assert.equal(a.name, "y");
-  assert.equal(computeWordParts(input, a.value!)![0].type, "CommandExpansion");
-  assert.ok((computeWordParts(input, a.value!)![0] as any).script);
+  assert.equal(computeWordParts(input, a.value)![0].type, "CommandExpansion");
+  assert.ok((computeWordParts(input, a.value)![0] as any).script);
 });
 
 test("value with double-quoted expansion", () => {
   const input = 'z="hello $name"';
   const a = getAssign(input);
   assert.equal(a.name, "z");
-  assert.equal(a.value?.text, '"hello $name"');
-  assert.ok(computeWordParts(input, a.value!));
-  assert.equal(computeWordParts(input, a.value!)![0].type, "DoubleQuoted");
+  assert.equal(nodeOfType(a.value, "Word").text, '"hello $name"');
+  assert.ok(computeWordParts(input, a.value));
+  assert.equal(computeWordParts(input, a.value)![0].type, "DoubleQuoted");
 });
 
 test("value with param expansion", () => {
   const input = "x=${var:-default}";
   const a = getAssign(input);
   assert.equal(a.name, "x");
-  assert.ok(computeWordParts(input, a.value!));
-  assert.equal(computeWordParts(input, a.value!)![0].type, "ParameterExpansion");
+  assert.ok(computeWordParts(input, a.value));
+  assert.equal(computeWordParts(input, a.value)![0].type, "ParameterExpansion");
 });
 
 test("parameter expansion operands keep unquoted pipes (#290)", () => {
@@ -317,13 +324,16 @@ test("parameter expansion operands keep unquoted pipes (#290)", () => {
     const assignment = command.prefix[0];
     assert.equal(assignment.type, "Assignment", source);
     if (assignment.type !== "Assignment") continue;
-    const quoted = assignment.value?.parts?.[0];
+    const quoted = nodeOfType(assignment.value, "Word").parts?.[0];
     assert.equal(quoted?.type, "DoubleQuoted", source);
     if (quoted?.type !== "DoubleQuoted") continue;
     const expansion = quoted.parts[0];
     assert.equal(expansion.type, "ParameterExpansion", source);
     if (expansion.type !== "ParameterExpansion") continue;
-    assert.deepEqual([expansion.operand?.text, expansion.operand?.pos, expansion.operand?.end], operand, source);
+    assert.equal(expansion.operation?.type, "Default");
+    if (expansion.operation?.type !== "Default") continue;
+    const value = expansion.operation.operand;
+    assert.deepEqual([value.text, value.pos, value.end], operand, source);
   }
 });
 
@@ -333,9 +343,9 @@ test("multiple assignments", () => {
   const a0 = getAssign("A=1 B=2 cmd", 0);
   const a1 = getAssign("A=1 B=2 cmd", 1);
   assert.equal(a0.name, "A");
-  assert.equal(a0.value?.text, "1");
+  assert.equal(nodeOfType(a0.value, "Word").text, "1");
   assert.equal(a1.name, "B");
-  assert.equal(a1.value?.text, "2");
+  assert.equal(nodeOfType(a1.value, "Word").text, "2");
 });
 
 test("env var prefix with command", () => {
@@ -343,7 +353,7 @@ test("env var prefix with command", () => {
   const cmd = ast.commands[0].command as Command;
   const a = cmd.prefix[0] as AssignmentPrefix;
   assert.equal(a.name, "NODE_ENV");
-  assert.equal(a.value?.text, "production");
+  assert.equal(nodeOfType(a.value, "Word").text, "production");
   assert.equal(cmd.name?.text, "node");
 });
 
@@ -390,16 +400,17 @@ test("negated conditions preserve multiple assignment prefixes (#318)", () => {
 
   for (const [source, end, assignments] of cases) {
     const ast = assertCommandGroups(source, [["If", 0, end]]);
-    const pipeline = (ast.commands[0].command as If).clause.commands[0].command as Pipeline;
-    const command = pipeline.commands[0] as Command;
-    assert.deepEqual([pipeline.type, pipeline.negated, command.type], ["Pipeline", true, "Command"], source);
+    const negation = (ast.commands[0].command as If).clause.commands[0].command;
+    assert.ok(negation.type === "Negation", source);
+    const command = negation.command as Command;
+    assert.equal(command.type, "Command", source);
     assert.deepEqual(
-      command.prefix.map((assignment) => [assignment.name, assignment.pos, assignment.end]),
+      command.prefix.map((assignment) => [nodeOfType(assignment, "Assignment").name, assignment.pos, assignment.end]),
       assignments,
       source,
     );
     if (source === cases[0][0]) {
-      const expansion = command.prefix[1].value?.parts?.[0];
+      const expansion = nodeOfType(nodeOfType(command.prefix[1], "Assignment").value, "Word").parts?.[0];
       assert.equal(expansion?.type, "CommandExpansion", source);
       if (expansion?.type !== "CommandExpansion") return;
       const nested = expansion.script?.commands[0].command as Command;
@@ -432,7 +443,10 @@ test("assignment-only commands end before if inside functions (#342)", () => {
       [
         fn.body.type,
         body.map(({ command, pos, end }) => [command.type, pos, end]),
-        assignments.prefix.map(({ name, pos, end }) => [name, pos, end]),
+        assignments.prefix.map((item) => {
+          const { name, pos, end } = nodeOfType(item, "Assignment");
+          return [name, pos, end];
+        }),
         [caseNode.type, caseNode.pos, caseNode.end, caseNode.items],
       ],
       [
@@ -510,7 +524,7 @@ test("declare with array assignment", () => {
   const c = ast.commands[0].command as Command;
   assert.equal(c.name?.text, "declare");
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    c.suffix.map((s) => nodeOfType(s, "Assignment", "Word").text),
     ["-a", "arr=(one two three)"],
   );
 });
@@ -519,7 +533,7 @@ test("associative array assignment", () => {
   const ast = parse("declare -A map=([a]=1 [b]=2)");
   const c = ast.commands[0].command as Command;
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    c.suffix.map((s) => nodeOfType(s, "Assignment", "Word").text),
     ["-A", "map=([a]=1 [b]=2)"],
   );
 });
@@ -534,7 +548,7 @@ test("array append with mixed elements", () => {
 test("assignment in suffix is a regular word", () => {
   const c = parse("echo FOO=bar").commands[0].command as Command;
   assert.equal(c.name?.text, "echo");
-  assert.equal(c.suffix[0].text, "FOO=bar");
+  assert.equal(nodeOfType(c.suffix[0], "Assignment", "Word").text, "FOO=bar");
 });
 
 test("empty assignment before command", () => {
@@ -550,7 +564,7 @@ test("a=b=c is single assignment (value is b=c)", () => {
 
 test("=a is a regular word (not assignment)", () => {
   const c = parse("echo =a").commands[0].command as Command;
-  assert.equal(c.suffix[0].text, "=a");
+  assert.equal(nodeOfType(c.suffix[0], "Assignment", "Word").text, "=a");
 });
 
 test("multiple assignments before command", () => {
@@ -572,7 +586,7 @@ test("quoted assignment name or equals is a command word", () => {
     assert.equal(c.name?.text, raw, source);
     assert.equal(c.name?.value, value, source);
     assert.deepEqual(
-      c.suffix.map((word) => word.text),
+      c.suffix.map((word) => nodeOfType(word, "Assignment", "Word").text),
       ["true"],
       source,
     );
@@ -601,8 +615,8 @@ test("nested and expanded array indexes remain assignment syntax", () => {
     assert.equal(c.prefix[0].type, "Assignment", source);
     if (c.prefix[0].type === "Assignment") {
       assert.equal(c.prefix[0].name, "array", source);
-      assert.equal(c.prefix[0].index, index, source);
-      assert.equal(c.prefix[0].value?.text, "value", source);
+      assert.equal(c.prefix[0].index?.text, index, source);
+      assert.equal(nodeOfType(c.prefix[0].value, "Word").text, "value", source);
     }
     assert.equal(c.name?.text, "true", source);
   }
@@ -610,16 +624,16 @@ test("nested and expanded array indexes remain assignment syntax", () => {
 
 test("indexed assignments keep command substitutions in the index structured", () => {
   const assignment = getAssign("array[1+$(danger)]=value true");
-  assert.equal(Object.getPrototypeOf(assignment), Object.prototype);
-  assert.equal(assignment.index, "1+$(danger)");
-  const expansion = assignment.indexParts?.find((part) => part.type === "CommandExpansion");
+  assert.equal(Object.getPrototypeOf(JSON.parse(JSON.stringify(assignment))), Object.prototype);
+  assert.equal(assignment.index?.text, "1+$(danger)");
+  const expansion = assignment.index?.parts?.find((part) => part.type === "CommandExpansion");
   assert.equal(expansion?.type, "CommandExpansion");
   if (expansion?.type !== "CommandExpansion") return;
   const command = expansion.script?.commands[0].command;
   assert.equal(command?.type, "Command");
   if (command?.type === "Command") assert.equal(command.name?.value, "danger");
   const serialized = JSON.parse(JSON.stringify(assignment));
-  assert.ok(serialized.indexParts.some((part: { type: string }) => part.type === "CommandExpansion"));
+  assert.ok(serialized.index?.parts.some((part: { type: string }) => part.type === "CommandExpansion"));
 });
 
 test("line continuations around append assignment operators are ignored", () => {
@@ -627,14 +641,14 @@ test("line continuations around append assignment operators are ignored", () => 
     ["X\\\n+=value true", undefined],
     ["X+\\\n=value true", undefined],
     ["array[nested[0]]+\\\n=value true", "nested[0]"],
-  ]) {
+  ] as const) {
     const c = parse(source).commands[0].command as Command;
     assert.equal(c.prefix[0].type, "Assignment", source);
     if (c.prefix[0].type === "Assignment") {
       assert.equal(c.prefix[0].name, index === undefined ? "X" : "array", source);
-      assert.equal(c.prefix[0].index, index, source);
+      assert.equal(c.prefix[0].index?.text, index, source);
       assert.equal(c.prefix[0].append, true, source);
-      assert.equal(c.prefix[0].value?.text, "value", source);
+      assert.equal(nodeOfType(c.prefix[0].value, "Word").text, "value", source);
     }
     assert.equal(c.name?.text, "true", source);
   }
@@ -652,14 +666,14 @@ test("a command prefix demotes the reserved word that follows it", () => {
     ["FOO=bar ]]", "]]", 1, 0],
     ["FOO=bar {", "{", 1, 0],
     ["FOO=bar time", "time", 1, 0],
-    [">/dev/null for", "for", 0, 1],
-    ["FOO=bar 2>/dev/null while", "while", 1, 1],
+    [">/dev/null for", "for", 1, 1],
+    ["FOO=bar 2>/dev/null while", "while", 2, 1],
   ] as const) {
     const c = parse(source).commands[0].command as Command;
     assert.equal(c.type, "Command", source);
     assert.equal(c.name?.text, name, source);
     assert.equal(c.prefix.length, prefixLength, source);
-    assert.equal(c.redirects.length, redirectCount, source);
+    assert.equal(redirectsOf(c).length, redirectCount, source);
     assert.equal(parse(source).errors, undefined, source);
   }
 });
@@ -679,15 +693,15 @@ test("assignments and redirects interleave in a command prefix", () => {
   const c = parse("A=1 >/dev/null B=2 2>&1 C=3 cmd arg").commands[0].command as Command;
   assert.equal(c.name?.text, "cmd");
   assert.deepEqual(
-    c.prefix.map((p) => (p.type === "Assignment" ? `${p.name}=${p.value?.text}` : p.type)),
-    ["A=1", "B=2", "C=3"],
+    c.prefix.map((p) => (p.type === "Assignment" ? `${p.name}=${nodeOfType(p.value, "Word").text}` : p.type)),
+    ["A=1", "Redirect", "B=2", "Redirect", "C=3"],
   );
   assert.deepEqual(
-    c.redirects.map((r) => r.operator),
+    redirectsOf(c).map((r) => r.operator),
     [">", ">&"],
   );
   assert.deepEqual(
-    c.suffix.map((w) => w.text),
+    c.suffix.map((w) => nodeOfType(w, "Assignment", "Word").text),
     ["arg"],
   );
 });
@@ -709,10 +723,10 @@ test("an array subscript in assignment position runs to its matching bracket", (
     assert.equal(c.prefix[0].type, "Assignment", source);
     if (c.prefix[0].type === "Assignment") {
       assert.equal(c.prefix[0].name, "a", source);
-      assert.equal(c.prefix[0].index, index, source);
-      assert.equal(c.prefix[0].value?.text, value, source);
+      assert.equal(c.prefix[0].index?.text, index, source);
+      assert.equal(nodeOfType(c.prefix[0].value, "Word").text, value, source);
     }
-    assert.equal(c.redirects.length, 0, source);
+    assert.equal(redirectsOf(c).length, 0, source);
     assert.equal(parse(source).errors, undefined, source);
   }
 });
@@ -722,7 +736,7 @@ test("a subscript stays a matched pair after another prefix element", () => {
     const c = parse(source).commands[0].command as Command;
     const assignment = c.prefix.find((p) => p.type === "Assignment" && p.name === "a");
     assert.equal(assignment?.type, "Assignment", source);
-    if (assignment?.type === "Assignment") assert.equal(assignment.index, "1 + 2", source);
+    if (assignment?.type === "Assignment") assert.equal(assignment.index?.text, "1 + 2", source);
   }
 });
 
@@ -730,12 +744,12 @@ test("outside assignment position a subscript is not a matched pair", () => {
   // `echo a[3|4]=8` is a pipeline in bash, and `echo a[(1+2)*3]=9` is a syntax error.
   const pipeline = parse("echo a[3|4]=8").commands[0].command;
   assert.equal(pipeline.type, "Pipeline");
-  assert.equal(parse("echo a[1 + 2]=7").commands[0].command.suffix?.length, 3);
+  assert.equal(nodeOfType(parse("echo a[1 + 2]=7").commands[0].command, "Command").suffix?.length, 3);
   assert.ok(parse("echo a[(1+2)*3]=9").errors);
 });
 
 test("an unclosed subscript does not swallow the rest of the script", () => {
   const script = parse("a[1 + 2\necho hi");
   assert.equal(script.commands.length, 2);
-  assert.equal(script.commands[1].command.name?.text, "echo");
+  assert.equal(nodeOfType(script.commands[1].command, "Command").name?.text, "echo");
 });

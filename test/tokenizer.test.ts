@@ -1,8 +1,8 @@
+import { nodeOfType, redirectsOf } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
 import { Token, Lexer } from "../src/lexer.ts";
-import type { Command, AndOr, Pipeline } from "../src/types.ts";
 
 // Helpers
 const tokens = (src: string) => {
@@ -16,7 +16,7 @@ const tokens = (src: string) => {
   return result;
 };
 
-const getCmd = (ast: ReturnType<typeof parse>, i = 0) => ast.commands[i].command as Command;
+const getCmd = (ast: ReturnType<typeof parse>, i = 0) => nodeOfType(ast.commands[i].command, "Command");
 
 // ── Operator disambiguation ─────────────────────────────────────────
 
@@ -72,25 +72,25 @@ test("operator splits adjacent words without whitespace", () => {
   const ast = parse("echo>file");
   const c = getCmd(ast);
   assert.equal(c.name?.text, "echo");
-  assert.equal(c.redirects?.[0].operator, ">");
+  assert.equal(redirectsOf(c)?.[0].operator, ">");
 });
 
 test("&& without spaces", () => {
   const ast = parse("foo&&bar");
-  const expr = ast.commands[0].command as AndOr;
+  const expr = nodeOfType(ast.commands[0].command, "AndOr");
   assert.deepEqual(expr.operators, ["&&"]);
-  assert.equal((expr.commands[0] as Command).name?.text, "foo");
-  assert.equal((expr.commands[1] as Command).name?.text, "bar");
+  assert.equal(nodeOfType(expr.commands[0], "Command").name?.text, "foo");
+  assert.equal(nodeOfType(expr.commands[1], "Command").name?.text, "bar");
 });
 
 test("|| without spaces", () => {
   const ast = parse("foo||bar");
-  const expr = ast.commands[0].command as AndOr;
+  const expr = nodeOfType(ast.commands[0].command, "AndOr");
   assert.deepEqual(expr.operators, ["||"]);
 });
 
 test("| without spaces", () => {
-  const p = parse("foo|bar").commands[0].command as Pipeline;
+  const p = nodeOfType(parse("foo|bar").commands[0].command, "Pipeline");
   assert.equal(p.commands.length, 2);
 });
 
@@ -105,17 +105,17 @@ test("# after word is a comment", () => {
   const ast = parse("echo hello #this is a comment");
   const c = getCmd(ast);
   assert.equal(c.suffix.length, 1);
-  assert.equal(c.suffix[0].text, "hello");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "hello");
 });
 
 test("# in single quotes is literal", () => {
   const c = getCmd(parse("echo '# not a comment'"));
-  assert.equal(c.suffix[0].text, "'# not a comment'");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "'# not a comment'");
 });
 
 test("# in double quotes is literal", () => {
   const c = getCmd(parse('echo "# not a comment"'));
-  assert.equal(c.suffix[0].text, '"# not a comment"');
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, '"# not a comment"');
 });
 
 test("# at start of line is a comment", () => {
@@ -126,7 +126,7 @@ test("# at start of line is a comment", () => {
 
 test("comment between pipe and next command", () => {
   const ast = parse("foo |\n#comment\nbar");
-  const p = ast.commands[0].command as Pipeline;
+  const p = nodeOfType(ast.commands[0].command, "Pipeline");
   assert.equal(p.commands.length, 2);
 });
 
@@ -134,39 +134,39 @@ test("comment between pipe and next command", () => {
 
 test("$ at end of input is literal", () => {
   const c = getCmd(parse("echo $"));
-  assert.equal(c.suffix[0].text, "$");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "$");
 });
 
 test("$var terminated by dash", () => {
   const c = getCmd(parse("echo $a-b"));
-  assert.equal(c.suffix[0].text, "$a-b");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "$a-b");
 });
 
 test("$var terminated by dot", () => {
   const c = getCmd(parse("echo $a.b"));
-  assert.equal(c.suffix[0].text, "$a.b");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "$a.b");
 });
 
 test("$var terminated by slash", () => {
   const c = getCmd(parse("echo $a/b"));
-  assert.equal(c.suffix[0].text, "$a/b");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "$a/b");
 });
 
 test("$_ and digits continue variable name", () => {
   const c = getCmd(parse("echo $a_b2c"));
-  assert.equal(c.suffix[0].text, "$a_b2c");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "$a_b2c");
 });
 
 test("special parameters are single-char", () => {
   for (const p of ["$@", "$*", "$#", "$$", "$?", "$!", "$-"]) {
     const c = getCmd(parse(`echo ${p}x`));
-    assert.equal(c.suffix[0].text, `${p}x`, `Failed for ${p}`);
+    assert.equal(nodeOfType(c.suffix[0], "Word").text, `${p}x`, `Failed for ${p}`);
   }
 });
 
 test("positional parameter $1 is single digit", () => {
   const c = getCmd(parse("echo $11"));
-  assert.equal(c.suffix[0].text, "$11");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "$11");
 });
 
 test("positional expansion remains part of a preceding path (#306)", () => {
@@ -174,16 +174,19 @@ test("positional expansion remains part of a preceding path (#306)", () => {
   const command = getCmd(ast);
   assert.equal(ast.errors, undefined);
   assert.deepEqual(
-    command.suffix.map(({ text, pos, end }) => [text, pos, end]),
+    command.suffix.map((item) => {
+      const { text, pos, end } = nodeOfType(item, "Word");
+      return [text, pos, end];
+    }),
     [
       ["-f", 3, 5],
       ["$COMMON_CONFDIR/ifaces/$1", 6, 31],
     ],
   );
-  assert.deepEqual(command.suffix[1].parts, [
-    { type: "SimpleExpansion", text: "$COMMON_CONFDIR" },
-    { type: "Literal", value: "/ifaces/", text: "/ifaces/" },
-    { type: "SimpleExpansion", text: "$1" },
+  assert.deepEqual(nodeOfType(command.suffix[1], "Word").parts, [
+    { type: "SimpleExpansion", pos: 6, end: 21, text: "$COMMON_CONFDIR" },
+    { type: "Literal", pos: 21, end: 29, value: "/ifaces/", text: "/ifaces/" },
+    { type: "SimpleExpansion", pos: 29, end: 31, text: "$1" },
   ]);
 });
 
@@ -196,17 +199,17 @@ test("empty assignment followed by semicolon", () => {
 
 test("# after quote is not a comment", () => {
   const c = getCmd(parse("echo 'word'#not-comment"));
-  assert.equal(c.suffix[0].text, "'word'#not-comment");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "'word'#not-comment");
 });
 
 test("# after command substitution is not a comment", () => {
   const c = getCmd(parse("echo $(uname)#not-comment"));
-  assert.ok(c.suffix[0].text.includes("#not-comment"));
+  assert.ok(nodeOfType(c.suffix[0], "Word").text.includes("#not-comment"));
 });
 
 test("# after variable is not a comment", () => {
   const c = getCmd(parse("echo $hey#not-comment"));
-  assert.ok(c.suffix[0].text.includes("#"));
+  assert.ok(nodeOfType(c.suffix[0], "Word").text.includes("#"));
 });
 
 test("var=#value is assignment with # in value", () => {
@@ -217,7 +220,7 @@ test("var=#value is assignment with # in value", () => {
 test("fi#etc is a word, not fi keyword + comment", () => {
   const ast = parse("echo fi#etc");
   const c = getCmd(ast);
-  assert.equal(c.suffix[0].text, "fi#etc");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "fi#etc");
 });
 
 test("$'\\n' used as separator in replacement", () => {
@@ -232,7 +235,7 @@ test("nested conditional parameter expansion with unbalanced parens", () => {
 
 test("escaped whitespace continues word", () => {
   const c = getCmd(parse("echo hello\\ world"));
-  assert.equal(c.suffix[0].text, "hello\\ world");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "hello\\ world");
 });
 
 test("escaped horizontal whitespace starts standalone arguments (#284)", () => {
@@ -241,7 +244,10 @@ test("escaped horizontal whitespace starts standalone arguments (#284)", () => {
   assert.deepEqual(
     getCmd(ast)
       .suffix.slice(2, 4)
-      .map(({ text, value, pos, end }) => [text, value, pos, end]),
+      .map((item) => {
+        const { text, value, pos, end } = nodeOfType(item, "Word");
+        return [text, value, pos, end];
+      }),
     [
       ["\\ ", " ", 18, 20],
       ["\\\t", "\t", 21, 23],
@@ -256,7 +262,11 @@ test("single-bracket glob stays in one command (#214)", () => {
   assert.equal(ast.commands.length, 1);
   const command = getCmd(ast);
   assert.deepEqual(
-    [command.name, ...command.suffix].map((word) => [word?.text, word?.pos, word?.end]),
+    [command.name, ...command.suffix].map((word) => [
+      nodeOfType(word, "Assignment", "Word").text,
+      word?.pos,
+      word?.end,
+    ]),
     [
       ["[", 0, 1],
       ["-e", 2, 4],
@@ -274,7 +284,10 @@ test("escaped parentheses remain builtin arguments while unescaped controls fail
   const command = getCmd(ast);
   assert.deepEqual([command.name?.text, command.pos, command.end], ["[", 0, 46]);
   assert.deepEqual(
-    command.suffix.map(({ text, value, pos, end }) => [text, value, pos, end]),
+    command.suffix.map((item) => {
+      const { text, value, pos, end } = nodeOfType(item, "Word");
+      return [text, value, pos, end];
+    }),
     [
       ["\\(", "(", 2, 4],
       ["'aaa'", "aaa", 5, 10],
@@ -299,7 +312,10 @@ test("escaped whitespace keeps a following # literal (#68)", () => {
   const ast = parse("echo \\ # hi");
   assert.equal(ast.errors, undefined);
   assert.deepEqual(
-    getCmd(ast).suffix.map((word) => [word.text, word.value]),
+    getCmd(ast).suffix.map((item) => {
+      const word = nodeOfType(item, "Word");
+      return [word.text, word.value];
+    }),
     [
       ["\\ #", " #"],
       ["hi", "hi"],

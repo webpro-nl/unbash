@@ -1,23 +1,24 @@
+import { nodeOfType, arrayElements, redirectsOf } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Lexer } from "../src/lexer.ts";
 import { parse } from "../src/parser.ts";
 import { print } from "../src/printer.ts";
-import type { Command, Pipeline } from "../src/types.ts";
+import type { Command } from "../src/types.ts";
 import { computeWordParts } from "../src/parts.ts";
 import { verify } from "./verify.ts";
 
-const getCmd = (ast: ReturnType<typeof parse>, i = 0) => ast.commands[i].command as Command;
+const getCmd = (ast: ReturnType<typeof parse>, i = 0) => nodeOfType(ast.commands[i].command, "Command");
 const wp = (s: string, w: import("../src/types.ts").Word) => computeWordParts(s, w);
-const args = (c: Command) => c.suffix.map((s) => s.text);
+const args = (c: Command) => c.suffix.map((s) => nodeOfType(s, "Word").text);
 
 function assignmentBacktickScript(source: string) {
   const ast = parse(source);
   assert.equal(ast.errors, undefined, source);
   const assignment = getCmd(ast).prefix[0];
   assert.equal(assignment.type, "Assignment", source);
-  if (assignment.type !== "Assignment" || !assignment.value) throw new Error(source);
-  const parts = wp(source, assignment.value);
+  if (assignment.type !== "Assignment") throw new Error(source);
+  const parts = wp(source, nodeOfType(assignment.value, "Word"));
   const expansion =
     parts?.[0]?.type === "DoubleQuoted"
       ? parts[0].parts?.find((part) => part.type === "CommandExpansion")
@@ -34,10 +35,10 @@ test("$() inner script is parsed via CommandExpansion part", () => {
   const c = getCmd(parse(src));
   const assign = c.prefix[0];
   assert.equal(assign.type, "Assignment");
-  const part = assign.value ? wp(src, assign.value)?.[0] : undefined;
+  const part = assign.value ? wp(src, nodeOfType(assign.value, "Word"))?.[0] : undefined;
   assert.equal(part?.type, "CommandExpansion");
   if (part?.type === "CommandExpansion") {
-    const inner = part.script!.commands[0].command as Command;
+    const inner = nodeOfType(part.script!.commands[0].command, "Command");
     assert.equal(inner.name?.text, "node");
     assert.deepEqual(args(inner), ["./script.js"]);
   }
@@ -71,7 +72,7 @@ test("backtick inner script is parsed via CommandExpansion part", () => {
   const c = getCmd(parse(src));
   const assign = c.prefix[0];
   assert.equal(assign.type, "Assignment");
-  assert.equal(assign.value ? wp(src, assign.value)?.[0].type : undefined, "CommandExpansion");
+  assert.equal(assign.value ? wp(src, nodeOfType(assign.value, "Word"))?.[0].type : undefined, "CommandExpansion");
 });
 
 test("adjacent backtick substitutions", () => {
@@ -123,7 +124,7 @@ test("backticks inside double quotes decode escaped double quotes (#214)", () =>
   assert.equal(sed.type, "Command");
   if (sed.type !== "Command") return;
   assert.deepEqual(
-    sed.suffix.map((word) => word.value),
+    sed.suffix.map((word) => nodeOfType(word, "Word").value),
     ["-es|=.*$||", "-es|^.*opt ||"],
   );
 });
@@ -145,17 +146,20 @@ test("a comment inside backticks stops at the closing backtick (#116)", () => {
   const command = getCmd(ast);
   assert.equal(ast.errors, undefined);
   assert.deepEqual(
-    command.suffix.map(({ text, pos, end }) => [text, pos, end]),
+    command.suffix.map((item) => {
+      const { text, pos, end } = nodeOfType(item, "Word");
+      return [text, pos, end];
+    }),
     [
       ["`echo hey # comment`", 5, 25],
       ["there", 26, 31],
     ],
   );
-  const expansion = wp(source, command.suffix[0])?.[0];
+  const expansion = wp(source, nodeOfType(command.suffix[0], "Word"))?.[0];
   assert.equal(expansion?.type, "CommandExpansion");
   if (expansion?.type !== "CommandExpansion") return;
   assert.deepEqual([expansion.script?.pos, expansion.script?.end, expansion.script?.errors], [6, 24, undefined]);
-  const inner = expansion.script!.commands[0].command as Command;
+  const inner = nodeOfType(expansion.script!.commands[0].command, "Command");
   assert.deepEqual([inner.pos, inner.end, inner.name?.text, ...args(inner)], [6, 14, "echo", "hey"]);
 });
 
@@ -163,7 +167,7 @@ test("a comment-only backtick stays in the left side of a pipeline (#116)", () =
   const source = "printf 'hey %s' `# comment` |\n  cat <<< 'there'";
   const ast = parse(source);
   assert.equal(ast.errors, undefined);
-  const pipeline = ast.commands[0].command as Pipeline;
+  const pipeline = nodeOfType(ast.commands[0].command, "Pipeline");
   assert.equal(pipeline.type, "Pipeline");
   assert.deepEqual(
     pipeline.commands.map((command) => [
@@ -178,15 +182,18 @@ test("a comment-only backtick stays in the left side of a pipeline (#116)", () =
     ],
   );
   assert.deepEqual(pipeline.operators, ["|"]);
-  const left = pipeline.commands[0] as Command;
-  const expansion = wp(source, left.suffix[1])?.[0];
+  const left = nodeOfType(pipeline.commands[0], "Command");
+  const expansion = wp(source, nodeOfType(left.suffix[1], "Word"))?.[0];
   assert.equal(expansion?.type, "CommandExpansion");
   if (expansion?.type !== "CommandExpansion") return;
   assert.deepEqual([expansion.script?.pos, expansion.script?.end, expansion.script?.commands.length], [17, 26, 0]);
   assert.equal(expansion.script?.errors, undefined);
-  const right = pipeline.commands[1] as Command;
+  const right = nodeOfType(pipeline.commands[1], "Command");
   assert.deepEqual(
-    right.redirects.map(({ operator, pos, end, target }) => [operator, pos, end, target?.text]),
+    redirectsOf(right).map((redirect) => {
+      const { operator, pos, end, target } = nodeOfType(redirect, "HereString");
+      return [operator, pos, end, target?.text];
+    }),
     [["<<<", 36, 47, "'there'"]],
   );
 });
@@ -230,11 +237,14 @@ for (const [label, source, ranges] of [
     const command = getCmd(ast);
     assert.equal(ast.errors, undefined);
     assert.deepEqual(
-      command.suffix.map(({ pos, end }) => [pos, end]),
+      command.suffix.map((item) => {
+        const { pos, end } = nodeOfType(item, "Word");
+        return [pos, end];
+      }),
       ranges,
     );
     if (label !== "B") return;
-    const parts = wp(source, command.suffix[1]);
+    const parts = wp(source, nodeOfType(command.suffix[1], "Word"));
     assert.deepEqual(
       parts?.map(({ type, text }) => [type, text]),
       [
@@ -247,7 +257,7 @@ for (const [label, source, ranges] of [
     assert.equal(expansion?.type, "CommandExpansion");
     if (expansion?.type !== "CommandExpansion") return;
     assert.deepEqual([expansion.script?.pos, expansion.script?.end, expansion.script?.errors], [23, 26, undefined]);
-    const inner = expansion.script!.commands[0].command as Command;
+    const inner = nodeOfType(expansion.script!.commands[0].command, "Command");
     assert.deepEqual([inner.type, inner.pos, inner.end, inner.name?.text], ["Command", 23, 26, "pwd"]);
   });
 }
@@ -281,12 +291,12 @@ for (const [label, source, roots, scriptRange, commandRange] of [
       ast.commands.map(({ pos, end }) => [pos, end]),
       roots,
     );
-    const expansion = wp(source, getCmd(ast, 1).suffix[0])?.[0];
+    const expansion = wp(source, nodeOfType(getCmd(ast, 1).suffix[0], "Word"))?.[0];
     assert.equal(expansion?.type, "CommandExpansion");
     if (expansion?.type !== "CommandExpansion") return;
     assert.deepEqual([expansion.script?.pos, expansion.script?.end], scriptRange);
     assert.equal(expansion.script?.errors, undefined);
-    const inner = expansion.script!.commands[0].command as Command;
+    const inner = nodeOfType(expansion.script!.commands[0].command, "Command");
     assert.deepEqual([inner.pos, inner.end, inner.name?.text], [...commandRange, "echo"]);
   });
 }
@@ -296,7 +306,7 @@ for (const [label, source, roots, scriptRange, commandRange] of [
 test('$"..." locale string', () => {
   const c = getCmd(parse('echo $"hello world"'));
   assert.equal(c.name?.text, "echo");
-  assert.equal(c.suffix[0].text, '$"hello world"');
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, '$"hello world"');
 });
 
 test('$"..." with variable interpolation', () => {
@@ -314,27 +324,27 @@ test('$"..." in assignment', () => {
 test("${ cmd; } recursively parsed", () => {
   const src = "echo ${ echo hello; }";
   const c = getCmd(parse(src));
-  assert.equal(c.suffix[0].text, "${ echo hello; }");
-  const part = wp(src, c.suffix[0])?.[0];
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "${ echo hello; }");
+  const part = wp(src, nodeOfType(c.suffix[0], "Word"))?.[0];
   assert.equal(part?.type, "CommandExpansion");
   if (part?.type === "CommandExpansion") {
     assert.equal(part.script!.commands.length, 1);
-    assert.equal((part.script!.commands[0].command as Command).name?.text, "echo");
+    assert.equal(nodeOfType(part.script!.commands[0].command, "Command").name?.text, "echo");
   }
 });
 
 test("${ } does not interfere with ${var}", () => {
   const src = "echo ${var}";
   const c = getCmd(parse(src));
-  assert.equal(c.suffix[0].text, "${var}");
-  assert.equal(wp(src, c.suffix[0])?.[0].type, "ParameterExpansion");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "${var}");
+  assert.equal(wp(src, nodeOfType(c.suffix[0], "Word"))?.[0].type, "ParameterExpansion");
 });
 
 test("${| cmd; } recursively parsed", () => {
   const src = "echo ${| REPLY=hello; }";
   const c = getCmd(parse(src));
-  assert.equal(c.suffix[0].text, "${| REPLY=hello; }");
-  const part = wp(src, c.suffix[0])?.[0];
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "${| REPLY=hello; }");
+  const part = wp(src, nodeOfType(c.suffix[0], "Word"))?.[0];
   assert.equal(part?.type, "CommandExpansion");
   if (part?.type === "CommandExpansion") {
     assert.equal(part.script!.commands.length, 1);
@@ -344,14 +354,14 @@ test("${| cmd; } recursively parsed", () => {
 test("${| } does not interfere with ${var}", () => {
   const src = "echo ${var}";
   const c = getCmd(parse(src));
-  assert.equal(c.suffix[0].text, "${var}");
-  assert.equal(wp(src, c.suffix[0])?.[0].type, "ParameterExpansion");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "${var}");
+  assert.equal(wp(src, nodeOfType(c.suffix[0], "Word"))?.[0].type, "ParameterExpansion");
 });
 
 test("multiline brace command substitutions preserve their source text", () => {
   for (const src of ["echo ${\n  foo\n  bar\n}", "echo ${|\n  foo\n  bar\n}"]) {
     const ast = parse(src);
-    const word = getCmd(ast).suffix[0];
+    const word = nodeOfType(getCmd(ast).suffix[0], "Word");
     const part = wp(src, word)?.[0];
     assert.equal(part?.type, "CommandExpansion");
     assert.equal(part?.text, src.slice(5));
@@ -365,7 +375,7 @@ test("nested multiline brace command substitutions stay structured (#301)", () =
   const ast = parse(src);
   assert.equal(ast.errors, undefined);
   const command = getCmd(ast);
-  const outerQuoted = wp(src, command.suffix[0])?.[0];
+  const outerQuoted = wp(src, nodeOfType(command.suffix[0], "Word"))?.[0];
   assert.equal(outerQuoted?.type, "DoubleQuoted");
   if (outerQuoted?.type !== "DoubleQuoted") return;
   const outer = outerQuoted.parts[0];
@@ -373,15 +383,15 @@ test("nested multiline brace command substitutions stay structured (#301)", () =
   if (outer.type !== "CommandExpansion" || !outer.script) return;
   assert.deepEqual([outer.script.pos, outer.script.end], [11, 37]);
 
-  const outerCommand = outer.script.commands[0].command as Command;
-  const innerQuoted = wp(src, outerCommand.suffix[0])?.[0];
+  const outerCommand = nodeOfType(outer.script.commands[0].command, "Command");
+  const innerQuoted = wp(src, nodeOfType(outerCommand.suffix[0], "Word"))?.[0];
   assert.equal(innerQuoted?.type, "DoubleQuoted");
   if (innerQuoted?.type !== "DoubleQuoted") return;
   const inner = innerQuoted.parts[0];
   assert.equal(inner.type, "CommandExpansion");
   if (inner.type !== "CommandExpansion" || !inner.script) return;
   assert.deepEqual([inner.script.pos, inner.script.end], [24, 32]);
-  assert.equal((inner.script.commands[0].command as Command).name?.text, "echo");
+  assert.equal(nodeOfType(inner.script.commands[0].command, "Command").name?.text, "echo");
 });
 
 // ── case inside $() ─────────────────────────────────────────────────
@@ -392,14 +402,14 @@ test("case pattern ) inside $() does not close substitution", () => {
   const c = getCmd(ast);
   assert.equal(c.name?.text, "echo");
   const src1 = "echo $(case $x in a) echo A;; esac)";
-  const part = wp(src1, c.suffix[0])?.[0];
+  const part = wp(src1, nodeOfType(c.suffix[0], "Word"))?.[0];
   assert.equal(part?.type, "CommandExpansion");
   if (part?.type === "CommandExpansion") {
     const inner = part.script!;
     assert.equal(inner.commands.length, 1);
-    const cs = inner.commands[0].command as import("../src/types.ts").Case;
+    const cs = nodeOfType(inner.commands[0].command, "Case");
     assert.equal(cs.type, "Case");
-    assert.equal((cs.items[0].body.commands[0].command as Command).name?.text, "echo");
+    assert.equal(nodeOfType(cs.items[0].body.commands[0].command, "Command").name?.text, "echo");
   }
 });
 
@@ -409,7 +419,7 @@ test("nested case in $() with multiple patterns", () => {
   assert.equal(ast.commands.length, 1);
   const c = getCmd(ast);
   assert.equal(c.name?.text, "echo");
-  assert.equal(wp(src, c.suffix[0])?.[0].type, "CommandExpansion");
+  assert.equal(wp(src, nodeOfType(c.suffix[0], "Word"))?.[0].type, "CommandExpansion");
 });
 
 // ── heredocs inside $() ──────────────────────────────────────────────
@@ -423,16 +433,16 @@ test('apostrophe in quoted-delimiter heredoc inside "$()" (#4)', () => {
 
 test('heredoc inside "$()" resolves inner script and body', () => {
   const src = `echo "$(cat <<'E'\nit's\nE\n)"`;
-  const dq = wp(src, getCmd(parse(src)).suffix[0])?.[0];
+  const dq = wp(src, nodeOfType(getCmd(parse(src)).suffix[0], "Word"))?.[0];
   assert.equal(dq?.type, "DoubleQuoted");
   if (dq?.type === "DoubleQuoted") {
     const part = dq.parts[0];
     assert.equal(part.type, "CommandExpansion");
     if (part.type === "CommandExpansion") {
-      const inner = part.script!.commands[0].command as Command;
+      const inner = nodeOfType(part.script!.commands[0].command, "Command");
       assert.equal(inner.name?.text, "cat");
-      assert.equal(inner.redirects[0].content, "it's\n");
-      assert.equal(inner.redirects[0].heredocQuoted, true);
+      assert.equal(nodeOfType(redirectsOf(inner)[0], "HereDoc").body.text, "it's\n");
+      assert.equal(nodeOfType(redirectsOf(inner)[0], "HereDoc").delimiter?.quoted, true);
     }
   }
 });
@@ -448,7 +458,7 @@ test("$() with heredoc ends at closing paren", () => {
   assert.equal(ast.errors, undefined);
   const c = getCmd(ast);
   assert.equal(c.suffix.length, 2);
-  assert.equal(c.suffix[1].text, "after");
+  assert.equal(nodeOfType(c.suffix[1], "Word").text, "after");
 });
 
 test('double quote in heredoc body inside "$()"', () => {
@@ -559,11 +569,11 @@ test("mid-word # in $() is not a comment", () => {
 function assertHashLiteralInCommandSubstitution(src: string, expected: string[]) {
   const ast = parse(src);
   assert.equal(ast.errors, undefined, src);
-  const part = wp(src, getCmd(ast).suffix[0])?.[0];
+  const part = wp(src, nodeOfType(getCmd(ast).suffix[0], "Word"))?.[0];
   assert.equal(part?.type, "CommandExpansion", src);
   if (part?.type !== "CommandExpansion") return;
   assert.equal(part.script?.errors, undefined, src);
-  const inner = part.script?.commands[0].command as Command;
+  const inner = nodeOfType(part.script?.commands[0].command, "Command");
   assert.equal(inner.name?.text, "echo", src);
   assert.deepEqual(args(inner), expected, src);
 }
@@ -585,7 +595,7 @@ test("a continued command substitution stays structured inside $()", () => {
     [[0, 26]],
   );
 
-  const outerWord = getCmd(ast).suffix[0];
+  const outerWord = nodeOfType(getCmd(ast).suffix[0], "Word");
   assert.deepEqual(
     [outerWord.text, outerWord.value, outerWord.pos, outerWord.end],
     ["$(echo $\\\n(true)# hi)", "$(echo $\\\n(true)# hi)", 5, 26],
@@ -595,31 +605,34 @@ test("a continued command substitution stays structured inside $()", () => {
   assert.equal(outer?.type, "CommandExpansion");
   if (outer?.type !== "CommandExpansion" || !outer.script) return;
   assert.deepEqual(
-    [outer.text, outer.inner, outer.innerStart, outer.script.pos, outer.script.end, outer.script.errors],
-    ["$(echo $\\\n(true)# hi)", undefined, undefined, 7, 25, undefined],
+    [outer.text, "inner" in outer, "innerStart" in outer, outer.script.pos, outer.script.end, outer.script.errors],
+    ["$(echo $\\\n(true)# hi)", false, false, 7, 25, undefined],
   );
 
-  const innerCommand = outer.script.commands[0].command as Command;
+  const innerCommand = nodeOfType(outer.script.commands[0].command, "Command");
   assert.deepEqual(
     [innerCommand.type, innerCommand.pos, innerCommand.end, innerCommand.name?.text],
     ["Command", 7, 25, "echo"],
   );
   assert.deepEqual(
-    innerCommand.suffix.map(({ text, value, pos, end }) => [text, value, pos, end]),
+    innerCommand.suffix.map((item) => {
+      const { text, value, pos, end } = nodeOfType(item, "Word");
+      return [text, value, pos, end];
+    }),
     [
       ["$\\\n(true)#", "$(true)#", 12, 22],
       ["hi", "hi", 23, 25],
     ],
   );
 
-  const innerWord = innerCommand.suffix[0];
+  const innerWord = nodeOfType(innerCommand.suffix[0], "Word");
   const innerLexer = new Lexer(source, innerWord.pos, innerWord.end);
   const unresolvedInner = innerLexer.buildWordParts(innerWord.pos)?.[0];
   assert.equal(unresolvedInner?.type, "CommandExpansion");
   if (unresolvedInner?.type !== "CommandExpansion") return;
   assert.deepEqual(
-    [unresolvedInner.text, unresolvedInner.inner, unresolvedInner.innerStart],
-    ["$\\\n(true)", "true", 16],
+    [unresolvedInner.text, "inner" in unresolvedInner, "innerStart" in unresolvedInner],
+    ["$\\\n(true)", false, false],
   );
 
   const innerParts = innerWord.parts;
@@ -634,7 +647,7 @@ test("a continued command substitution stays structured inside $()", () => {
   assert.equal(nested?.type, "CommandExpansion");
   if (nested?.type !== "CommandExpansion" || !nested.script) return;
   assert.deepEqual([nested.script.pos, nested.script.end, nested.script.errors], [16, 20, undefined]);
-  const nestedCommand = nested.script.commands[0].command as Command;
+  const nestedCommand = nodeOfType(nested.script.commands[0].command, "Command");
   assert.deepEqual(
     [nestedCommand.pos, nestedCommand.end, nestedCommand.type, nestedCommand.name?.text],
     [16, 20, "Command", "true"],
@@ -651,13 +664,16 @@ test("a continued command substitution is one direct word", () => {
   const command = getCmd(ast);
   assert.deepEqual([command.pos, command.end, command.name?.text], [0, 18, "echo"]);
   assert.deepEqual(
-    command.suffix.map(({ text, value, pos, end }) => [text, value, pos, end]),
+    command.suffix.map((item) => {
+      const { text, value, pos, end } = nodeOfType(item, "Word");
+      return [text, value, pos, end];
+    }),
     [
       ["$\\\n(true)#", "$(true)#", 5, 15],
       ["hi", "hi", 16, 18],
     ],
   );
-  const expansion = command.suffix[0].parts?.[0];
+  const expansion = nodeOfType(command.suffix[0], "Word").parts?.[0];
   assert.equal(expansion?.type, "CommandExpansion");
   if (expansion?.type !== "CommandExpansion" || !expansion.script) return;
   assert.deepEqual(
@@ -668,7 +684,7 @@ test("a continued command substitution is one direct word", () => {
   const repeatedSource = "echo $\\\n\\\n(true)";
   const repeatedAst = parse(repeatedSource);
   assert.equal(repeatedAst.errors, undefined);
-  const repeatedWord = getCmd(repeatedAst).suffix[0];
+  const repeatedWord = nodeOfType(getCmd(repeatedAst).suffix[0], "Word");
   assert.deepEqual(
     [repeatedWord.text, repeatedWord.value, repeatedWord.pos, repeatedWord.end],
     ["$\\\n\\\n(true)", "$(true)", 5, 16],
@@ -716,7 +732,7 @@ test("an unescaped newline after $ does not join a command substitution", () => 
       [7, 13, "Subshell"],
     ],
   );
-  const dollar = getCmd(ast).suffix[0];
+  const dollar = nodeOfType(getCmd(ast).suffix[0], "Word");
   assert.deepEqual([dollar.text, dollar.value, dollar.pos, dollar.end, dollar.parts], ["$", "$", 5, 6, undefined]);
 });
 
@@ -726,17 +742,17 @@ test("array-like assignment keeps an adjacent # literal inside $() (#68)", () =>
   assert.equal(ast.errors, undefined);
   const outer = getCmd(ast);
   assert.deepEqual(args(outer), ["$(a=(x)# )", "tail"]);
-  const part = wp(src, outer.suffix[0])?.[0];
+  const part = wp(src, nodeOfType(outer.suffix[0], "Word"))?.[0];
   assert.equal(part?.type, "CommandExpansion");
   if (part?.type !== "CommandExpansion") return;
   assert.ok(part.script);
   if (!part.script) return;
-  const assignment = (part.script.commands[0].command as Command).prefix[0];
+  const assignment = nodeOfType(part.script.commands[0].command, "Command").prefix[0];
   assert.equal(assignment.type, "Assignment");
   if (assignment.type !== "Assignment") return;
   assert.equal(assignment.text, "a=(x)#");
-  assert.equal(assignment.value?.text, "(x)#");
-  assert.equal(assignment.array, undefined);
+  assert.equal(nodeOfType(assignment.value, "Word").text, "(x)#");
+  assert.equal(arrayElements(assignment), undefined);
 });
 
 test("comment in single-line $() swallows the paren like bash", () => {
@@ -752,13 +768,13 @@ test("heredoc delimiter directly before closing paren", () => {
   const ast = parse(src);
   assert.equal(ast.errors, undefined);
   assert.equal(verify(src, ast), src);
-  const dq = wp(src, getCmd(ast).suffix[0])?.[0];
+  const dq = wp(src, nodeOfType(getCmd(ast).suffix[0], "Word"))?.[0];
   assert.equal(dq?.type, "DoubleQuoted");
   if (dq?.type === "DoubleQuoted") {
     assert.equal(dq.parts[0].type, "CommandExpansion");
     if (dq.parts[0].type === "CommandExpansion") {
-      const inner = dq.parts[0].script!.commands[0].command as Command;
-      assert.equal(inner.redirects[0].content, "hi\n");
+      const inner = nodeOfType(dq.parts[0].script!.commands[0].command, "Command");
+      assert.equal(nodeOfType(redirectsOf(inner)[0], "HereDoc").body.text, "hi\n");
     }
   }
 });
@@ -776,13 +792,13 @@ test("delimiter-prefixed body line does not end heredoc", () => {
   const src = `echo "$(cat <<E\nError: x\nE\n)"`;
   const ast = parse(src);
   assert.equal(ast.errors, undefined);
-  const dq = wp(src, getCmd(ast).suffix[0])?.[0];
+  const dq = wp(src, nodeOfType(getCmd(ast).suffix[0], "Word"))?.[0];
   assert.equal(dq?.type, "DoubleQuoted");
   if (dq?.type === "DoubleQuoted") {
     assert.equal(dq.parts[0].type, "CommandExpansion");
     if (dq.parts[0].type === "CommandExpansion") {
-      const inner = dq.parts[0].script!.commands[0].command as Command;
-      assert.equal(inner.redirects[0].content, "Error: x\n");
+      const inner = nodeOfType(dq.parts[0].script!.commands[0].command, "Command");
+      assert.equal(nodeOfType(redirectsOf(inner)[0], "HereDoc").body.text, "Error: x\n");
     }
   }
 });
@@ -821,21 +837,21 @@ test("$(( is a command substitution unless the inner pair closes it", () => {
     const ast = parse(source);
     assert.equal(ast.errors, undefined, source);
     assert.deepEqual(
-      wp(source, getCmd(ast).suffix[0])?.map((p) => p.type),
+      wp(source, nodeOfType(getCmd(ast).suffix[0], "Word"))?.map((p) => p.type),
       ["ArithmeticExpansion"],
       source,
     );
   }
 
   const substitutions: [string, string][] = [
-    ["echo $((echo hi) 2>/dev/null)", "Subshell"],
+    ["echo $((echo hi) 2>/dev/null)", "Redirected"],
     ["echo $((a) || (b))", "AndOr"],
     ["echo $((a); b)", "Subshell"],
   ];
   for (const [source, inner] of substitutions) {
     const ast = parse(source);
     assert.equal(ast.errors, undefined, source);
-    const part = wp(source, getCmd(ast).suffix[0])?.[0];
+    const part = wp(source, nodeOfType(getCmd(ast).suffix[0], "Word"))?.[0];
     assert.equal(part?.type, "CommandExpansion", source);
     assert.equal(part?.type === "CommandExpansion" && part.script?.commands[0].command.type, inner, source);
   }

@@ -1,3 +1,4 @@
+import { nodeOfType } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
@@ -7,7 +8,6 @@ import type {
   CommandExpansionPart,
   DoubleQuotedPart,
   If,
-  For,
   ParameterExpansionPart,
   ParsedScript,
   While,
@@ -62,12 +62,14 @@ test("param expansion with nested command substitution", () => {
 test("normal expansion nesting keeps full nested structure without errors", () => {
   const ast = parse('echo "${a:-${b:-$(x)}}"');
   assert.equal(ast.errors, undefined);
-  const dq = (ast.commands[0].command as Command).suffix[0].parts?.[0] as DoubleQuotedPart;
+  const dq = nodeOfType((ast.commands[0].command as Command).suffix[0], "Word").parts?.[0] as DoubleQuotedPart;
   const outer = dq.parts[0] as ParameterExpansionPart;
   assert.equal(outer.parameter, "a");
-  const inner = outer.operand?.parts?.[0] as ParameterExpansionPart;
+  if (outer.operation?.type !== "Default") assert.fail();
+  const inner = outer.operation.operand.parts?.[0] as ParameterExpansionPart;
   assert.equal(inner.parameter, "b");
-  const sub = inner.operand?.parts?.[0] as CommandExpansionPart;
+  if (inner.operation?.type !== "Default") assert.fail();
+  const sub = inner.operation.operand.parts?.[0] as CommandExpansionPart;
   assert.equal(sub.type, "CommandExpansion");
   assert.ok(sub.script);
   const subCommand = sub.script.commands[0].command as Command;
@@ -84,12 +86,14 @@ test("parameter expansion nesting at the parser limit remains lossless", () => {
   assert.equal(ast.errors, undefined);
   let part = (ast.commands[0].command as Command).name?.parts?.[0] as ParameterExpansionPart;
   let levels = 1;
-  while (part.operand?.parts) {
-    part = part.operand.parts[0] as ParameterExpansionPart;
+  while (part.operation?.type === "Default" && part.operation.operand.parts) {
+    part = part.operation.operand.parts[0] as ParameterExpansionPart;
     levels++;
   }
   assert.equal(levels, 256);
-  assert.equal(part.operand?.text, "x");
+  assert.equal(part.operation?.type, "Default");
+  if (part.operation?.type !== "Default") assert.fail();
+  assert.equal(part.operation.operand.text, "x");
 });
 
 test("excessive parameter expansion nesting degrades without stack overflow", () => {
@@ -123,8 +127,8 @@ test("nested substitution scripts stop at a flagged boundary script", () => {
   let boundary: ParsedScript | undefined;
   for (;;) {
     const command = script.commands[0]?.command;
-    const assignment = command?.type === "Command" ? command.prefix[0] : undefined;
-    const sub = assignment?.indexParts?.find((p) => p.type === "CommandExpansion");
+    const assignment = nodeOfType(command?.type === "Command" ? command.prefix[0] : undefined, "Assignment");
+    const sub = assignment.index?.parts?.find((p) => p.type === "CommandExpansion");
     if (!sub) break;
     depth++;
     if (sub.script === undefined) {
@@ -175,7 +179,7 @@ test("nested for inside while", () => {
   const src = "while true; do for x in a b; do echo $x; done; done";
   const ast = roundtrip(src);
   const wh = ast.commands[0].command as While;
-  const fr = (wh.body.commands[0] as Statement).command as For;
+  const fr = nodeOfType(wh.body.commands[0].command, "For");
   assert.equal(fr.type, "For");
 });
 
@@ -199,7 +203,7 @@ test("excessive subshell nesting reports an error and preserves following comman
   assert.equal(ast.commands.length, 2);
   assert.equal(ast.commands[1].command.type, "Command");
   assert.equal(ast.commands[1].command.name?.value, "echo");
-  assert.equal(ast.commands[1].command.suffix[0].value, "after");
+  assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after");
 });
 
 test("brace, if, and test nesting at the parser limit remains lossless", () => {
@@ -231,7 +235,7 @@ test("mixed compound nesting shares one parser depth budget", () => {
   );
   assert.equal(ast.commands.length, 2);
   assert.equal(ast.commands[1].command.type, "Command");
-  assert.equal(ast.commands[1].command.suffix[0].value, "after");
+  assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after");
 });
 
 test("loop, select, and case nesting at the parser limit remains lossless", () => {
@@ -265,7 +269,7 @@ test("excessive loop, select, and case nesting preserves following commands", ()
     );
     assert.equal(ast.commands.length, 2, message);
     assert.equal(ast.commands[1].command.type, "Command", message);
-    assert.equal(ast.commands[1].command.suffix[0].value, "after", message);
+    assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after", message);
   }
 });
 
@@ -279,7 +283,7 @@ test("excessive brace nesting recovers past inert braces and preserves following
   );
   assert.equal(ast.commands.length, 2);
   assert.equal(ast.commands[1].command.type, "Command");
-  assert.equal(ast.commands[1].command.suffix[0].value, "after");
+  assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after");
 });
 
 test("compound recovery handles C-style for loops with brace bodies", () => {
@@ -292,7 +296,7 @@ test("compound recovery handles C-style for loops with brace bodies", () => {
   );
   assert.equal(ast.commands.length, 2);
   assert.equal(ast.commands[1].command.type, "Command");
-  assert.equal(ast.commands[1].command.suffix[0].value, "after");
+  assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after");
 });
 
 test("compound recovery tracks command prefixes before compound bodies", () => {
@@ -318,7 +322,7 @@ test("compound recovery tracks command prefixes before compound bodies", () => {
     );
     assert.equal(ast.commands.length, 2, body);
     assert.equal(ast.commands[1].command.type, "Command", body);
-    assert.equal(ast.commands[1].command.suffix[0].value, "after", body);
+    assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after", body);
   }
 });
 
@@ -332,7 +336,7 @@ test("compound recovery treats reserved case patterns as data", () => {
   );
   assert.equal(ast.commands.length, 2);
   assert.equal(ast.commands[1].command.type, "Command");
-  assert.equal(ast.commands[1].command.suffix[0].value, "after");
+  assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after");
 });
 
 test("compound recovery tracks ordinary separators inside case item bodies", () => {
@@ -353,7 +357,7 @@ test("compound recovery tracks ordinary separators inside case item bodies", () 
     );
     assert.equal(ast.commands.length, 2, body);
     assert.equal(ast.commands[1].command.type, "Command", body);
-    assert.equal(ast.commands[1].command.suffix[0].value, "after", body);
+    assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after", body);
   }
 });
 
@@ -368,7 +372,7 @@ test("compound recovery tracks separators after bare assignments", () => {
     );
     assert.equal(ast.commands.length, 2, body);
     assert.equal(ast.commands[1].command.type, "Command", body);
-    assert.equal(ast.commands[1].command.suffix[0].value, "after", body);
+    assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after", body);
   }
 });
 
@@ -382,7 +386,7 @@ test("compound recovery tracks newline separators after bare assignments", () =>
   );
   assert.equal(ast.commands.length, 2);
   assert.equal(ast.commands[1].command.type, "Command");
-  assert.equal(ast.commands[1].command.suffix[0].value, "after");
+  assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after");
 });
 
 test("excessive if nesting recovers past inert fi words and preserves following commands", () => {
@@ -395,7 +399,7 @@ test("excessive if nesting recovers past inert fi words and preserves following 
   );
   assert.equal(ast.commands.length, 2);
   assert.equal(ast.commands[1].command.type, "Command");
-  assert.equal(ast.commands[1].command.suffix[0].value, "after");
+  assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after");
 });
 
 test("deep elif chains remain lossless and preserve following commands", () => {
@@ -411,7 +415,7 @@ test("deep elif chains remain lossless and preserve following commands", () => {
   assert.equal(branchCount, 2_000);
   assert.equal(ast.commands.length, 2);
   assert.equal(ast.commands[1].command.type, "Command");
-  assert.equal(ast.commands[1].command.suffix[0].value, "after");
+  assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after");
 });
 
 test("flat elif chains consume one shared syntax depth level", () => {
@@ -430,7 +434,7 @@ test("excessive test grouping recovers past inert parens and preserves following
   );
   assert.equal(ast.commands.length, 2);
   assert.equal(ast.commands[1].command.type, "Command");
-  assert.equal(ast.commands[1].command.suffix[0].value, "after");
+  assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after");
 });
 
 test("deep test negation remains lossless and preserves following commands", () => {
@@ -448,7 +452,7 @@ test("deep test negation remains lossless and preserves following commands", () 
   assert.equal(depth, 4_000);
   assert.equal(ast.commands.length, 2);
   assert.equal(ast.commands[1].command.type, "Command");
-  assert.equal(ast.commands[1].command.suffix[0].value, "after");
+  assert.equal(nodeOfType(ast.commands[1].command.suffix[0], "Assignment", "Word").value, "after");
 });
 
 test("case inside if inside function", () => {

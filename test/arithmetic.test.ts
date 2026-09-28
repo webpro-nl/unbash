@@ -1,23 +1,13 @@
+import { nodeOfType } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseArithmeticExpression, type ArithmeticParseCollector } from "../src/arithmetic.ts";
 import { Lexer } from "../src/lexer.ts";
 import { parse } from "../src/parser.ts";
 import { computeWordParts } from "../src/parts.ts";
-import type {
-  ArithmeticBinary,
-  ArithmeticCommand,
-  ArithmeticCommandExpansion,
-  ArithmeticExpression,
-  ArithmeticGroup,
-  ArithmeticTernary,
-  ArithmeticUnary,
-  ArithmeticWord,
-  ArithmeticFor,
-  Command,
-} from "../src/types.ts";
+import type { ArithmeticExpression } from "../src/types.ts";
 
-const getCmd = (ast: ReturnType<typeof parse>, i = 0) => ast.commands[i].command as Command;
+const getCmd = (ast: ReturnType<typeof parse>, i = 0) => nodeOfType(ast.commands[i].command, "Command");
 
 // Expressions embedding `$(`, `${`, or `$((` require the lexer's delimiter scanners,
 // wired exactly as the production callers wire them.
@@ -35,11 +25,11 @@ const collectorFor = (src: string): ArithmeticParseCollector => {
 };
 
 const parseEmbedded = (src: string) => parseArithmeticExpression(src, 0, collectorFor(src));
-const bin = (e: ArithmeticExpression) => e as ArithmeticBinary;
-const unary = (e: ArithmeticExpression) => e as ArithmeticUnary;
-const ternary = (e: ArithmeticExpression) => e as ArithmeticTernary;
-const group = (e: ArithmeticExpression) => e as ArithmeticGroup;
-const word = (e: ArithmeticExpression) => e as ArithmeticWord;
+const bin = (e: ArithmeticExpression) => nodeOfType(e, "ArithmeticBinary");
+const unary = (e: ArithmeticExpression) => nodeOfType(e, "ArithmeticUnary");
+const ternary = (e: ArithmeticExpression) => nodeOfType(e, "ArithmeticTernary");
+const group = (e: ArithmeticExpression) => nodeOfType(e, "ArithmeticGroup");
+const word = (e: ArithmeticExpression) => nodeOfType(e, "ArithmeticWord");
 
 // --- Direct parser tests ---
 
@@ -291,7 +281,7 @@ test("array subscript", () => {
 test("array subscripts keep adjacent command substitutions structured", () => {
   const src = "echo $((arr[1+$(one)$(two)]))";
   const c = getCmd(parse(src));
-  const expansion = computeWordParts(src, c.suffix[0])![0];
+  const expansion = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(expansion.type, "ArithmeticExpansion");
   if (expansion.type !== "ArithmeticExpansion") return;
   assert.equal(expansion.expression?.type, "ArithmeticWord");
@@ -311,7 +301,7 @@ test("adjacent arithmetic command substitutions remain structured", () => {
   for (const body of ["$(one)$(two)", "$(one)x$(two)", "x$(one)", "array[0]$(one)"]) {
     const src = `echo $(( ${body} ))`;
     const c = getCmd(parse(src));
-    const expansion = computeWordParts(src, c.suffix[0])![0];
+    const expansion = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))![0];
     assert.equal(expansion.type, "ArithmeticExpansion");
     if (expansion.type !== "ArithmeticExpansion") continue;
     assert.equal(expansion.expression?.type, "ArithmeticWord");
@@ -333,7 +323,7 @@ test("malformed arithmetic keeps later command substitutions structured", () => 
   for (const body of ["x $(danger)", "x @ $(danger)", "1 2 $(danger)"]) {
     const src = `echo $(( ${body} ))`;
     const c = getCmd(parse(src));
-    const expansion = computeWordParts(src, c.suffix[0])![0];
+    const expansion = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))![0];
     assert.equal(expansion.type, "ArithmeticExpansion");
     if (expansion.type !== "ArithmeticExpansion") continue;
     assert.equal(expansion.expression?.type, "ArithmeticWord");
@@ -350,7 +340,7 @@ test("malformed arithmetic keeps later command substitutions structured", () => 
 test("quoted command substitutions in arithmetic remain structured", () => {
   const src = 'echo $(( "$(danger)" ))';
   const c = getCmd(parse(src));
-  const expansion = computeWordParts(src, c.suffix[0])![0];
+  const expansion = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(expansion.type, "ArithmeticExpansion");
   if (expansion.type !== "ArithmeticExpansion") return;
   assert.equal(expansion.expression?.type, "ArithmeticWord");
@@ -365,7 +355,7 @@ test("quoted command substitutions in arithmetic remain structured", () => {
 test("quoted closing pairs do not truncate nested arithmetic expansions", () => {
   const src = 'echo $(( $(( "safe))" + $(danger) )) + 1 ))';
   const c = getCmd(parse(src));
-  const expansion = computeWordParts(src, c.suffix[0])![0];
+  const expansion = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(expansion.type, "ArithmeticExpansion");
   if (expansion.type !== "ArithmeticExpansion") return;
   assert.equal(expansion.expression?.type, "ArithmeticBinary");
@@ -383,7 +373,7 @@ test("quoted closing pairs do not truncate nested arithmetic expansions", () => 
 test("legacy backticks in arithmetic remain structured", () => {
   const src = "echo $((`danger` + 1))";
   const c = getCmd(parse(src));
-  const expansion = computeWordParts(src, c.suffix[0])![0];
+  const expansion = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(expansion.type, "ArithmeticExpansion");
   if (expansion.type !== "ArithmeticExpansion") return;
   assert.equal(expansion.expression?.type, "ArithmeticBinary");
@@ -397,7 +387,7 @@ test("legacy backticks in arithmetic remain structured", () => {
 test("arithmetic subscripts keep quoted closing brackets inside substitutions", () => {
   const src = 'echo $((arr[$(printf "]")]))';
   const c = getCmd(parse(src));
-  const expansion = computeWordParts(src, c.suffix[0])![0];
+  const expansion = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(expansion.type, "ArithmeticExpansion");
   if (expansion.type !== "ArithmeticExpansion") return;
   assert.equal(expansion.expression?.type, "ArithmeticWord");
@@ -410,7 +400,7 @@ test("arithmetic subscripts keep quoted closing brackets inside substitutions", 
 test("quoted closing parentheses do not truncate arithmetic command substitutions", () => {
   const src = 'echo $(( $(printf ")") + 1 ))';
   const c = getCmd(parse(src));
-  const expansion = computeWordParts(src, c.suffix[0])![0];
+  const expansion = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(expansion.type, "ArithmeticExpansion");
   if (expansion.type !== "ArithmeticExpansion") return;
   assert.equal(expansion.expression?.type, "ArithmeticBinary");
@@ -427,7 +417,7 @@ test("quoted closing parentheses do not truncate arithmetic command substitution
 test("arithmetic parameter indexes keep command substitutions structured", () => {
   const src = "echo $(( ${arr[$(danger)]} + 1 ))";
   const c = getCmd(parse(src));
-  const expansion = computeWordParts(src, c.suffix[0])![0];
+  const expansion = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(expansion.type, "ArithmeticExpansion");
   if (expansion.type !== "ArithmeticExpansion") return;
   assert.equal(expansion.expression?.type, "ArithmeticBinary");
@@ -437,13 +427,13 @@ test("arithmetic parameter indexes keep command substitutions structured", () =>
   const parameter = expansion.expression.left.parts?.find((part) => part.type === "ParameterExpansion");
   assert.equal(parameter?.type, "ParameterExpansion");
   if (parameter?.type !== "ParameterExpansion") return;
-  assert.equal(parameter.indexParts?.[0].type, "CommandExpansion");
+  assert.equal(parameter.index?.parts?.[0].type, "CommandExpansion");
 });
 
 test("nested arithmetic word parsing preserves outer and inner command substitutions", () => {
   const src = "echo $(( $(outer) + a[$((1+$(inner)))] ))";
   const c = getCmd(parse(src));
-  const expansion = computeWordParts(src, c.suffix[0])![0];
+  const expansion = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(expansion.type, "ArithmeticExpansion");
   if (expansion.type !== "ArithmeticExpansion") return;
   assert.equal(expansion.expression?.type, "ArithmeticBinary");
@@ -513,9 +503,9 @@ test("complex: nested ternary", () => {
 test("$((expr)) in word parts has expr", () => {
   const src = "echo $((x + y))";
   const c = getCmd(parse(src));
-  const parts = computeWordParts(src, c.suffix[0])!;
+  const parts = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))!;
   assert.equal(parts[0].type, "ArithmeticExpansion");
-  const expr = (parts[0] as any).expression;
+  const expr = nodeOfType(parts[0], "ArithmeticExpansion").expression;
   assert.ok(expr);
   assert.equal(expr.type, "ArithmeticBinary");
   assert.equal(expr.operator, "+");
@@ -524,25 +514,24 @@ test("$((expr)) in word parts has expr", () => {
 test("$((expr)) nested in double quotes", () => {
   const src = 'echo "result: $((a * b))"';
   const c = getCmd(parse(src));
-  const parts = computeWordParts(src, c.suffix[0])!;
+  const parts = computeWordParts(src, nodeOfType(c.suffix[0], "Word"))!;
   assert.equal(parts[0].type, "DoubleQuoted");
-  const inner = (parts[0] as any).parts;
-  const arith = inner.find((p: any) => p.type === "ArithmeticExpansion");
+  const inner = nodeOfType(parts[0], "DoubleQuoted").parts;
+  const arith = inner.find((p) => p.type === "ArithmeticExpansion");
   assert.ok(arith);
-  assert.ok(arith.expression);
-  assert.equal(arith.expression.operator, "*");
+  assert.equal(nodeOfType(arith.expression, "ArithmeticBinary").operator, "*");
 });
 
 // --- Integration: (( expr )) ---
 
 test("(( expr )) has parsed expr in ArithmeticCommand", () => {
   const ast = parse("(( x += 5 ))");
-  const node = ast.commands[0].command as import("../src/types.ts").ArithmeticCommand;
+  const node = nodeOfType(ast.commands[0].command, "ArithmeticCommand");
   assert.equal(node.type, "ArithmeticCommand");
   assert.equal(node.body, " x += 5 ");
   assert.ok(node.expression);
   assert.equal(node.expression!.type, "ArithmeticBinary");
-  assert.equal((node.expression as any).operator, "+=");
+  assert.equal(nodeOfType(node.expression, "ArithmeticBinary").operator, "+=");
 });
 
 test("arithmetic commands keep nested subscript words (#272)", () => {
@@ -577,21 +566,21 @@ test("ArithmeticCommand serializes its lazy expression", () => {
 
 test("for (( init; test; update )) has parsed exprs", () => {
   const ast = parse("for (( i = 0; i < 10; i++ )); do echo $i; done");
-  const node = ast.commands[0].command as ArithmeticFor;
+  const node = nodeOfType(ast.commands[0].command, "ArithmeticFor");
   assert.equal(node.type, "ArithmeticFor");
 
   assert.ok(node.initialize);
   assert.equal(node.initialize!.type, "ArithmeticBinary");
-  assert.equal((node.initialize as ArithmeticBinary).operator, "=");
+  assert.equal(nodeOfType(node.initialize, "ArithmeticBinary").operator, "=");
 
   assert.ok(node.test);
   assert.equal(node.test!.type, "ArithmeticBinary");
-  assert.equal((node.test as ArithmeticBinary).operator, "<");
+  assert.equal(nodeOfType(node.test, "ArithmeticBinary").operator, "<");
 
   assert.ok(node.update);
   assert.equal(node.update!.type, "ArithmeticUnary");
-  assert.equal((node.update as ArithmeticUnary).operator, "++");
-  assert.equal((node.update as ArithmeticUnary).prefix, false);
+  assert.equal(nodeOfType(node.update, "ArithmeticUnary").operator, "++");
+  assert.equal(nodeOfType(node.update, "ArithmeticUnary").prefix, false);
 });
 
 test("ArithmeticFor serializes all lazy expressions", () => {
@@ -614,25 +603,25 @@ test("ArithmeticFor serializes all lazy expressions", () => {
 
 test("for (( i=0, j=10; ... )) comma in init", () => {
   const ast = parse("for (( i = 0, j = 10; i < j; i++, j-- )); do echo; done");
-  const node = ast.commands[0].command as ArithmeticFor;
+  const node = nodeOfType(ast.commands[0].command, "ArithmeticFor");
   assert.ok(node.initialize);
-  assert.equal((node.initialize as ArithmeticBinary).operator, ",");
+  assert.equal(nodeOfType(node.initialize, "ArithmeticBinary").operator, ",");
   assert.ok(node.update);
-  assert.equal((node.update as ArithmeticBinary).operator, ",");
+  assert.equal(nodeOfType(node.update, "ArithmeticBinary").operator, ",");
 });
 
 // --- ArithmeticCommand ---
 
 test("(( )) produces ArithmeticCommand", () => {
   const ast = parse("(( x++ ))");
-  const node = ast.commands[0].command as import("../src/types.ts").ArithmeticCommand;
+  const node = nodeOfType(ast.commands[0].command, "ArithmeticCommand");
   assert.equal(node.type, "ArithmeticCommand");
   assert.equal(node.body.trim(), "x++");
 });
 
 test("(( )) has parsed expr", () => {
   const ast = parse("(( 1 + 2 * 3 ))");
-  const node = ast.commands[0].command as import("../src/types.ts").ArithmeticCommand;
+  const node = nodeOfType(ast.commands[0].command, "ArithmeticCommand");
   assert.ok(node.expression);
   assert.equal(node.expression!.type, "ArithmeticBinary");
 });
@@ -649,21 +638,21 @@ test("(( )) in while clause", () => {
 
 test("(( )) in logical expression", () => {
   const ast = parse("(( x > 0 )) && echo yes");
-  const logic = ast.commands[0].command as import("../src/types.ts").AndOr;
+  const logic = nodeOfType(ast.commands[0].command, "AndOr");
   assert.equal(logic.type, "AndOr");
   assert.equal(logic.commands[0].type, "ArithmeticCommand");
 });
 
 test("(( )) in pipeline", () => {
   const ast = parse("(( x++ )) | cat");
-  const pipe = ast.commands[0].command as import("../src/types.ts").Pipeline;
+  const pipe = nodeOfType(ast.commands[0].command, "Pipeline");
   assert.equal(pipe.type, "Pipeline");
   assert.equal(pipe.commands[0].type, "ArithmeticCommand");
 });
 
 test("(( )) body preserved", () => {
   const ast = parse("(( a = b + c - d * e ))");
-  const node = ast.commands[0].command as import("../src/types.ts").ArithmeticCommand;
+  const node = nodeOfType(ast.commands[0].command, "ArithmeticCommand");
   assert.equal(node.body, " a = b + c - d * e ");
 });
 
@@ -682,19 +671,19 @@ test("(( at command position is arithmetic command", () => {
 
 test("$(( )) is arithmetic expansion in word", () => {
   const c = getCmd(parse("echo $((1+2))"));
-  assert.equal(c.suffix[0].text, "$((1+2))");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "$((1+2))");
 });
 
 test("arithmetic expansion keeps grouped closing parentheses", () => {
   for (const source of ["$((1 >> (3 << 2)))", "$((-(1)))", "$((a <= (1 || 2)))", "$(((1+2)))"]) {
-    const word = getCmd(parse(`echo ${source}`)).suffix[0];
+    const word = nodeOfType(getCmd(parse(`echo ${source}`)).suffix[0], "Word");
     assert.equal(word.parts?.[0].text, source);
   }
 
   for (const nested of ["$(((1 + $((2)) + 3)))", "$(((1 + $(((2 + $((3)) + 4))) + 5)))"]) {
     const command = getCmd(parse(`echo ${nested} tail`));
-    assert.equal(command.suffix[0].parts?.[0].text, nested);
-    assert.equal(command.suffix[1].text, "tail");
+    assert.equal(nodeOfType(command.suffix[0], "Word").parts?.[0].text, nested);
+    assert.equal(nodeOfType(command.suffix[1], "Word").text, "tail");
   }
 });
 
@@ -726,34 +715,34 @@ test("command substitution in arithmetic - raw parse", () => {
   const e = parseEmbedded("$(cmd) + 1")!;
   assert.equal(e.type, "ArithmeticBinary");
   assert.equal(bin(e).operator, "+");
-  const left = bin(e).left;
+  const left = nodeOfType(bin(e).left, "ArithmeticCommandExpansion");
   assert.equal(left.type, "ArithmeticCommandExpansion");
-  assert.equal((left as ArithmeticCommandExpansion).text, "$(cmd)");
-  assert.equal((left as ArithmeticCommandExpansion).inner, "cmd");
-  assert.equal((left as ArithmeticCommandExpansion).script, undefined);
+  assert.equal(left.text, "$(cmd)");
+  assert.equal("inner" in left, false);
+  assert.equal(left.script, undefined);
 });
 
 test("command substitution with argument in arithmetic", () => {
   const e = parseEmbedded("$(echo hello) + x")!;
   assert.equal(e.type, "ArithmeticBinary");
-  const left = bin(e).left as ArithmeticCommandExpansion;
+  const left = nodeOfType(bin(e).left, "ArithmeticCommandExpansion");
   assert.equal(left.type, "ArithmeticCommandExpansion");
   assert.equal(left.text, "$(echo hello)");
-  assert.equal(left.inner, "echo hello");
+  assert.equal("inner" in left, false);
 });
 
 test("nested command substitution in arithmetic", () => {
-  const e = parseEmbedded("$(echo $(inner))")!;
+  const e = nodeOfType(parseEmbedded("$(echo $(inner))")!, "ArithmeticCommandExpansion");
   assert.equal(e.type, "ArithmeticCommandExpansion");
-  assert.equal((e as ArithmeticCommandExpansion).text, "$(echo $(inner))");
-  assert.equal((e as ArithmeticCommandExpansion).inner, "echo $(inner)");
+  assert.equal(e.text, "$(echo $(inner))");
+  assert.equal("inner" in e, false);
 });
 
 test("command substitution at start and end of expression", () => {
   const e = parseEmbedded("$(a) + $(b)")!;
   assert.equal(e.type, "ArithmeticBinary");
-  const left = bin(e).left as ArithmeticCommandExpansion;
-  const right = bin(e).right as ArithmeticCommandExpansion;
+  const left = nodeOfType(bin(e).left, "ArithmeticCommandExpansion");
+  const right = nodeOfType(bin(e).right, "ArithmeticCommandExpansion");
   assert.equal(left.type, "ArithmeticCommandExpansion");
   assert.equal(right.type, "ArithmeticCommandExpansion");
   assert.equal(left.text, "$(a)");
@@ -762,42 +751,42 @@ test("command substitution at start and end of expression", () => {
 
 test("command substitution resolved in arithmetic expansion", () => {
   const ast = parse("echo $(( $(cmd) + 1 ))");
-  const parts = computeWordParts("echo $(( $(cmd) + 1 ))", getCmd(ast).suffix[0])!;
-  const arith = parts[0] as import("../src/types.ts").ArithmeticExpansionPart;
+  const parts = computeWordParts("echo $(( $(cmd) + 1 ))", nodeOfType(getCmd(ast).suffix[0], "Word"))!;
+  const arith = nodeOfType(parts[0], "ArithmeticExpansion");
   assert.equal(arith.type, "ArithmeticExpansion");
-  const binary = arith.expression as ArithmeticBinary;
+  const binary = nodeOfType(arith.expression, "ArithmeticBinary");
   assert.equal(binary.type, "ArithmeticBinary");
-  const left = binary.left as ArithmeticCommandExpansion;
+  const left = nodeOfType(binary.left, "ArithmeticCommandExpansion");
   assert.equal(left.type, "ArithmeticCommandExpansion");
-  assert.equal(left.inner, undefined); // cleared after resolution
+  assert.equal("inner" in left, false);
   assert.ok(left.script); // now populated
   assert.equal(left.script!.commands[0].command.type, "Command");
 });
 
 test("command substitution in arithmetic command", () => {
   const ast = parse("(( $(cmd) ))");
-  const arithCmd = ast.commands[0].command as import("../src/types.ts").ArithmeticCommand;
-  const expr = arithCmd.expression!;
+  const arithCmd = nodeOfType(ast.commands[0].command, "ArithmeticCommand");
+  const expr = nodeOfType(arithCmd.expression!, "ArithmeticCommandExpansion");
   assert.equal(expr.type, "ArithmeticCommandExpansion");
-  assert.ok((expr as ArithmeticCommandExpansion).script);
+  assert.ok(expr.script);
 });
 
 test("command substitution in arithmetic for loop", () => {
   const ast = parse("for (( i = $(start); i < $(limit); i++ )); do echo $i; done");
-  const forLoop = ast.commands[0].command as ArithmeticFor;
+  const forLoop = nodeOfType(ast.commands[0].command, "ArithmeticFor");
   assert.ok(forLoop.initialize);
-  const initBin = forLoop.initialize as ArithmeticBinary;
+  const initBin = nodeOfType(forLoop.initialize, "ArithmeticBinary");
   assert.equal(initBin.type, "ArithmeticBinary");
   assert.equal(initBin.operator, "=");
-  const initRight = initBin.right as ArithmeticCommandExpansion;
+  const initRight = nodeOfType(initBin.right, "ArithmeticCommandExpansion");
   assert.equal(initRight.type, "ArithmeticCommandExpansion");
   assert.equal(initRight.text, "$(start)");
   assert.ok(initRight.script);
 
   assert.ok(forLoop.test);
-  const testBin = forLoop.test as ArithmeticBinary;
+  const testBin = nodeOfType(forLoop.test, "ArithmeticBinary");
   assert.equal(testBin.type, "ArithmeticBinary");
-  const testRight = testBin.right as ArithmeticCommandExpansion;
+  const testRight = nodeOfType(testBin.right, "ArithmeticCommandExpansion");
   assert.equal(testRight.type, "ArithmeticCommandExpansion");
   assert.ok(testRight.script);
 });
@@ -808,7 +797,7 @@ test("deprecated $[ ] arithmetic expansion", () => {
   for (const source of ["echo $[1+2]", "echo $[(1+2)*3]", "echo $[((a+b)*(c-d))/e]", "echo $[ (1) ]"]) {
     const ast = parse(source);
     assert.equal(ast.errors, undefined, source);
-    const word = getCmd(ast).suffix[0];
+    const word = nodeOfType(getCmd(ast).suffix[0], "Word");
     assert.equal(word.text, source.slice(5), source);
     const part = computeWordParts(source, word)![0];
     assert.equal(part.type, "ArithmeticExpansion", source);
@@ -818,13 +807,13 @@ test("deprecated $[ ] arithmetic expansion", () => {
 
 test("deprecated $[ ] keeps nested substitutions structured", () => {
   const src = "echo $[$(one)+$(two)]";
-  const part = computeWordParts(src, getCmd(parse(src)).suffix[0])![0];
+  const part = computeWordParts(src, nodeOfType(getCmd(parse(src)).suffix[0], "Word"))![0];
   assert.equal(part.type, "ArithmeticExpansion");
   if (part.type !== "ArithmeticExpansion") return;
-  const bin = part.expression as ArithmeticBinary;
+  const bin = nodeOfType(part.expression, "ArithmeticBinary");
   assert.equal(bin.type, "ArithmeticBinary");
-  assert.equal((bin.left as ArithmeticCommandExpansion).text, "$(one)");
-  assert.equal((bin.right as ArithmeticCommandExpansion).text, "$(two)");
+  assert.equal(nodeOfType(bin.left, "ArithmeticCommandExpansion").text, "$(one)");
+  assert.equal(nodeOfType(bin.right, "ArithmeticCommandExpansion").text, "$(two)");
 });
 
 test("$[ ] closes at the first unnested bracket, even inside braces", () => {
@@ -840,9 +829,9 @@ test("$[ ] closes at the first unnested bracket, even inside braces", () => {
   ])
     assert.equal(parse(source).errors, undefined, source);
 
-  const subscript = parse("h[${x:-]}]=1").commands[0].command as Command;
+  const subscript = nodeOfType(parse("h[${x:-]}]=1").commands[0].command, "Command");
   assert.equal(subscript.prefix[0].type, "Assignment");
-  if (subscript.prefix[0].type === "Assignment") assert.equal(subscript.prefix[0].index, "${x:-]}");
+  if (subscript.prefix[0].type === "Assignment") assert.equal(subscript.prefix[0].index?.text, "${x:-]}");
 });
 
 test("unparsed arithmetic tokens keep the whole body as one word", () => {
@@ -854,7 +843,7 @@ test("unparsed arithmetic tokens keep the whole body as one word", () => {
   ]) {
     const command = parse(source).commands[0].command;
     const expression =
-      command.type === "ArithmeticFor" ? command.initialize : (command as ArithmeticCommand).expression;
+      command.type === "ArithmeticFor" ? command.initialize : nodeOfType(command, "ArithmeticCommand").expression;
     assert.equal(expression?.type, "ArithmeticWord", source);
     if (expression?.type !== "ArithmeticWord") continue;
     assert.equal(expression.value, expected, source);
@@ -876,10 +865,10 @@ test("unterminated arithmetic reports an error and keeps its body", () => {
     { message: "unterminated double quote", pos: 5 },
     { message: "unterminated arithmetic expansion", pos: 6 },
   ]);
-  const command = parse("(( 1").commands[0].command as ArithmeticCommand;
+  const command = nodeOfType(parse("(( 1").commands[0].command, "ArithmeticCommand");
   assert.equal(command.body, " 1");
   assert.equal(command.expression?.type, "ArithmeticWord");
-  const word = getCmd(parse("echo $(( 1 +")).suffix[0];
+  const word = nodeOfType(getCmd(parse("echo $(( 1 +")).suffix[0], "Word");
   assert.equal(word.text, "$(( 1 +");
   assert.equal(word.value, "$(( 1 +");
 });
@@ -889,13 +878,13 @@ test("arithmetic for headers need exactly three expressions", () => {
   assert.deepEqual(parse("for ((i=0;i<2)); do :; done").errors, [{ message, pos: 13 }]);
   const four = parse("for ((1;2;3;4)); do :; done");
   assert.deepEqual(four.errors, [{ message, pos: 11 }]);
-  const loop = four.commands[0].command as ArithmeticFor;
+  const loop = nodeOfType(four.commands[0].command, "ArithmeticFor");
   assert.equal(loop.update?.type, "ArithmeticWord");
   assert.equal(loop.update?.type === "ArithmeticWord" ? loop.update.value : undefined, "3");
   assert.equal(parse("for ((;;)); do :; done").errors, undefined);
   assert.equal(parse("for ((i=0;i<2;)); do :; done").errors, undefined);
   const open = parse("for ((i=0;;");
   assert.deepEqual(open.errors?.[0], { message: "unterminated arithmetic for header", pos: 5 });
-  const initialize = (open.commands[0].command as ArithmeticFor).initialize;
+  const initialize = nodeOfType(open.commands[0].command, "ArithmeticFor").initialize;
   assert.equal(initialize?.type === "ArithmeticBinary" ? initialize.operator : undefined, "=");
 });

@@ -1,10 +1,10 @@
+import { nodeOfType } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
-import type { Command } from "../src/types.ts";
 import { computeWordParts } from "../src/parts.ts";
 
-const getCmd = (ast: ReturnType<typeof parse>, i = 0) => ast.commands[i].command as Command;
+const getCmd = (ast: ReturnType<typeof parse>, i = 0) => nodeOfType(ast.commands[i].command, "Command");
 const wp = (s: string, w: import("../src/types.ts").Word) => computeWordParts(s, w);
 
 // ── Extglob operators ────────────────────────────────────────────────
@@ -12,56 +12,56 @@ const wp = (s: string, w: import("../src/types.ts").Word) => computeWordParts(s,
 test("extglob !(pattern)", () => {
   const src = "echo !(*.txt)";
   const c = getCmd(parse(src));
-  const part = wp(src, c.suffix[0])![0];
+  const part = nodeOfType(wp(src, nodeOfType(c.suffix[0], "Word"))![0], "ExtendedGlob");
   assert.equal(part.type, "ExtendedGlob");
-  assert.equal((part as any).operator, "!");
-  assert.equal((part as any).pattern, "*.txt");
+  assert.equal(part.operator, "!");
+  assert.equal(part.pattern, "*.txt");
 });
 
 test("extglob @(a|b|c)", () => {
   const src = "echo @(foo|bar|baz)";
   const c = getCmd(parse(src));
-  const part = wp(src, c.suffix[0])![0];
+  const part = nodeOfType(wp(src, nodeOfType(c.suffix[0], "Word"))![0], "ExtendedGlob");
   assert.equal(part.type, "ExtendedGlob");
-  assert.equal((part as any).operator, "@");
-  assert.equal((part as any).pattern, "foo|bar|baz");
+  assert.equal(part.operator, "@");
+  assert.equal(part.pattern, "foo|bar|baz");
 });
 
 test("extglob ?(pattern)", () => {
   const src = "echo ?(pre)fix";
   const c = getCmd(parse(src));
-  const parts = wp(src, c.suffix[0])!;
+  const parts = wp(src, nodeOfType(c.suffix[0], "Word"))!;
   assert.equal(parts[0].type, "ExtendedGlob");
-  assert.equal((parts[0] as any).operator, "?");
+  assert.equal(nodeOfType(parts[0], "ExtendedGlob").operator, "?");
   assert.equal(parts[1].type, "Literal");
-  assert.equal((parts[1] as any).value, "fix");
+  assert.equal(nodeOfType(parts[1], "Literal").value, "fix");
 });
 
 test("extglob +(pattern)", () => {
   const src = "echo +(digit)";
   const c = getCmd(parse(src));
-  assert.equal(wp(src, c.suffix[0])![0].type, "ExtendedGlob");
-  assert.equal((wp(src, c.suffix[0])![0] as any).operator, "+");
+  assert.equal(wp(src, nodeOfType(c.suffix[0], "Word"))![0].type, "ExtendedGlob");
+  assert.equal(nodeOfType(wp(src, nodeOfType(c.suffix[0], "Word"))![0], "ExtendedGlob").operator, "+");
 });
 
 test("extglob *(pattern)", () => {
   const src = "echo *(any)thing";
   const c = getCmd(parse(src));
-  assert.equal(wp(src, c.suffix[0])![0].type, "ExtendedGlob");
-  assert.equal((wp(src, c.suffix[0])![0] as any).operator, "*");
+  assert.equal(wp(src, nodeOfType(c.suffix[0], "Word"))![0].type, "ExtendedGlob");
+  assert.equal(nodeOfType(wp(src, nodeOfType(c.suffix[0], "Word"))![0], "ExtendedGlob").operator, "*");
 });
 
 test("extglob text preserved", () => {
   const c = getCmd(parse("echo !(*.log|*.tmp)"));
-  assert.equal(c.suffix[0].text, "!(*.log|*.tmp)");
+  assert.equal(nodeOfType(c.suffix[0], "Word").text, "!(*.log|*.tmp)");
 });
 
 test("extglob with literal prefix", () => {
   const src = "echo file_!(*.bak)";
   const c = getCmd(parse(src));
-  const parts = wp(src, c.suffix[0])!;
+  const parts = wp(src, nodeOfType(c.suffix[0], "Word"))!;
   assert.equal(parts[0].type, "Literal");
-  assert.equal((parts[0] as any).value, "file_");
+  assert.equal(nodeOfType(parts[0], "Literal").value, "file_");
   assert.equal(parts[1].type, "ExtendedGlob");
 });
 
@@ -84,12 +84,14 @@ test("pathname-prefixed extglob stays inside nested rm command (#313; Bash -O ex
   const rm = subshell.body.commands[1].command;
   assert.deepEqual([rm.type, rm.pos, rm.end, rm.type === "Command" && rm.name?.text], ["Command", 61, 118, "rm"]);
   if (rm.type !== "Command") return;
-  const path = rm.suffix[1];
+  const path = nodeOfType(rm.suffix[1], "Word");
   assert.deepEqual([path.text, path.pos, path.end], ["/etc/php/*/fpm/pool.d/!(*.conf|*.orig|*.dpkg-dist)", 68, 118]);
   assert.deepEqual(wp(source, path), [
-    { type: "Literal", value: "/etc/php/*/fpm/pool.d/", text: "/etc/php/*/fpm/pool.d/" },
+    { type: "Literal", pos: 68, end: 90, value: "/etc/php/*/fpm/pool.d/", text: "/etc/php/*/fpm/pool.d/" },
     {
       type: "ExtendedGlob",
+      pos: 90,
+      end: 118,
       text: "!(*.conf|*.orig|*.dpkg-dist)",
       operator: "!",
       pattern: "*.conf|*.orig|*.dpkg-dist",
@@ -109,7 +111,7 @@ test("=(pattern) is NOT extglob (used for array assignment)", () => {
 test("extglob ?() preserved in word", () => {
   const c = getCmd(parse("ls ?(foo|bar)"));
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    c.suffix.map((s) => nodeOfType(s, "Word").text),
     ["?(foo|bar)"],
   );
 });
@@ -117,7 +119,7 @@ test("extglob ?() preserved in word", () => {
 test("extglob @() preserved in word", () => {
   const c = getCmd(parse("ls @(a|b|c)"));
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    c.suffix.map((s) => nodeOfType(s, "Word").text),
     ["@(a|b|c)"],
   );
 });
@@ -125,7 +127,7 @@ test("extglob @() preserved in word", () => {
 test("extglob *() preserved in word", () => {
   const c = getCmd(parse("ls *(pat)"));
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    c.suffix.map((s) => nodeOfType(s, "Word").text),
     ["*(pat)"],
   );
 });
@@ -133,7 +135,7 @@ test("extglob *() preserved in word", () => {
 test("extglob +() preserved in word", () => {
   const c = getCmd(parse("ls +(x|y)"));
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    c.suffix.map((s) => nodeOfType(s, "Word").text),
     ["+(x|y)"],
   );
 });
@@ -141,7 +143,7 @@ test("extglob +() preserved in word", () => {
 test("extglob !() preserved in word", () => {
   const c = getCmd(parse("ls !(bad)"));
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    c.suffix.map((s) => nodeOfType(s, "Word").text),
     ["!(bad)"],
   );
 });
@@ -149,7 +151,7 @@ test("extglob !() preserved in word", () => {
 test("nested extglob preserved", () => {
   const c = getCmd(parse("ls @(a|+(b|c))"));
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    c.suffix.map((s) => nodeOfType(s, "Word").text),
     ["@(a|+(b|c))"],
   );
 });
@@ -158,7 +160,7 @@ test("case is literal inside an extended glob", () => {
   const src = "echo @(case|foo) tail";
   const c = getCmd(parse(src));
   assert.deepEqual(
-    c.suffix.map((word) => word.text),
+    c.suffix.map((word) => nodeOfType(word, "Word").text),
     ["@(case|foo)", "tail"],
   );
 });
@@ -168,7 +170,7 @@ test("case is literal inside an extended glob", () => {
 test("extglob @() not confused with subshell", () => {
   const c = getCmd(parse("ls @(a|b)"));
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    c.suffix.map((s) => nodeOfType(s, "Word").text),
     ["@(a|b)"],
   );
 });
@@ -176,7 +178,7 @@ test("extglob @() not confused with subshell", () => {
 test("extglob !() not confused with negation", () => {
   const c = getCmd(parse("ls !(bad)"));
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    c.suffix.map((s) => nodeOfType(s, "Word").text),
     ["!(bad)"],
   );
 });
@@ -184,7 +186,7 @@ test("extglob !() not confused with negation", () => {
 test("nested extglob in tokenizer", () => {
   const c = getCmd(parse("ls @(a|+(b|c))"));
   assert.deepEqual(
-    c.suffix.map((s) => s.text),
+    c.suffix.map((s) => nodeOfType(s, "Word").text),
     ["@(a|+(b|c))"],
   );
 });
@@ -197,7 +199,7 @@ test("extglob in [[ ]] condition", () => {
 test("command substitutions inside extended globs remain structured", () => {
   const src = "echo @($(one)|safe$(two))";
   const c = getCmd(parse(src));
-  const part = wp(src, c.suffix[0])![0];
+  const part = wp(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(part.type, "ExtendedGlob");
   if (part.type !== "ExtendedGlob") return;
   const expansions = part.parts?.filter((child) => child.type === "CommandExpansion") ?? [];
@@ -214,7 +216,7 @@ test("command substitutions inside extended globs remain structured", () => {
 test("process substitutions inside extended globs remain structured", () => {
   const src = "echo @(<(danger)|safe)";
   const c = getCmd(parse(src));
-  const part = wp(src, c.suffix[0])![0];
+  const part = wp(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(part.type, "ExtendedGlob");
   if (part.type !== "ExtendedGlob") return;
   const expansion = part.parts?.find((child) => child.type === "ProcessSubstitution");
@@ -228,7 +230,7 @@ test("process substitutions inside extended globs remain structured", () => {
 test("closing parentheses inside substitutions do not truncate extended globs", () => {
   const src = 'echo @($(printf ")")|safe)';
   const c = getCmd(parse(src));
-  const part = wp(src, c.suffix[0])![0];
+  const part = wp(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(part.type, "ExtendedGlob");
   if (part.type !== "ExtendedGlob") return;
   assert.equal(part.pattern, '$(printf ")")|safe');
@@ -244,7 +246,7 @@ test("unterminated extended globs report an error without truncating nested subs
   const src = "echo @(safe|$(danger)";
   const ast = parse(src);
   const c = getCmd(ast);
-  const part = wp(src, c.suffix[0])![0];
+  const part = wp(src, nodeOfType(c.suffix[0], "Word"))![0];
   assert.equal(part.type, "ExtendedGlob");
   if (part.type !== "ExtendedGlob") return;
   const expansion = part.parts?.find((child) => child.type === "CommandExpansion");

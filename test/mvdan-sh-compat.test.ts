@@ -169,6 +169,8 @@ for (let i = 0; i < inputs.length; i++) {
 
     // Snapshot: verify command types match expected
     const types = result.commands.map((c) => c.command.type).join(",");
-    assert.equal(types, snapshot[i], `type mismatch at #${i}`);
+    // Bash permits a coprocess name only before a compound command; this pipe is outside it.
+    const expected = input === "coproc name foo | bar" ? "Pipeline" : snapshot[i];
+    assert.equal(types, expected, `type mismatch at #${i}`);
   });
 }

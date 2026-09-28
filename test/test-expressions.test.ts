@@ -1,3 +1,4 @@
+import { nodeOfType, redirectsOf } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
@@ -135,12 +136,15 @@ test("unquoted ! still negates", () => {
 test("]] outside a test command is an ordinary word", () => {
   const echoed = parse("echo ]]");
   const cmd = echoed.commands[0].command;
-  assert.equal(cmd.type === "Command" && cmd.suffix.map((w) => w.value).join(), "]]");
+  assert.equal(cmd.type === "Command" && cmd.suffix.map((w) => nodeOfType(w, "Assignment", "Word").value).join(), "]]");
   assert.equal(echoed.errors, undefined);
 
   const between = parse("echo a ]] b");
   const betweenCmd = between.commands[0].command;
-  assert.equal(betweenCmd.type === "Command" && betweenCmd.suffix.map((w) => w.value).join(" "), "a ]] b");
+  assert.equal(
+    betweenCmd.type === "Command" && betweenCmd.suffix.map((w) => nodeOfType(w, "Assignment", "Word").value).join(" "),
+    "a ]] b",
+  );
   assert.equal(between.errors, undefined);
 
   const wordlist = parse("for i in ]] a; do echo $i; done");
@@ -655,9 +659,10 @@ test("[[ ]] with && pipeline", () => {
 test("[[ ]] with redirects", () => {
   const ast = parse("[[ -f $file ]] 2>/dev/null");
   const stmt = ast.commands[0];
-  assert.equal(stmt.command.type, "TestCommand");
-  assert.equal(stmt.redirects.length, 1);
-  assert.equal(stmt.redirects[0].operator, ">");
+  assert.equal(stmt.command.type, "Redirected");
+  assert.equal(stmt.command.type === "Redirected" && stmt.command.command.type, "TestCommand");
+  assert.equal(redirectsOf(stmt).length, 1);
+  assert.equal(redirectsOf(stmt)[0].operator, ">");
 });
 
 // --- Word parts preserved ---

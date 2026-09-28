@@ -192,8 +192,8 @@ test("escaped backtick scripts retain their decoded source context", () => {
   assert.equal(sub.script.source.slice(sub.script.pos, sub.script.end), "outer `inner cmd` tail");
   assert.equal(Object.getPrototypeOf(sub.script), Object.prototype);
   assert.equal(Object.hasOwn(sub.script, "source"), true);
-  assert.equal(Object.keys(sub.script).includes("source"), false);
-  assert.equal("source" in structuredClone(sub.script), false);
+  assert.equal(Object.keys(sub.script).includes("source"), true);
+  assert.equal("source" in JSON.parse(JSON.stringify(sub.script)), true);
   const outer = sub.script.commands[0].command;
   assert.equal(outer.type, "Command");
   if (outer.type !== "Command") return;

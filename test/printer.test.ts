@@ -1,3 +1,4 @@
+import { argumentsOf, nodeOfType, redirectsOf } from "./ast-helpers.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "../src/parser.ts";
@@ -97,7 +98,11 @@ test("prefix redirects preserve redirection order around the command name", () =
   assert.equal(command.type, "Command");
   if (command.type !== "Command") assert.fail(printed);
   assert.deepEqual(
-    command.redirects.map((r) => [r.fileDescriptor, r.operator, r.target?.value]),
+    redirectsOf(command).map((r) => [
+      r.descriptor ? nodeOfType(r.descriptor, "FileDescriptor").value : undefined,
+      r.operator,
+      nodeOfType(r, "Redirect").target?.value,
+    ]),
     [
       [2, ">&", "1"],
       [undefined, ">", "out"],
@@ -148,7 +153,7 @@ test("time pipeline", () => {
 
 test("bare time has no trailing whitespace", () => {
   assert.equal(fmt("time"), "time");
-  assert.equal(fmt("time -p"), "time");
+  assert.equal(fmt("time -p"), "time -p");
 });
 
 // --- And/Or ---
@@ -301,6 +306,22 @@ test("arithmetic command normalizes spacing", () => {
   assert.equal(fmt("((x+1))"), "(( x + 1 ))");
 });
 
+test("arithmetic negation keeps history expansion inactive", () => {
+  for (const [source, expected] of [
+    ["(( ! 0 ))", "(( ! 0 ))"],
+    ["((!value))", "(( ! value ))"],
+    ["(( ! ! 0 ))", "(( ! ! 0 ))"],
+    ["((!(!value)))", "(( ! (! value) ))"],
+  ]) {
+    assert.equal(fmt(source), expected);
+    assert.equal(fmt(expected), expected);
+  }
+});
+
+test("arithmetic unary operators retain their spelling", () => {
+  assert.equal(fmt("(( ~ 1 + - 2 + + 3 + ++ i + j -- ))"), "(( ~1 + -2 + +3 + ++i + j-- ))");
+});
+
 // --- Arithmetic for ---
 
 test("arithmetic for loop", () => {
@@ -308,6 +329,12 @@ test("arithmetic for loop", () => {
     fmt("for ((i=0; i<10; i++)); do echo $i; done"),
     ["for (( i = 0; i < 10; i++ )); do", "  echo $i", "done"].join("\n"),
   );
+});
+
+test("arithmetic for negation keeps history expansion inactive in every expression", () => {
+  const expected = "for (( i = ! 0; ! (i > 1); i += ! 0 )); do\n  echo $i\ndone";
+  assert.equal(fmt("for ((i=! 0; ! (i>1); i+=! 0)); do echo $i; done"), expected);
+  assert.equal(fmt(expected), expected);
 });
 
 // --- Coproc ---
@@ -318,6 +345,14 @@ test("coproc with name", () => {
 
 test("coproc without name", () => {
   assert.equal(fmt("coproc { echo hello; }"), ["coproc {", "  echo hello", "}"].join("\n"));
+});
+
+test("recovered bodies print without dropping the kept command", () => {
+  assert.equal(fmt("f() echo hi"), ["f() {", "  echo hi", "}"].join("\n"));
+  assert.equal(fmt("coproc function f { :; }"), ["coproc f() {", "  :", "}"].join("\n"));
+  assert.equal(fmt("{ coproc function f { :; }; }"), ["{", "  coproc f() {", "    :", "  }", "}"].join("\n"));
+  assert.equal(fmt("coproc"), "coproc");
+  assert.equal(fmt("{ coproc; }"), ["{", "  coproc", "}"].join("\n"));
 });
 
 // --- Background ---
@@ -409,16 +444,16 @@ test("heredoc target at end of input has an empty body", () => {
 
 test("escaped redirect target is requoted", () => {
   assert.equal(fmt("echo hi > fi\\ le"), "echo hi > 'fi le'");
-  const command = parse(fmt("echo hi > fi\\ le")).commands[0].command as any;
-  assert.equal(command.redirects[0].target?.value, "fi le");
-  assert.equal(command.suffix.length, 1);
+  const command = nodeOfType(parse(fmt("echo hi > fi\\ le")).commands[0].command, "Command");
+  assert.equal(nodeOfType(redirectsOf(command)[0], "HereString", "Redirect").target?.value, "fi le");
+  assert.equal(argumentsOf(command).length, 1);
 });
 
 test("single quote inside decoded redirect target is escaped", () => {
   const printed = fmt("echo hi > a\\'b");
   assert.equal(printed, "echo hi > 'a'\\''b'");
-  const command = parse(printed).commands[0].command as any;
-  assert.equal(command.redirects[0].target?.value, "a'b");
+  const command = nodeOfType(parse(printed).commands[0].command, "Command");
+  assert.equal(nodeOfType(redirectsOf(command)[0], "HereString", "Redirect").target?.value, "a'b");
 });
 
 test("glob redirect target stays unquoted", () => {
@@ -433,8 +468,8 @@ test("escaped redirect syntax stays literal", () => {
     ["\\#file", "#file"],
   ] as const) {
     const printed = fmt(`echo hi > ${target}`);
-    const command = parse(printed).commands[0].command as any;
-    const reparsed = command.redirects[0].target;
+    const command = nodeOfType(parse(printed).commands[0].command, "Command");
+    const reparsed = nodeOfType(redirectsOf(command)[0], "HereString", "Redirect").target;
     assert.equal(reparsed?.value, value, target);
     assert.equal(
       reparsed?.parts?.some((part: any) =>
@@ -449,30 +484,30 @@ test("escaped redirect syntax stays literal", () => {
 test("escaped heredoc delimiter prints requoted", () => {
   const printed = fmt("cat <<E\\ OF\nline $HOME\nE OF");
   assert.equal(printed, "cat << 'E OF'\nline $HOME\nE OF");
-  const redirect = (parse(printed).commands[0].command as any).redirects[0];
-  assert.equal(redirect.heredocQuoted, true);
+  const redirect = nodeOfType(redirectsOf(nodeOfType(parse(printed).commands[0].command, "Command"))[0], "HereDoc");
+  assert.equal(redirect.delimiter?.quoted, true);
 });
 
 test("quoted heredoc delimiter with space round-trips", () => {
   const printed = fmt("cat <<'E OF'\nline $HOME\nE OF");
   assert.equal(printed, "cat << 'E OF'\nline $HOME\nE OF");
-  const redirect = (parse(printed).commands[0].command as any).redirects[0];
-  assert.equal(redirect.heredocQuoted, true);
+  const redirect = nodeOfType(redirectsOf(nodeOfType(parse(printed).commands[0].command, "Command"))[0], "HereDoc");
+  assert.equal(redirect.delimiter?.quoted, true);
 });
 
 test("mixed-quoted heredoc delimiters print their decoded closing line", () => {
   const printed = fmt('cat <<E"O"F\nbody\nEOF');
   assert.equal(printed, "cat << 'EOF'\nbody\nEOF");
-  const redirect = (parse(printed).commands[0].command as any).redirects[0];
-  assert.equal(redirect.target?.value, "EOF");
-  assert.equal(redirect.heredocQuoted, true);
+  const redirect = nodeOfType(redirectsOf(nodeOfType(parse(printed).commands[0].command, "Command"))[0], "HereDoc");
+  assert.equal(redirect.delimiter?.value, "EOF");
+  assert.equal(redirect.delimiter?.quoted, true);
 });
 
 test("escaped heredoc delimiters stay quoted after printing", () => {
   const printed = fmt("cat <<E\\OF\nbody\nEOF");
   assert.equal(printed, "cat << 'EOF'\nbody\nEOF");
-  const redirect = (parse(printed).commands[0].command as any).redirects[0];
-  assert.equal(redirect.heredocQuoted, true);
+  const redirect = nodeOfType(redirectsOf(nodeOfType(parse(printed).commands[0].command, "Command"))[0], "HereDoc");
+  assert.equal(redirect.delimiter?.quoted, true);
 });
 
 // --- Re-parse validity ---
@@ -482,7 +517,7 @@ function reparsesClean(label: string, src: string) {
   test(`re-parse: ${label}`, () => {
     const printed = fmt(src);
     const ast2 = parse(printed);
-    assert.equal((ast2 as any).errors, undefined, `re-parse errors for: ${printed}`);
+    assert.equal(ast2.errors, undefined, `re-parse errors for: ${printed}`);
   });
 }
 
