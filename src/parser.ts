@@ -5,7 +5,7 @@ import type {
   ArithmeticCommand,
   ArithmeticExpression,
   ArithmeticFor,
-  AssignmentPrefix,
+  Assignment,
   BraceGroup,
   Case,
   CaseItem,
@@ -18,12 +18,18 @@ import type {
   If,
   AndOr,
   LogicalOperator,
-  Node,
+  Negation,
+  CommandNode,
+  PipelineNode,
   ParseError,
   ParsedScript,
   PipeOperator,
   Pipeline,
-  Redirect,
+  HereDoc,
+  Redirection,
+  RedirectDescriptor,
+  Redirected,
+  CompoundCommand,
   RedirectOperator,
   Select,
   Statement,
@@ -35,16 +41,35 @@ import type {
   TestLogicalExpression,
   TestNotExpression,
   TestUnaryExpression,
+  Time,
   While,
   Word,
-} from "./types.ts";
+} from "./internal-types.ts";
 import { hasEmbeddedWordStructure, LexContext, MAX_SYNTAX_NESTING, Token, Lexer, TokenValue } from "./lexer.ts";
 import { parseArithmeticExpression } from "./arithmetic.ts";
 import { computeWordParts, computeEmbeddedWordParts, computeHereDocBodyParts } from "./parts.ts";
-import { WordImpl, type PartsResolver } from "./word.ts";
+import { WordImpl } from "./word.ts";
+import { AssignmentImpl } from "./assignment.ts";
+import { CommandImpl } from "./command.ts";
+import { HereDocBodyImpl } from "./heredoc.ts";
 
 WordImpl._resolveWord = computeWordParts;
-WordImpl._resolveHeredocBody = computeHereDocBodyParts;
+HereDocBodyImpl._resolveParts = computeHereDocBodyParts;
+
+function isDeclarationCommand(name: string): boolean {
+  switch (name.length) {
+    case 5:
+      return name === "local" || name === "alias";
+    case 6:
+      return name === "export";
+    case 7:
+      return name === "declare" || name === "typeset";
+    case 8:
+      return name === "readonly";
+    default:
+      return false;
+  }
+}
 
 class ArithmeticCommandImpl implements ArithmeticCommand {
   type = "ArithmeticCommand" as const;
@@ -192,9 +217,6 @@ const REDIRECT_OPS: Record<string, RedirectOperator> = {
   ">": ">",
   ">>": ">>",
   "<": "<",
-  "<<": "<<",
-  "<<-": "<<-",
-  "<<<": "<<<",
   "<>": "<>",
   "<&": "<&",
   ">&": ">&",
@@ -212,8 +234,8 @@ function parseArithmeticWithParts(
   if (!hasEmbeddedWordStructure(source, offset, offset + body.length)) {
     return parseArithmeticExpression(body, offset) ?? undefined;
   }
-  const commandExpansions: import("./types.ts").ArithmeticCommandExpansion[] = [];
-  const embeddedWords: import("./types.ts").ArithmeticWord[] = [];
+  const commandExpansions: import("./internal-types.ts").ArithmeticCommandExpansion[] = [];
+  const embeddedWords: import("./internal-types.ts").ArithmeticWord[] = [];
   const lexer = new Lexer(source);
   const expression =
     parseArithmeticExpression(body, offset, {
@@ -226,12 +248,8 @@ function parseArithmeticWithParts(
       findArithmeticWordEnd: (start, end) => lexer.findArithmeticWordEnd(start, end),
     }) ?? undefined;
   for (const node of commandExpansions) {
-    if (node.inner !== undefined) {
-      if (depth <= MAX_SYNTAX_NESTING) {
-        const innerStart = node.pos + 2;
-        node.script = parseRegion(source, innerStart, innerStart + node.inner.length, depth + 1);
-      }
-      node.inner = undefined;
+    if (depth <= MAX_SYNTAX_NESTING) {
+      node.script = parseRegion(source, node.pos + 2, node.end - 1, depth + 1, true);
     }
   }
   for (const node of embeddedWords) node.parts = computeEmbeddedWordParts(source, node, depth);
@@ -335,28 +353,22 @@ const BINARY_TEST_OPS: Record<string, 1> = {
   ">": 1,
 };
 
-// A heredoc delimiter is quote-removed but never expanded, so it has no expandable structure.
-function heredocDelimiterParts(value: string): PartsResolver {
-  return (source, word) => {
-    const raw = source.slice(word.pos, word.end);
-    return raw === value ? undefined : [{ type: "Literal", value, text: raw }];
-  };
-}
+const EMPTY_REDIRECTS: Redirection[] = [];
 
-const EMPTY_REDIRECTS: Redirect[] = [];
-
-function ownEmpty<T>(values: T[]): T[] {
-  return values.length === 0 ? [] : values;
-}
-
-export function parse(source: string): ParsedScript {
+export function parse(source: string): import("./types.ts").ParsedScript {
   return new Parser(source, 0, source.length).run();
 }
 
 // Parse a [start, end) window of `source` in place, so the resulting nodes index the original
 // source directly. Used to resolve substitution scripts with absolute offsets; not public API.
-export function parseRegion(source: string, start: number, end: number, depth = 0): ParsedScript {
-  return new Parser(source, start, end, depth).run();
+export function parseRegion(
+  source: string,
+  start: number,
+  end: number,
+  depth = 0,
+  parenBoundary = false,
+): ParsedScript {
+  return new Parser(source, start, end, depth, parenBoundary).run();
 }
 
 class Parser {
@@ -366,13 +378,12 @@ class Parser {
   private end: number;
   private depth: number;
   private errors: ParseError[] | null = null;
-  private _redirects: Redirect[] = EMPTY_REDIRECTS;
   private syntaxDepth = 0;
 
   // `depth` counts the substitution scripts (and sub-fields) enclosing this region; it
   // shares the MAX_SYNTAX_NESTING budget with the lexer's lazy word-part materialization.
-  constructor(source: string, start: number, end: number, depth = 0) {
-    this.tok = new Lexer(source, start, end);
+  constructor(source: string, start: number, end: number, depth = 0, parenBoundary = false) {
+    this.tok = new Lexer(source, start, end, parenBoundary);
     this.tok._nestingDepth = depth;
     this.source = source;
     this.start = start;
@@ -413,23 +424,22 @@ class Parser {
     }
     const lexerErrors = this.tok._errors;
     if (lexerErrors !== null && lexerErrors.length > 0) {
-      const errors = (this.errors ??= []);
+      const errors = this.errors ?? (this.errors = []);
       for (let i = 0; i < lexerErrors.length; i++) errors.push(lexerErrors[i]);
     }
     if (this.errors !== null && this.errors.length > 1) this.errors.sort((a, b) => a.pos - b.pos);
-    const result = {
+    return {
       type: "Script",
       pos: start,
       end: this.end,
       shebang,
       commands,
       errors: this.errors ?? undefined,
-    } as ParsedScript;
-    return result;
+    };
   }
 
   private error(message: string, pos: number): void {
-    (this.errors ??= []).push({ message, pos });
+    (this.errors ?? (this.errors = [])).push({ message, pos });
   }
 
   private skipSemi(): void {
@@ -450,15 +460,13 @@ class Parser {
     while (this.tok.peek(ctx).token === Token.Newline) this.tok.next(ctx);
   }
 
-  private makeStatement(command: Node, redirects: Redirect[]): Statement {
-    const end = redirects.length > 0 ? redirects[redirects.length - 1].end : command.end;
+  private makeStatement(command: Statement["command"]): Statement {
     return {
       type: "Statement",
       pos: command.pos,
-      end,
+      end: command.end,
       command,
       background: undefined,
-      redirects: ownEmpty(redirects),
     };
   }
 
@@ -471,11 +479,7 @@ class Parser {
     if (listTerminators[t] || !commandStarts[t]) return commands;
 
     const first = this.andOr();
-    if (first) {
-      const redirects = this._redirects;
-      this._redirects = EMPTY_REDIRECTS;
-      commands.push(this.makeStatement(first, redirects));
-    }
+    if (first) commands.push(this.makeStatement(first));
 
     for (;;) {
       t = this.tok.peekFollow(compoundClosers).token;
@@ -491,31 +495,21 @@ class Parser {
       t = this.tok.peek(LexContext.CommandStart).token;
       if (listTerminators[t] || !commandStarts[t]) break;
       const node = this.andOr();
-      if (node) {
-        const redirects = this._redirects;
-        this._redirects = EMPTY_REDIRECTS;
-        commands.push(this.makeStatement(node, redirects));
-      }
+      if (node) commands.push(this.makeStatement(node));
     }
 
     return commands;
   }
 
   // and_or := pipeline (('&&' | '||') newlines pipeline)*
-  private andOr(): Node | null {
+  private andOr(): PipelineNode | AndOr | null {
     const first = this.pipeline();
     if (!first) return null;
 
     let t = this.tok.peek(LexContext.Normal).token;
     if (t !== Token.And && t !== Token.Or) return first;
 
-    // Wrap first pipeline with any pending redirects before creating AndOr
-    let wrappedFirst: Node = first;
-    if (this._redirects.length > 0) {
-      wrappedFirst = this.makeStatement(first, this._redirects);
-      this._redirects = EMPTY_REDIRECTS;
-    }
-    const commands: Node[] = [wrappedFirst];
+    const commands: PipelineNode[] = [first];
     const operators: LogicalOperator[] = [];
 
     do {
@@ -541,68 +535,77 @@ class Parser {
     } satisfies AndOr;
   }
 
-  private wrapCompoundRedirects(node: Node): Node {
-    const redirects = this._redirects;
-    this._redirects = EMPTY_REDIRECTS;
-    if (redirects.length === 0) return node;
-    return this.makeStatement(node, redirects);
+  private withRedirects(command: CompoundCommand): CompoundCommand | Redirected {
+    const redirects = this.collectTrailingRedirects();
+    if (redirects.length === 0) return command;
+    return { type: "Redirected", pos: command.pos, end: redirects[redirects.length - 1].end, command, redirects };
   }
 
-  // pipeline := ['time' ['-p']] ('!')* command ('|' newlines command)*
-  private pipeline(): Node | null {
-    let time = false;
-    let pipelinePos = 0;
-    let prefixEnd = 0;
-    const firstToken = this.tok.peek(LexContext.CommandStart);
-    if (firstToken.token === Token.Word && firstToken.keywordEligible && firstToken.value === "time") {
-      time = true;
-      const timeToken = this.tok.next(LexContext.CommandStart);
-      pipelinePos = timeToken.pos;
-      prefixEnd = timeToken.end;
-      const flag = this.tok.peek(LexContext.CommandStart);
-      if (flag.token === Token.Word && flag.keywordEligible && flag.value === "-p")
-        prefixEnd = this.tok.next(LexContext.CommandStart).end;
+  private pipeline(): PipelineNode | null {
+    let prefixes: (Time | Negation)[] | undefined;
+    let exceeded = false;
+    for (;;) {
+      const token = this.tok.peek(LexContext.CommandStart);
+      const isTime = token.token === Token.Word && token.keywordEligible && token.value === "time";
+      if (token.token !== Token.Bang && !isTime) break;
+      const prefix = this.tok.next(LexContext.CommandStart);
+      const pos = prefix.pos;
+      const keywordEnd = prefix.end;
+      let posix: Time["posix"];
+      let endOfOptions: Time["endOfOptions"];
+      if (isTime) {
+        let flag = this.tok.peek(LexContext.CommandStart);
+        if (flag.token === Token.Word && flag.keywordEligible && flag.value === "-p") {
+          this.tok.next(LexContext.CommandStart);
+          posix = { pos: flag.pos, end: flag.end };
+          flag = this.tok.peek(LexContext.CommandStart);
+        }
+        if (flag.token === Token.Word && flag.keywordEligible && flag.value === "--") {
+          this.tok.next(LexContext.CommandStart);
+          endOfOptions = { pos: flag.pos, end: flag.end };
+        }
+      }
+      if (prefixes === undefined) prefixes = [];
+      if (prefixes.length + this.syntaxDepth === MAX_SYNTAX_NESTING) {
+        if (!exceeded) this.error("maximum pipeline prefix nesting depth exceeded", pos);
+        exceeded = true;
+        continue;
+      }
+      prefixes.push(
+        isTime
+          ? {
+              type: "Time",
+              pos,
+              end: endOfOptions?.end ?? posix?.end ?? keywordEnd,
+              keywordEnd,
+              posix,
+              endOfOptions,
+              command: undefined,
+            }
+          : { type: "Negation", pos, end: keywordEnd, keywordEnd, command: undefined },
+      );
     }
 
-    let negated: boolean | undefined;
-    const bang = this.tok.peek(LexContext.CommandStart);
-    if (bang.token === Token.Bang) {
-      if (!time) pipelinePos = bang.pos;
-      do {
-        prefixEnd = this.tok.next(LexContext.CommandStart).end;
-        negated = !negated;
-      } while (this.tok.peek(LexContext.CommandStart).token === Token.Bang);
+    if (!prefixes) return this.pipelineCommands();
+    this.syntaxDepth += prefixes.length;
+    let command: PipelineNode | null = this.pipelineCommands();
+    this.syntaxDepth -= prefixes.length;
+    for (let i = prefixes.length - 1; i >= 0; i--) {
+      const prefix = prefixes[i];
+      prefix.command = command ?? undefined;
+      if (command) prefix.end = command.end;
+      command = prefix;
     }
+    return command;
+  }
 
+  private pipelineCommands(): CommandNode | Pipeline | null {
     const first = this.command();
-    if (!first) {
-      if (time || negated !== undefined) {
-        const pipeline: Pipeline = {
-          type: "Pipeline",
-          pos: pipelinePos,
-          end: prefixEnd,
-          commands: [],
-          negated,
-          operators: [],
-          time: time ? true : undefined,
-        };
-        return pipeline;
-      }
-      return null;
-    }
+    if (!first) return null;
 
-    if (!time && negated === undefined) pipelinePos = first.pos;
-
-    const commands: Node[] = [first];
+    const commands: CommandNode[] = [first];
     const operators: PipeOperator[] = [];
-    // Save _redirects from first command — only wrap in Statement if piped
-    let firstRedirects = this._redirects;
-    this._redirects = EMPTY_REDIRECTS;
     while (this.tok.peek(LexContext.Normal).token === Token.Pipe) {
-      if (commands.length === 1 && firstRedirects.length > 0) {
-        commands[0] = this.makeStatement(first, firstRedirects);
-        firstRedirects = [];
-      }
       const pipeToken = this.tok.next(LexContext.Normal);
       const operator = pipeToken.value === "|&" ? "|&" : "|";
       this.skipNewlines(LexContext.CommandStart);
@@ -612,55 +615,58 @@ class Parser {
         break;
       }
       operators.push(operator);
-      commands.push(this.wrapCompoundRedirects(cmd));
+      commands.push(cmd);
     }
 
-    if (commands.length === 1 && negated === undefined && !time) {
-      // Pass redirects up for list() to consume
-      this._redirects = firstRedirects;
+    if (commands.length === 1) {
       return commands[0];
-    }
-    // Wrap first command's compound redirects in Statement if needed
-    if (firstRedirects.length > 0) {
-      commands[0] = this.makeStatement(first, firstRedirects);
     }
     const pipeline: Pipeline = {
       type: "Pipeline",
-      pos: pipelinePos,
+      pos: first.pos,
       end: commands[commands.length - 1].end,
       commands,
-      negated,
       operators,
-      time: time ? true : undefined,
     };
     return pipeline;
   }
 
   // command := compound_command | function_def | simple_command
-  private command(): Node | null {
+  private command(): CommandNode | null {
+    let compound: CompoundCommand;
     switch (this.tok.peek(LexContext.CommandStart).token) {
       case Token.LParen:
-        return this.subshell();
+        compound = this.subshell();
+        break;
       case Token.LBrace:
-        return this.braceGroup();
+        compound = this.braceGroup();
+        break;
       case Token.If:
-        return this.ifClause();
+        compound = this.ifClause();
+        break;
       case Token.For:
-        return this.forClause();
+        compound = this.forClause();
+        break;
       case Token.While:
-        return this.whileClause();
+        compound = this.whileClause();
+        break;
       case Token.Until:
-        return this.untilClause();
+        compound = this.untilClause();
+        break;
       case Token.Case:
-        return this.caseClause();
+        compound = this.caseClause();
+        break;
       case Token.Function:
         return this.functionDef();
       case Token.Select:
-        return this.selectClause();
+        compound = this.selectClause();
+        break;
       case Token.DblLBracket:
-        return this.testCommand();
+        compound = this.testCommand();
+        break;
       case Token.ArithCmd:
-        return this.arithCommand();
+        compound = this.arithCommand();
+        break;
       case Token.Coproc:
         return this.coprocCommand();
       case Token.Word:
@@ -670,12 +676,14 @@ class Parser {
       default:
         return null;
     }
+    return this.withRedirects(compound);
   }
 
-  private collectTrailingRedirects(): Redirect[] {
-    let redirects: Redirect[] = EMPTY_REDIRECTS;
+  private collectTrailingRedirects(): Redirection[] {
+    let redirects: Redirection[] = EMPTY_REDIRECTS;
     while (this.tok.peekFollow(compoundClosers).token === Token.Redirect) {
-      redirects = this.collectRedirect(redirects, LexContext.Normal);
+      if (redirects === EMPTY_REDIRECTS) redirects = [];
+      redirects.push(this.readRedirect(LexContext.Normal));
     }
     return redirects;
   }
@@ -683,77 +691,49 @@ class Parser {
   // arith_command := (( expr ))
   private arithCommand(): ArithmeticCommand {
     const tok = this.tok.next(LexContext.CommandStart);
-    this._redirects = this.collectTrailingRedirects();
     return new ArithmeticCommandImpl(tok.pos, tok.end, tok.value, this.source, this.depth);
   }
 
-  // coproc := COPROC [name] command [redirections]
+  // coproc := COPROC ([name] compound_command [redirections] | simple_command)
   private coprocCommand(): Coproc {
-    const startTok = this.tok.next(LexContext.CommandStart);
-    const pos = startTok.pos;
-    const startEnd = startTok.end;
+    const start = this.tok.next(LexContext.CommandStart);
+    const pos = start.pos;
+    const first = this.tok.peek(LexContext.CommandStart);
+    let name: Word | undefined;
 
-    const t = this.tok.peek(LexContext.CommandStart);
-
-    // If next token starts a compound command, no name — parse full pipeline
-    if (t.token !== Token.Word && t.token !== Token.Assignment && t.token !== Token.Redirect) {
-      const body = this.pipeline() ?? {
-        type: "Command" as const,
-        pos,
-        end: startEnd,
-        name: undefined,
-        prefix: [],
-        suffix: [],
-        redirects: [],
-      };
-      const bodyRedirects = this._redirects;
-      this._redirects = EMPTY_REDIRECTS;
-      const redirects = this.collectTrailingRedirects();
-      const allRedirects = [...bodyRedirects, ...redirects];
-      const end = allRedirects.length > 0 ? allRedirects[allRedirects.length - 1].end : body.end;
-      return { type: "Coproc", pos, end, name: undefined, body, redirects: allRedirects };
-    }
-
-    // Consume first word as tentative name
-    const tentativeWord = this.toWord(this.tok.next(LexContext.CommandStart));
-
-    // Try to parse what follows as a pipeline
-    const body = this.pipeline();
-
-    if (body === null) {
-      const cmd: Command = {
-        type: "Command",
-        pos: tentativeWord.pos,
-        end: tentativeWord.end,
-        name: tentativeWord,
-        prefix: [],
-        suffix: [],
-        redirects: [],
-      };
-      const redirects = this.collectTrailingRedirects();
-      const end = redirects.length > 0 ? redirects[redirects.length - 1].end : cmd.end;
-      return { type: "Coproc", pos, end, name: undefined, body: cmd, redirects: ownEmpty(redirects) };
-    }
-
-    if (body.type === "Command") {
-      const cmd = body;
-      if (cmd.name) {
-        cmd.suffix = [cmd.name, ...cmd.suffix];
+    // Only a compound command can follow a coprocess name. Decide before parsing
+    // a simple command so its assignments and reserved words use the actual name.
+    if (first.token === Token.Word) {
+      const lookahead = new Lexer(this.source, first.end, this.end);
+      lookahead._nestingDepth = this.depth;
+      switch (lookahead.peek(LexContext.CommandStart).token) {
+        case Token.LParen:
+          // `name ( )` opens a function definition, not a subshell body after a name.
+          lookahead.next(LexContext.CommandStart);
+          if (lookahead.peek(LexContext.Normal).token !== Token.RParen) name = this.readWord(LexContext.CommandStart);
+          break;
+        case Token.LBrace:
+        case Token.If:
+        case Token.For:
+        case Token.While:
+        case Token.Until:
+        case Token.Case:
+        case Token.Select:
+        case Token.DblLBracket:
+        case Token.ArithCmd:
+          name = this.readWord(LexContext.CommandStart);
       }
-      cmd.name = tentativeWord;
-      cmd.pos = tentativeWord.pos;
-      const redirects = this.collectTrailingRedirects();
-      const end = redirects.length > 0 ? redirects[redirects.length - 1].end : cmd.end;
-      return { type: "Coproc", pos, end, name: undefined, body: cmd, redirects: ownEmpty(redirects) };
     }
 
-    // Pipeline or compound command — tentative "name" IS the coproc name
-    const bodyRedirects = this._redirects;
-    this._redirects = EMPTY_REDIRECTS;
-    const redirects = this.collectTrailingRedirects();
-    const allRedirects = [...bodyRedirects, ...redirects];
-    const end = allRedirects.length > 0 ? allRedirects[allRedirects.length - 1].end : body.end;
-    return { type: "Coproc", pos, end, name: tentativeWord, body, redirects: allRedirects };
+    const cmd = this.command();
+    if (cmd && cmd.type !== "Function" && cmd.type !== "Coproc") {
+      return { type: "Coproc", pos, end: cmd.end, name, body: cmd };
+    }
+    this.error("expected command after 'coproc'", cmd?.pos ?? start.end);
+    const body = cmd
+      ? this.makeCompoundList([this.makeStatement(cmd)])
+      : ({ type: "CompoundList", pos: start.end, end: start.end, commands: [] } satisfies CompoundList);
+    return { type: "Coproc", pos, end: body.end, name, body };
   }
 
   // subshell := '(' list ')'
@@ -768,7 +748,6 @@ class Parser {
       const closeEnd = this.tok.skipSubshellBody();
       if (closeEnd < 0) this.error("expected ')' to close subshell", this.tok.getPos());
       const end = closeEnd >= 0 ? closeEnd : pos;
-      this._redirects = this.collectTrailingRedirects();
       return { type: "Subshell", pos, end, body: this.makeCompoundList([]) };
     }
 
@@ -779,7 +758,6 @@ class Parser {
     const closeEnd = this.acceptEnd(Token.RParen, LexContext.Normal);
     if (closeEnd < 0) this.error("expected ')' to close subshell", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
-    this._redirects = this.collectTrailingRedirects();
     return { type: "Subshell", pos, end, body: this.makeCompoundList(commands) };
   }
 
@@ -792,7 +770,6 @@ class Parser {
       const closeEnd = this.tok.skipCompoundBody(Token.RBrace);
       if (closeEnd < 0) this.error("expected '}' to close brace group", this.tok.getPos());
       const end = closeEnd >= 0 ? closeEnd : pos;
-      this._redirects = this.collectTrailingRedirects();
       return { type: "BraceGroup", pos, end, body: this.makeCompoundList([]) };
     }
 
@@ -803,7 +780,6 @@ class Parser {
     const closeEnd = this.acceptEnd(Token.RBrace, LexContext.Normal);
     if (closeEnd < 0) this.error("expected '}' to close brace group", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
-    this._redirects = this.collectTrailingRedirects();
     return { type: "BraceGroup", pos, end, body: this.makeCompoundList(commands) };
   }
 
@@ -816,7 +792,6 @@ class Parser {
       const closeEnd = this.tok.skipCompoundBody(Token.Fi);
       if (closeEnd < 0) this.error("expected 'fi' to close 'if'", this.tok.getPos());
       const end = closeEnd >= 0 ? closeEnd : pos;
-      this._redirects = this.collectTrailingRedirects();
       return {
         type: "If",
         pos,
@@ -873,14 +848,13 @@ class Parser {
       end = closeEnd >= 0 ? closeEnd : branchPos;
     }
     this.syntaxDepth--;
-    this._redirects = this.collectTrailingRedirects();
     const finalBranch: If = { type: "If", pos: branchPos, end, clause, then: then_, else: else_ };
     if (!firstBranch) return finalBranch;
     lastBranch!.else = finalBranch;
-    let branch = firstBranch;
-    while (branch !== finalBranch) {
+    let branch: If | CompoundList | undefined = firstBranch;
+    while (branch?.type === "If") {
       branch.end = end;
-      branch = branch.else as If;
+      branch = branch.else;
     }
     return firstBranch;
   }
@@ -895,10 +869,11 @@ class Parser {
     }
 
     const name = this.readWord(LexContext.Normal);
-    const wordlist: Word[] = [];
+    let wordlist: Word[] | undefined;
     this.skipNewlines(LexContext.CommandStart);
     if (this.tok.peek(LexContext.CommandStart).token === Token.In) {
       this.tok.next(LexContext.CommandStart);
+      wordlist = [];
       while (this.tok.peek(LexContext.Normal).token === Token.Word) {
         wordlist.push(this.readWord(LexContext.Normal));
       }
@@ -916,7 +891,6 @@ class Parser {
       const closeEnd = this.tok.skipCompoundBody(Token.Done);
       if (closeEnd < 0) this.error("expected 'done' to close 'for'", this.tok.getPos());
       const end = closeEnd >= 0 ? closeEnd : pos;
-      this._redirects = this.collectTrailingRedirects();
       return { type: "For", pos, end, name, wordlist, body: this.makeCompoundList([]) } satisfies For;
     }
 
@@ -927,7 +901,6 @@ class Parser {
     const closeEnd = this.acceptEnd(Token.Done, LexContext.CommandStart);
     if (closeEnd < 0) this.error("expected 'done' to close 'for'", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
-    this._redirects = this.collectTrailingRedirects();
     return { type: "For", pos, end, name, wordlist, body: this.makeCompoundList(body) } satisfies For;
   }
 
@@ -959,7 +932,6 @@ class Parser {
       const closeEnd = this.tok.skipCompoundBody(Token.Done);
       if (closeEnd < 0) this.error("expected 'done' to close 'for'", this.tok.getPos());
       const end = closeEnd >= 0 ? closeEnd : pos;
-      this._redirects = this.collectTrailingRedirects();
       return new ArithmeticForImpl(
         pos,
         end,
@@ -981,7 +953,6 @@ class Parser {
     const closeEnd = this.acceptEnd(Token.Done, LexContext.CommandStart);
     if (closeEnd < 0) this.error("expected 'done' to close 'for'", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
-    this._redirects = this.collectTrailingRedirects();
     return new ArithmeticForImpl(
       pos,
       end,
@@ -1013,7 +984,6 @@ class Parser {
       const closeEnd = this.tok.skipCompoundBody(Token.Done);
       if (closeEnd < 0) this.error(`expected 'done' to close '${kind}'`, this.tok.getPos());
       const end = closeEnd >= 0 ? closeEnd : pos;
-      this._redirects = this.collectTrailingRedirects();
       return {
         type: "While",
         pos,
@@ -1034,7 +1004,6 @@ class Parser {
     if (closeEnd < 0) this.error(`expected 'done' to close '${kind}'`, this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
     this.syntaxDepth--;
-    this._redirects = this.collectTrailingRedirects();
     return { type: "While", pos, end, kind, clause, body: this.makeCompoundList(body) };
   }
 
@@ -1052,7 +1021,6 @@ class Parser {
       const closeEnd = this.tok.skipCompoundBody(Token.Esac);
       if (closeEnd < 0) this.error("expected 'esac' to close 'case'", this.tok.getPos());
       const end = closeEnd >= 0 ? closeEnd : pos;
-      this._redirects = this.collectTrailingRedirects();
       return { type: "Case", pos, end, word, items: [] } satisfies Case;
     }
 
@@ -1102,7 +1070,6 @@ class Parser {
     if (closeEnd < 0) this.error("expected 'esac' to close 'case'", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
     this.syntaxDepth--;
-    this._redirects = this.collectTrailingRedirects();
     return { type: "Case", pos, end, word, items } satisfies Case;
   }
 
@@ -1110,10 +1077,11 @@ class Parser {
   private selectClause(): Select {
     const pos = this.tok.next(LexContext.CommandStart).pos;
     const name = this.readWord(LexContext.Normal);
-    const wordlist: Word[] = [];
+    let wordlist: Word[] | undefined;
     this.skipNewlines(LexContext.CommandStart);
     if (this.tok.peek(LexContext.CommandStart).token === Token.In) {
       this.tok.next(LexContext.CommandStart);
+      wordlist = [];
       while (this.tok.peek(LexContext.Normal).token === Token.Word) {
         wordlist.push(this.readWord(LexContext.Normal));
       }
@@ -1131,7 +1099,6 @@ class Parser {
       const closeEnd = this.tok.skipCompoundBody(Token.Done);
       if (closeEnd < 0) this.error("expected 'done' to close 'select'", this.tok.getPos());
       const end = closeEnd >= 0 ? closeEnd : pos;
-      this._redirects = this.collectTrailingRedirects();
       return { type: "Select", pos, end, name, wordlist, body: this.makeCompoundList([]) } satisfies Select;
     }
 
@@ -1142,7 +1109,6 @@ class Parser {
     const closeEnd = this.acceptEnd(Token.Done, LexContext.CommandStart);
     if (closeEnd < 0) this.error("expected 'done' to close 'select'", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
-    this._redirects = this.collectTrailingRedirects();
     return { type: "Select", pos, end, name, wordlist, body: this.makeCompoundList(body) } satisfies Select;
   }
 
@@ -1153,7 +1119,6 @@ class Parser {
     const closeEnd = this.acceptEnd(Token.DblRBracket, LexContext.TestMode);
     if (closeEnd < 0) this.error("expected ']]' to close '[['", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
-    this._redirects = this.collectTrailingRedirects();
     return { type: "TestCommand", pos, end, expression: expr };
   }
 
@@ -1315,7 +1280,7 @@ class Parser {
   private functionDef(): Function {
     const pos = this.tok.next(LexContext.CommandStart).pos;
     const name = this.readWord(LexContext.Normal);
-    let body: Node;
+    let body: Function["body"];
     if (this.tok.peek(LexContext.CommandStart).token === Token.LParen) {
       const openPos = this.tok.next(LexContext.CommandStart).pos;
       // `(` is the optional empty parameter list only when `)` follows immediately;
@@ -1325,23 +1290,19 @@ class Parser {
         this.skipNewlines(LexContext.CommandStart);
         body = this.commandAsBody();
       } else {
-        body = this.subshellBody(openPos);
+        body = this.withRedirects(this.subshellBody(openPos));
       }
     } else {
       this.skipNewlines(LexContext.CommandStart);
       body = this.commandAsBody();
     }
-    const redirects = this._redirects;
-    this._redirects = EMPTY_REDIRECTS;
-    const end = redirects.length > 0 ? redirects[redirects.length - 1].end : body.end;
-    return { type: "Function", pos, end, name, body, redirects: ownEmpty(redirects) };
+    return { type: "Function", pos, end: body.end, name, body };
   }
 
   // simple_command or function_def (word '(' ')' body)
-  private simpleCommandOrFunction(): Node {
-    const prefix: AssignmentPrefix[] = [];
-    let redirects: Redirect[] = [];
-    let cmdPos = this.tok.peek(LexContext.CommandStart).pos;
+  private simpleCommandOrFunction(): Command | Function {
+    const prefix: Command["prefix"] = [];
+    const cmdPos = this.tok.peek(LexContext.CommandStart).pos;
     let lastEnd = cmdPos;
 
     // Assignments and redirects interleave freely; after the first element CommandPrefix
@@ -1354,8 +1315,9 @@ class Parser {
         lastEnd = assignment.end;
         prefix.push(this.parseAssignment(assignment));
       } else if (t === Token.Redirect) {
-        redirects = this.collectRedirect(redirects, ctx);
-        lastEnd = redirects[redirects.length - 1].end;
+        const redirect = this.readRedirect(ctx);
+        prefix.push(redirect);
+        lastEnd = redirect.end;
       } else {
         break;
       }
@@ -1363,105 +1325,109 @@ class Parser {
     }
 
     if (this.tok.peek(LexContext.Normal).token !== Token.Word) {
-      return {
-        type: "Command",
-        pos: cmdPos,
-        end: lastEnd,
-        name: undefined,
-        prefix,
-        suffix: [],
-        redirects,
-      } satisfies Command;
+      return new CommandImpl(cmdPos, lastEnd, undefined, prefix, []);
     }
 
-    const name = this.readWord(LexContext.Normal);
+    const nameToken = this.tok.next(LexContext.Normal);
+    const declaration = nameToken.keywordEligible && isDeclarationCommand(nameToken.value);
+    const name = this.toWord(nameToken);
+    ctx = declaration ? LexContext.Declaration : LexContext.Normal;
     lastEnd = name.end;
 
     // Check for function definition: word '(' ')' body
-    if (this.tok.peek(LexContext.Normal).token === Token.LParen) {
+    if (this.tok.peek(ctx).token === Token.LParen) {
       this.tok.next(LexContext.Normal);
       if (this.tok.peek(LexContext.Normal).token === Token.RParen) {
         this.tok.next(LexContext.Normal);
         this.skipNewlines(LexContext.CommandStart);
         const body = this.commandAsBody();
-        const bodyRedirects = this._redirects;
-        this._redirects = EMPTY_REDIRECTS;
-        const end = bodyRedirects.length > 0 ? bodyRedirects[bodyRedirects.length - 1].end : body.end;
         return {
           type: "Function",
           pos: name.pos,
-          end,
+          end: body.end,
           name,
           body,
-          redirects: ownEmpty(bodyRedirects),
         } satisfies Function;
       }
     }
 
-    const suffix: Word[] = [];
+    const suffix: Command["suffix"] = [];
 
     // Collect suffix words and redirects
     for (;;) {
-      const st = this.tok.peek(LexContext.Normal).token;
+      const st = this.tok.peek(ctx).token;
       if (st === Token.Word || st === Token.Assignment) {
-        const w = this.readWord(LexContext.Normal);
+        const token = this.tok.next(ctx);
+        const w = st === Token.Assignment ? this.parseAssignment(token) : this.toWord(token);
         suffix.push(w);
         lastEnd = w.end;
       } else if (st === Token.Redirect) {
-        redirects = this.collectRedirect(redirects, LexContext.Normal);
-        lastEnd = redirects[redirects.length - 1].end;
+        const redirect = this.readRedirect(ctx);
+        suffix.push(redirect);
+        lastEnd = redirect.end;
       } else {
         break;
       }
     }
 
-    return {
-      type: "Command",
-      pos: cmdPos,
-      end: lastEnd,
-      name,
-      prefix,
-      suffix,
-      redirects,
-    } satisfies Command;
+    return new CommandImpl(cmdPos, lastEnd, name, prefix, suffix);
   }
 
-  private collectRedirect(redirects: Redirect[], ctx: LexContext): Redirect[] {
-    if (redirects === EMPTY_REDIRECTS) redirects = [];
+  private readRedirect(ctx: LexContext): Redirection {
     const t = this.tok.next(ctx);
     const tPos = t.pos;
     const tEnd = t.end;
-    const r: Redirect = {
-      pos: tPos,
-      end: tEnd,
-      operator: REDIRECT_OPS[t.value] ?? ">",
-      target: undefined,
-      fileDescriptor: t.fileDescriptor,
-      variableName: t.variableName,
-      content: t.content,
-      heredocQuoted: undefined,
-      body: undefined,
-    };
-    if (t.targetEnd > t.targetPos) {
-      const heredoc = t.value === "<<" || t.value === "<<-";
-      const resolver = heredoc ? heredocDelimiterParts(t.content ?? "") : undefined;
-      const text = this.source.slice(t.targetPos, t.targetEnd);
-      r.target = new WordImpl(text, t.targetPos, t.targetEnd, this.source, resolver, this.depth);
-    } else {
-      this.error("expected redirect target", t.targetPos);
+    const descriptor: RedirectDescriptor | undefined =
+      t.fileDescriptor !== undefined
+        ? { type: "FileDescriptor", pos: tPos, end: t.descriptorEnd, value: t.fileDescriptor }
+        : t.variableName !== undefined
+          ? { type: "FileDescriptorVariable", pos: tPos, end: t.descriptorEnd, name: t.variableName }
+          : undefined;
+    const hasTarget = t.targetEnd > t.targetPos;
+    if (!hasTarget) this.error("expected redirect target", t.targetPos);
+    if (t.value === "<<" || t.value === "<<-") {
+      const r: HereDoc = {
+        type: "HereDoc",
+        pos: tPos,
+        end: tEnd,
+        operator: t.value,
+        descriptor,
+        delimiter: hasTarget
+          ? {
+              type: "HereDocDelimiter",
+              pos: t.targetPos,
+              end: t.targetEnd,
+              text: this.source.slice(t.targetPos, t.targetEnd),
+              value: t.content ?? "",
+              quoted: t.delimiterQuoted,
+            }
+          : undefined,
+        body: new HereDocBodyImpl(this.source, tEnd, t.delimiterQuoted, this.depth),
+        closing: undefined,
+      };
+      if (hasTarget) this.tok.registerHereDocTarget(r);
+      return r;
     }
-    if (r.target && (t.value === "<<" || t.value === "<<-")) this.tok.registerHereDocTarget(r);
-    redirects.push(r);
-    return redirects;
+    const target = hasTarget
+      ? new WordImpl(
+          this.source.slice(t.targetPos, t.targetEnd),
+          t.targetPos,
+          t.targetEnd,
+          this.source,
+          undefined,
+          this.depth,
+        )
+      : undefined;
+    return t.value === "<<<"
+      ? { type: "HereString", pos: tPos, end: tEnd, operator: "<<<", descriptor, target }
+      : { type: "Redirect", pos: tPos, end: tEnd, operator: REDIRECT_OPS[t.value] ?? ">", descriptor, target };
   }
 
-  private commandAsBody(): Node {
-    const t = this.tok.peek(LexContext.CommandStart).token;
-    if (t === Token.LBrace) return this.braceGroup();
-    if (t === Token.LParen) return this.subshell();
+  private commandAsBody(): Function["body"] {
     const cmd = this.command();
-    const p = this.tok.getPos();
-    return cmd ?? ({ type: "CompoundList", pos: p, end: p, commands: [] } satisfies CompoundList);
+    if (cmd && cmd.type !== "Command" && cmd.type !== "Function" && cmd.type !== "Coproc") return cmd;
+    this.error("expected compound command as function body", cmd?.pos ?? this.tok.getPos());
+    return this.makeCompoundList(cmd ? [this.makeStatement(cmd)] : []);
   }
 
   private readWord(ctx: LexContext): Word {
@@ -1478,104 +1444,9 @@ class Parser {
     return new WordImpl(text, pos, end, this.source, undefined, this.depth);
   }
 
-  private parseAssignment(tok: TokenValue): AssignmentPrefix {
-    const text = tok.raw ? tok.value : this.source.slice(tok.pos, tok.end);
-    const tokPos = tok.pos;
-    const tokEnd = tok.end;
-    const result: AssignmentPrefix = {
-      type: "Assignment",
-      pos: tokPos,
-      end: tokEnd,
-      text,
-      name: undefined,
-      value: undefined,
-      append: undefined,
-      index: undefined,
-      indexParts: undefined,
-      array: undefined,
-    };
-
-    const eqIdx = tok.assignmentOperatorPos - tokPos;
-    if (eqIdx <= 0) return result;
-
-    let nameEnd = eqIdx;
-    let append = false;
-    let index: string | undefined;
-
-    // Check for += (append)
-    let appendPos = eqIdx;
-    while (appendPos >= 2 && text.charCodeAt(appendPos - 2) === 0x5c && text.charCodeAt(appendPos - 1) === 0x0a)
-      appendPos -= 2;
-    if (text.charCodeAt(appendPos - 1) === 0x2b /* + */) {
-      append = true;
-      nameEnd = appendPos - 1;
-    }
-
-    // Check for [index] before = or +=
-    const bracketIdx = text.indexOf("[");
-    if (bracketIdx > 0 && bracketIdx < nameEnd) {
-      const rbracketIdx = text.lastIndexOf("]", eqIdx);
-      if (rbracketIdx > bracketIdx) {
-        index = text.slice(bracketIdx + 1, rbracketIdx);
-        nameEnd = bracketIdx;
-      }
-    }
-
-    const rawName = text.slice(0, nameEnd);
-    const name = rawName.includes("\\\n") ? rawName.split("\\\n").join("") : rawName;
-    result.name = name;
-    if (append) result.append = true;
-    if (index !== undefined) {
-      result.index = index;
-      const indexPos = tokPos + bracketIdx + 1;
-      const indexEnd = indexPos + index.length;
-      if (hasEmbeddedWordStructure(this.source, indexPos, indexEnd)) {
-        const indexWord = new WordImpl(index, indexPos, indexEnd, this.source, computeEmbeddedWordParts, this.depth);
-        Object.defineProperty(result, "indexParts", {
-          configurable: true,
-          enumerable: true,
-          get: () => indexWord.parts,
-          set: (value: import("./types.ts").WordPart[] | undefined) => {
-            indexWord.parts = value;
-          },
-        });
-      }
-    }
-
-    // Value portion starts after =
-    const valStart = eqIdx + 1;
-    const valueStart = tokPos + valStart;
-
-    // Check for array assignment: value starts with (
-    if (
-      valStart < text.length &&
-      text.charCodeAt(valStart) === 0x28 /* ( */ &&
-      text.charCodeAt(text.length - 1) === 0x29 /* ) */
-    ) {
-      const elements = this.parseArrayElements(valueStart + 1, tokEnd - 1);
-      result.array = elements;
-    } else {
-      result.value = new WordImpl(text.slice(valStart), valueStart, tokEnd, this.source, undefined, this.depth);
-    }
-
-    return result;
-  }
-
-  private parseArrayElements(start: number, end: number): Word[] {
-    const subTok = new Lexer(this.source, start, end);
-    const elements: Word[] = [];
-    while (subTok.peek(LexContext.Normal).token !== Token.EOF) {
-      if (subTok.peek(LexContext.Normal).token === Token.Newline) {
-        subTok.next(LexContext.Normal);
-        continue;
-      }
-      const t = subTok.next(LexContext.Normal);
-      if (t.token === Token.Word || t.token === Token.Assignment) {
-        const text = t.raw ? t.value : this.source.slice(t.pos, t.end);
-        elements.push(new WordImpl(text, t.pos, t.end, this.source, undefined, this.depth));
-      }
-    }
-    return elements;
+  private parseAssignment(token: TokenValue): Assignment {
+    const text = token.raw ? token.value : this.source.slice(token.pos, token.end);
+    return new AssignmentImpl(text, token.pos, token.end, this.source, token.assignmentOperatorPos, this.depth);
   }
 
   private makeCompoundList(commands: Statement[]): CompoundList {

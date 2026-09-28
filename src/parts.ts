@@ -1,6 +1,6 @@
-import type { Word, WordPart } from "./types.ts";
+import type { Word, WordPart } from "./internal-types.ts";
 import { hasEmbeddedWordStructure, Lexer, MAX_SYNTAX_NESTING } from "./lexer.ts";
-import { parse, parseRegion } from "./parser.ts";
+import { parseRegion } from "./parser.ts";
 
 /**
  * Compute the structural parts of a word by re-scanning the source.
@@ -8,7 +8,7 @@ import { parse, parseRegion } from "./parser.ts";
  *
  * Returns undefined for simple words (no quotes, expansions, or special structure).
  */
-export function computeWordParts(source: string, word: Word, depth = 0): WordPart[] | undefined {
+export function computeWordParts(source: string, word: Pick<Word, "pos" | "end">, depth = 0): WordPart[] | undefined {
   // Bound the re-lex to the word's span. A word inside a substitution script carries the
   // whole original as its source, so an unbounded scan would overrun the word into an
   // adjacent delimiter (e.g. a backtick or `)` immediately after it). For top-level words
@@ -36,12 +36,25 @@ export function computeEmbeddedWordParts(
   return parts;
 }
 
+export function computeArrayElementParts(source: string, word: Word, depth = 0): WordPart[] | undefined {
+  const lexer = new Lexer(source, word.pos, word.end);
+  lexer._nestingDepth = depth;
+  const parts = lexer.buildArrayElementParts(word.pos);
+  if (!parts) return undefined;
+  resolveCollected(lexer);
+  return parts;
+}
+
 /**
  * Compute parts for an unquoted heredoc body.
  * Heredoc bodies use different scanning rules than shell words: newlines are
  * literal and single/double quotes have no special meaning.
  */
-export function computeHereDocBodyParts(source: string, word: Word, depth = 0): WordPart[] | undefined {
+export function computeHereDocBodyParts(
+  source: string,
+  word: Pick<Word, "pos" | "end">,
+  depth = 0,
+): WordPart[] | undefined {
   const lexer = new Lexer(source, word.pos, word.end);
   lexer._nestingDepth = depth;
   const parts = lexer.buildHereDocParts(word.pos, word.end);
@@ -59,26 +72,18 @@ export function computeHereDocBodyParts(source: string, word: Word, depth = 0): 
  * Escaped backticks rebuild `inner` with the escapes removed, so it is no longer a verbatim
  * substring of the source and carries no innerStart; those parse the rebuilt slice and stay
  * relative to it — the single exception to absolute offsets. Only these scripts carry a
- * non-enumerable `source` property holding the decoded string their positions index.
+ * `source` property holding the decoded string their positions index.
  */
 function resolveCollected(lexer: Lexer): void {
   const source = lexer.getSource();
-  for (const [e, innerDepth] of lexer.getCollectedExpansions()) {
-    if (e.inner !== undefined) {
-      const depth = innerDepth + 1;
-      if (depth > MAX_SYNTAX_NESTING + 1) {
-        // Past the flagged boundary script — stop descending and leave the
-        // substitution unresolved rather than materializing unbounded structure.
-      } else if (e.innerStart !== undefined) {
-        e.script = parseRegion(source, e.innerStart, e.innerStart + e.inner.length, depth);
-      } else {
-        // Escaped-backtick scripts parse from the decoded slice. Each nesting level
-        // doubles the escaping, so their depth is bounded by input size already.
-        e.script = parse(e.inner);
-        Object.defineProperty(e.script, "source", { value: e.inner, enumerable: false });
-      }
-      e.inner = undefined;
-      e.innerStart = undefined;
+  for (const [part, innerDepth, inner, innerStart, parenBoundary] of lexer.getCollectedExpansions()) {
+    const depth = innerDepth + 1;
+    if (depth > MAX_SYNTAX_NESTING + 1) continue;
+    if (innerStart !== undefined) {
+      part.script = parseRegion(source, innerStart, innerStart + inner.length, depth, parenBoundary);
+    } else {
+      part.script = parseRegion(inner, 0, inner.length, depth);
+      part.script.source = inner;
     }
   }
 }

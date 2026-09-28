@@ -1,4 +1,4 @@
-import type { DoubleQuotedChild, Word, WordPart } from "./types.ts";
+import type { DoubleQuotedChild, Word, WordPart } from "./internal-types.ts";
 
 export type PartsResolver = (source: string, word: Word, depth: number) => WordPart[] | undefined;
 
@@ -29,17 +29,16 @@ function unescapeBareValue(text: string): string {
   return s + text.slice(start);
 }
 
-function commandExpansionValue(text: string): string {
-  if (text[0] !== "$") return text;
+function continuedExpansionValue(text: string): string {
   let pos = 1;
   while (text[pos] === "\\" && text[pos + 1] === "\n") pos += 2;
-  return pos === 1 || text[pos] !== "(" ? text : "$" + text.slice(pos);
+  return pos === 1 || text[pos] !== "(" ? text : text[0] + text.slice(pos);
 }
 
 export class WordImpl implements Word {
   static _resolveWord: PartsResolver;
-  static _resolveHeredocBody: PartsResolver;
 
+  type = "Word" as const;
   text: string;
   pos: number;
   end: number;
@@ -78,7 +77,10 @@ export class WordImpl implements Word {
               s += dequoteValue(p.parts);
               break;
             case "CommandExpansion":
-              s += commandExpansionValue(p.text);
+              s += p.text[0] === "$" ? continuedExpansionValue(p.text) : p.text;
+              break;
+            case "ExtendedGlob":
+              s += continuedExpansionValue(p.text);
               break;
             default:
               s += p.text;
@@ -101,11 +103,7 @@ export class WordImpl implements Word {
     this.#parts = v ?? undefined;
   }
 
-  sourceText(): string | undefined {
-    return this.#source?.slice(this.pos, this.end);
-  }
-
   toJSON() {
-    return { text: this.text, pos: this.pos, end: this.end, parts: this.parts, value: this.value };
+    return { type: this.type, text: this.text, pos: this.pos, end: this.end, parts: this.parts, value: this.value };
   }
 }

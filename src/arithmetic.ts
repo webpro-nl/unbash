@@ -1,4 +1,4 @@
-import type { ArithmeticCommandExpansion, ArithmeticExpression, ArithmeticWord } from "./types.ts";
+import type { ArithmeticCommandExpansion, ArithmeticExpression, ArithmeticWord } from "./internal-types.ts";
 import {
   CH_TAB,
   CH_NL,
@@ -477,13 +477,11 @@ export function parseArithmeticExpression(
           }
         }
         const text = src.slice(start, pos);
-        const inner = text.slice(2, -1); // remove "$(" and ")"
         const node: ArithmeticCommandExpansion = {
           type: "ArithmeticCommandExpansion",
           pos: start + offset,
           end: pos + offset,
           text,
-          inner,
           script: undefined,
         };
         collector?.commandExpansions.push(node);
