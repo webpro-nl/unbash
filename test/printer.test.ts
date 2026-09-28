@@ -356,6 +356,13 @@ test("unary test operator without an operand prints as written", () => {
   assert.equal(fmt("[[ ! -z ]]"), "[[ ! -z ]]");
 });
 
+test("function names that lex as assignments keep the function keyword", () => {
+  const printed = fmt("function x=y { :; }");
+  assert.equal(printed, "function x=y {\n  :\n}");
+  assert.equal(fmt(printed), printed);
+  assert.equal(parse(printed).errors, undefined);
+});
+
 // --- Multiple statements ---
 
 test("multiple statements", () => {

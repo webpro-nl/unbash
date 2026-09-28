@@ -193,9 +193,9 @@ const RESERVED_WORDS = new Map<string, Token>([
 ]);
 
 // `name()` is a syntax error for these; `time`, `[[` and `]]` are matched positionally
-// rather than through RESERVED_WORDS.
+// rather than through RESERVED_WORDS, and a name spelled like an assignment reads as a prefix.
 export function requiresFunctionKeyword(name: string): boolean {
-  return RESERVED_WORDS.has(name) || name === "time" || name === "[[" || name === "]]";
+  return RESERVED_WORDS.has(name) || name === "time" || name === "[[" || name === "]]" || name.includes("=");
 }
 
 // Combined character type table — bit 0: metachar, bit 1: word-special
