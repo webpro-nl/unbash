@@ -216,7 +216,7 @@ function andOr(a: AndOr, indent: number): string {
 function ifNode(n: If, indent: number, isElif: boolean): string {
   const pad = "  ".repeat(indent);
   const kw = isElif ? "elif" : "if";
-  let out = kw + " " + inlineList(n.clause) + "; then\n";
+  let out = kw + " " + inlineClause(n.clause, "then") + "\n";
   out += stmts(n.then.commands, indent + 1);
   if (n.else) {
     out += "\n";
@@ -248,7 +248,7 @@ function forNode(n: For, indent: number): string {
 
 function whileNode(n: While, indent: number): string {
   const pad = "  ".repeat(indent);
-  let out = n.kind + " " + inlineList(n.clause) + "; do\n";
+  let out = n.kind + " " + inlineClause(n.clause, "do") + "\n";
   out += stmts(n.body.commands, indent + 1) + "\n";
   out += pad + "done";
   return out;
@@ -504,10 +504,16 @@ function redir(r: Redirect): string {
 function inlineList(cl: CompoundList): string {
   let out = "";
   for (let i = 0; i < cl.commands.length; i++) {
-    if (i > 0) out += "; ";
+    if (i > 0) out += cl.commands[i - 1].background ? " " : "; ";
     out += inlineStmt(cl.commands[i]);
   }
   return out;
+}
+
+// A background statement is already terminated by its `&`; `&;` is a syntax error.
+function inlineClause(cl: CompoundList, keyword: string): string {
+  const last = cl.commands[cl.commands.length - 1];
+  return inlineList(cl) + (last?.background ? " " : "; ") + keyword;
 }
 
 function inlineStmt(s: Statement): string {

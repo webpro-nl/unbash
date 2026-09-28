@@ -326,6 +326,19 @@ test("background command", () => {
   assert.equal(fmt("sleep 10 &"), "sleep 10 &");
 });
 
+test("background statement inside a clause keeps & as its terminator", () => {
+  for (const [source, expected] of [
+    ["if true & then echo bg; fi", "if true & then\n  echo bg\nfi"],
+    ["if true &\nthen echo bg; fi", "if true & then\n  echo bg\nfi"],
+    ["if echo a & echo b; then :; fi", "if echo a & echo b; then\n  :\nfi"],
+    ["while true & do break; done", "while true & do\n  break\ndone"],
+    ["until false & do break; done", "until false & do\n  break\ndone"],
+  ]) {
+    assert.equal(fmt(source), expected, source);
+    assert.equal(fmt(expected), expected, source);
+  }
+});
+
 // --- Multiple statements ---
 
 test("multiple statements", () => {
