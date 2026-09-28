@@ -1,99 +1,179 @@
 export interface Word {
-  text: string;
-  value: string;
-  pos: number;
-  end: number;
-  parts?: WordPart[];
+  readonly type: "Word";
+  readonly text: string;
+  readonly value: string;
+  readonly pos: number;
+  readonly end: number;
+  readonly parts?: readonly WordPart[] | undefined;
 }
 
 export interface LiteralPart {
-  type: "Literal";
-  value: string;
-  text: string;
+  readonly type: "Literal";
+  readonly pos: number;
+  readonly end: number;
+  readonly value: string;
+  readonly text: string;
 }
 
 export interface SingleQuotedPart {
-  type: "SingleQuoted";
-  value: string;
-  text: string;
+  readonly type: "SingleQuoted";
+  readonly pos: number;
+  readonly end: number;
+  readonly value: string;
+  readonly text: string;
 }
 
 export interface DoubleQuotedPart {
-  type: "DoubleQuoted";
-  text: string;
-  parts: DoubleQuotedChild[];
+  readonly type: "DoubleQuoted";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly parts: readonly DoubleQuotedChild[];
 }
 
 export interface AnsiCQuotedPart {
-  type: "AnsiCQuoted";
-  text: string;
-  value: string;
+  readonly type: "AnsiCQuoted";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly value: string;
 }
 
 export interface LocaleStringPart {
-  type: "LocaleString";
-  text: string;
-  parts: DoubleQuotedChild[];
+  readonly type: "LocaleString";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly parts: readonly DoubleQuotedChild[];
 }
 
 export interface SimpleExpansionPart {
-  type: "SimpleExpansion";
-  text: string;
+  readonly type: "SimpleExpansion";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
 }
 
 export interface ParameterExpansionPart {
-  type: "ParameterExpansion";
-  text: string;
-  parameter: string;
-  index: string | undefined;
-  indexParts?: WordPart[];
-  indirect: boolean | undefined;
-  length: boolean | undefined;
-  operator: string | undefined;
-  operand: Word | undefined;
-  slice: { offset: Word; length: Word | undefined } | undefined;
-  replace: { pattern: Word; replacement: Word } | undefined;
+  readonly type: "ParameterExpansion";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly parameter: string;
+  readonly parameterPos: number;
+  readonly parameterEnd: number;
+  readonly prefix: "!" | "#" | undefined;
+  readonly index: Word | undefined;
+  readonly operation: ParameterOperation | undefined;
 }
 
+interface ParameterOperationBase {
+  readonly pos: number;
+  readonly end: number;
+  readonly operatorEnd: number;
+}
+
+export interface ParameterDefaultOperation extends ParameterOperationBase {
+  readonly type: "Default";
+  readonly operator: "-" | ":-" | "=" | ":=" | "+" | ":+" | "?" | ":?";
+  readonly operand: Word;
+}
+
+export interface ParameterRemoveOperation extends ParameterOperationBase {
+  readonly type: "Remove";
+  readonly operator: "#" | "##" | "%" | "%%";
+  readonly operand: Word;
+}
+
+export interface ParameterReplaceOperation extends ParameterOperationBase {
+  readonly type: "Replace";
+  readonly operator: "/" | "//" | "/#" | "/%";
+  readonly pattern: Word;
+  readonly replacement: Word;
+}
+
+export interface ParameterSliceOperation extends ParameterOperationBase {
+  readonly type: "Slice";
+  readonly operator: ":";
+  readonly offset: Word;
+  readonly length: Word | undefined;
+}
+
+export interface ParameterCaseOperation extends ParameterOperationBase {
+  readonly type: "CaseModification";
+  readonly operator: "^" | "^^" | "," | ",,";
+  readonly operand: Word | undefined;
+}
+
+export interface ParameterTransformOperation extends ParameterOperationBase {
+  readonly type: "Transform";
+  readonly operator: "@";
+  readonly operand: Word;
+}
+
+export interface ParameterNamesOperation extends ParameterOperationBase {
+  readonly type: "Names";
+  readonly operator: "@" | "*";
+}
+
+export interface ParameterUnknownOperation extends ParameterOperationBase {
+  readonly type: "Unknown";
+  readonly operator: string;
+}
+
+export type ParameterOperation =
+  | ParameterDefaultOperation
+  | ParameterRemoveOperation
+  | ParameterReplaceOperation
+  | ParameterSliceOperation
+  | ParameterCaseOperation
+  | ParameterTransformOperation
+  | ParameterNamesOperation
+  | ParameterUnknownOperation;
+
 export interface CommandExpansionPart {
-  type: "CommandExpansion";
-  text: string;
-  script: ParsedScript | undefined;
-  inner: string | undefined;
-  /** Internal: absolute offset of `inner` in the original source; cleared after resolution. */
-  innerStart?: number;
+  readonly type: "CommandExpansion";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly script: ParsedScript | undefined;
 }
 
 export interface ArithmeticExpansionPart {
-  type: "ArithmeticExpansion";
-  text: string;
-  expression: ArithmeticExpression | undefined;
+  readonly type: "ArithmeticExpansion";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly expression: ArithmeticExpression | undefined;
 }
 
 export interface ProcessSubstitutionPart {
-  type: "ProcessSubstitution";
-  text: string;
-  operator: "<" | ">";
-  script: ParsedScript | undefined;
-  inner: string | undefined;
-  /** Internal: absolute offset of `inner` in the original source; cleared after resolution. */
-  innerStart?: number;
+  readonly type: "ProcessSubstitution";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly operator: "<" | ">";
+  readonly script: ParsedScript | undefined;
 }
 
 export type ExtGlobOperator = "?" | "*" | "+" | "@" | "!";
 
 export interface ExtendedGlobPart {
-  type: "ExtendedGlob";
-  text: string;
-  operator: ExtGlobOperator;
-  pattern: string;
-  parts?: WordPart[];
+  readonly type: "ExtendedGlob";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly operator: ExtGlobOperator;
+  readonly pattern: string;
+  readonly parts?: readonly WordPart[] | undefined;
 }
 
 export interface BraceExpansionPart {
-  type: "BraceExpansion";
-  text: string;
-  parts?: WordPart[];
+  readonly type: "BraceExpansion";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly parts?: readonly WordPart[] | undefined;
 }
 
 export type ArithmeticExpression =
@@ -105,55 +185,53 @@ export type ArithmeticExpression =
   | ArithmeticCommandExpansion;
 
 export interface ArithmeticBinary {
-  type: "ArithmeticBinary";
-  pos: number;
-  end: number;
-  operator: string;
-  left: ArithmeticExpression;
-  right: ArithmeticExpression;
+  readonly type: "ArithmeticBinary";
+  readonly pos: number;
+  readonly end: number;
+  readonly operator: string;
+  readonly left: ArithmeticExpression;
+  readonly right: ArithmeticExpression;
 }
 
 export interface ArithmeticUnary {
-  type: "ArithmeticUnary";
-  pos: number;
-  end: number;
-  operator: string;
-  operand: ArithmeticExpression;
-  prefix: boolean;
+  readonly type: "ArithmeticUnary";
+  readonly pos: number;
+  readonly end: number;
+  readonly operator: string;
+  readonly operand: ArithmeticExpression;
+  readonly prefix: boolean;
 }
 
 export interface ArithmeticTernary {
-  type: "ArithmeticTernary";
-  pos: number;
-  end: number;
-  test: ArithmeticExpression;
-  consequent: ArithmeticExpression;
-  alternate: ArithmeticExpression;
+  readonly type: "ArithmeticTernary";
+  readonly pos: number;
+  readonly end: number;
+  readonly test: ArithmeticExpression;
+  readonly consequent: ArithmeticExpression;
+  readonly alternate: ArithmeticExpression;
 }
 
 export interface ArithmeticGroup {
-  type: "ArithmeticGroup";
-  pos: number;
-  end: number;
-  expression: ArithmeticExpression;
+  readonly type: "ArithmeticGroup";
+  readonly pos: number;
+  readonly end: number;
+  readonly expression: ArithmeticExpression;
 }
 
 export interface ArithmeticWord {
-  type: "ArithmeticWord";
-  pos: number;
-  end: number;
-  value: string;
-  parts?: WordPart[];
+  readonly type: "ArithmeticWord";
+  readonly pos: number;
+  readonly end: number;
+  readonly value: string;
+  readonly parts?: readonly WordPart[] | undefined;
 }
 
 export interface ArithmeticCommandExpansion {
-  type: "ArithmeticCommandExpansion";
-  pos: number;
-  end: number;
-  text: string; // e.g., "$(cmd)"
-  inner: string | undefined; // e.g., "cmd" - cleared after resolution
-  script: ParsedScript | undefined; // set after resolution
-  innerStart?: number; // internal: absolute offset of `inner`; cleared after resolution
+  readonly type: "ArithmeticCommandExpansion";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string; // e.g., "$(cmd)"
+  readonly script: ParsedScript | undefined; // set after resolution
 }
 
 export type DoubleQuotedChild =
@@ -177,169 +255,261 @@ export type WordPart =
   | ExtendedGlobPart
   | BraceExpansionPart;
 
-export interface AssignmentPrefix {
-  type: "Assignment";
-  pos: number;
-  end: number;
-  text: string;
-  name: string | undefined;
-  value: Word | undefined;
-  append: boolean | undefined;
-  index: string | undefined;
-  indexParts?: WordPart[];
-  array: Word[] | undefined;
+export interface Assignment {
+  readonly type: "Assignment";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly name: string;
+  readonly value: Word | ArrayValue;
+  readonly append: boolean | undefined;
+  readonly index: Word | undefined;
 }
 
-export type RedirectOperator = ">" | ">>" | "<" | "<<" | "<<-" | "<<<" | "<>" | "<&" | ">&" | ">|" | "&>" | "&>>";
+export interface ArrayValue {
+  readonly type: "ArrayValue";
+  readonly pos: number;
+  readonly end: number;
+  readonly elements: readonly Word[];
+}
+
+export type AssignmentPrefix = Assignment;
+
+export type CommandArgument = Word | Assignment;
+
+export type RedirectOperator = ">" | ">>" | "<" | "<>" | "<&" | ">&" | ">|" | "&>" | "&>>";
+
+export type Redirection = Redirect | HereString | HereDoc;
+
+export type RedirectDescriptor =
+  | { readonly type: "FileDescriptor"; readonly pos: number; readonly end: number; readonly value: number }
+  | { readonly type: "FileDescriptorVariable"; readonly pos: number; readonly end: number; readonly name: string };
 
 export interface Redirect {
-  pos: number;
-  end: number;
-  operator: RedirectOperator;
-  target: Word | undefined;
-  fileDescriptor: number | undefined;
-  variableName: string | undefined;
-  content: string | undefined;
-  heredocQuoted: boolean | undefined;
-  body: Word | undefined;
+  readonly type: "Redirect";
+  readonly pos: number;
+  readonly end: number;
+  readonly operator: RedirectOperator;
+  readonly descriptor: RedirectDescriptor | undefined;
+  readonly target: Word | undefined;
+}
+
+export interface HereString {
+  readonly type: "HereString";
+  readonly pos: number;
+  readonly end: number;
+  readonly operator: "<<<";
+  readonly descriptor: RedirectDescriptor | undefined;
+  readonly target: Word | undefined;
+}
+
+export interface HereDoc {
+  readonly type: "HereDoc";
+  readonly pos: number;
+  readonly end: number;
+  readonly operator: "<<" | "<<-";
+  readonly descriptor: RedirectDescriptor | undefined;
+  readonly delimiter: HereDocDelimiter | undefined;
+  readonly body: HereDocBody;
+  readonly closing: { readonly pos: number; readonly end: number } | undefined;
+}
+
+export interface HereDocDelimiter {
+  readonly type: "HereDocDelimiter";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly value: string;
+  readonly quoted: boolean;
+}
+
+export interface HereDocBody {
+  readonly type: "HereDocBody";
+  readonly pos: number;
+  readonly end: number;
+  readonly text: string;
+  readonly parts: readonly WordPart[] | undefined;
 }
 
 export interface Command {
-  type: "Command";
-  pos: number;
-  end: number;
-  name: Word | undefined;
-  prefix: AssignmentPrefix[];
-  suffix: Word[];
-  redirects: Redirect[];
+  readonly type: "Command";
+  readonly pos: number;
+  readonly end: number;
+  readonly name: Word | undefined;
+  readonly prefix: readonly (Assignment | Redirection)[];
+  readonly suffix: readonly (CommandArgument | Redirection)[];
+  /** Suffix words and assignments in source order; derived from suffix, lazy, cached, not serialized. */
+  readonly args: readonly CommandArgument[];
+  /** Redirections from prefix then suffix in source order; derived, lazy, cached, not serialized. */
+  readonly redirects: readonly Redirection[];
 }
+
+export interface Redirected {
+  readonly type: "Redirected";
+  readonly pos: number;
+  readonly end: number;
+  readonly command: CompoundCommand;
+  readonly redirects: readonly Redirection[];
+}
+
+export type CompoundCommand =
+  | If
+  | For
+  | ArithmeticFor
+  | Select
+  | While
+  | Subshell
+  | BraceGroup
+  | Case
+  | TestCommand
+  | ArithmeticCommand;
 
 export type PipeOperator = "|" | "|&";
 
+export type CommandNode = Command | CompoundCommand | Redirected | Function | Coproc;
+
+export type PipelineNode = CommandNode | Pipeline | Time | Negation;
+
 export interface Pipeline {
-  type: "Pipeline";
-  pos: number;
-  end: number;
-  commands: Node[];
-  negated: boolean | undefined;
-  operators: PipeOperator[];
-  time: boolean | undefined;
+  readonly type: "Pipeline";
+  readonly pos: number;
+  readonly end: number;
+  readonly commands: readonly CommandNode[];
+  readonly operators: readonly PipeOperator[];
+}
+
+export interface Time {
+  readonly type: "Time";
+  readonly pos: number;
+  readonly end: number;
+  readonly keywordEnd: number;
+  readonly posix: { readonly pos: number; readonly end: number } | undefined;
+  readonly endOfOptions: { readonly pos: number; readonly end: number } | undefined;
+  readonly command: PipelineNode | undefined;
+}
+
+export interface Negation {
+  readonly type: "Negation";
+  readonly pos: number;
+  readonly end: number;
+  readonly keywordEnd: number;
+  readonly command: PipelineNode | undefined;
 }
 
 export type LogicalOperator = "&&" | "||";
 
 export interface AndOr {
-  type: "AndOr";
-  pos: number;
-  end: number;
-  commands: Node[];
-  operators: LogicalOperator[];
+  readonly type: "AndOr";
+  readonly pos: number;
+  readonly end: number;
+  readonly commands: readonly PipelineNode[];
+  readonly operators: readonly LogicalOperator[];
 }
 
 export interface If {
-  type: "If";
-  pos: number;
-  end: number;
-  clause: CompoundList;
-  then: CompoundList;
-  else: CompoundList | If | undefined;
+  readonly type: "If";
+  readonly pos: number;
+  readonly end: number;
+  readonly clause: CompoundList;
+  readonly then: CompoundList;
+  readonly else: CompoundList | If | undefined;
 }
 
 export interface For {
-  type: "For";
-  pos: number;
-  end: number;
-  name: Word;
-  wordlist: Word[];
-  body: CompoundList;
+  readonly type: "For";
+  readonly pos: number;
+  readonly end: number;
+  readonly name: Word;
+  readonly wordlist: readonly Word[] | undefined;
+  readonly body: CompoundList;
 }
 
 export type WhileKind = "while" | "until";
 
 export interface While {
-  type: "While";
-  pos: number;
-  end: number;
-  kind: WhileKind;
-  clause: CompoundList;
-  body: CompoundList;
+  readonly type: "While";
+  readonly pos: number;
+  readonly end: number;
+  readonly kind: WhileKind;
+  readonly clause: CompoundList;
+  readonly body: CompoundList;
 }
 
 export interface Function {
-  type: "Function";
-  pos: number;
-  end: number;
-  name: Word;
-  body: Node;
-  redirects: Redirect[];
+  readonly type: "Function";
+  readonly pos: number;
+  readonly end: number;
+  readonly name: Word;
+  /** A CompoundList body only occurs in recovery and is accompanied by an error. */
+  readonly body: CompoundCommand | Redirected | CompoundList;
 }
 
 export interface Subshell {
-  type: "Subshell";
-  pos: number;
-  end: number;
-  body: CompoundList;
+  readonly type: "Subshell";
+  readonly pos: number;
+  readonly end: number;
+  readonly body: CompoundList;
 }
 
 export interface BraceGroup {
-  type: "BraceGroup";
-  pos: number;
-  end: number;
-  body: CompoundList;
+  readonly type: "BraceGroup";
+  readonly pos: number;
+  readonly end: number;
+  readonly body: CompoundList;
 }
 
 export interface CompoundList {
-  type: "CompoundList";
-  pos: number;
-  end: number;
-  commands: Statement[];
+  readonly type: "CompoundList";
+  readonly pos: number;
+  readonly end: number;
+  readonly commands: readonly Statement[];
 }
 
 export interface Case {
-  type: "Case";
-  pos: number;
-  end: number;
-  word: Word;
-  items: CaseItem[];
+  readonly type: "Case";
+  readonly pos: number;
+  readonly end: number;
+  readonly word: Word;
+  readonly items: readonly CaseItem[];
 }
 
 export type CaseTerminator = ";;" | ";&" | ";;&";
 
 export interface CaseItem {
-  type: "CaseItem";
-  pos: number;
-  end: number;
-  pattern: Word[];
-  body: CompoundList;
-  terminator: CaseTerminator | undefined;
+  readonly type: "CaseItem";
+  readonly pos: number;
+  readonly end: number;
+  readonly pattern: readonly Word[];
+  readonly body: CompoundList;
+  readonly terminator: CaseTerminator | undefined;
 }
 
 export interface Select {
-  type: "Select";
-  pos: number;
-  end: number;
-  name: Word;
-  wordlist: Word[];
-  body: CompoundList;
+  readonly type: "Select";
+  readonly pos: number;
+  readonly end: number;
+  readonly name: Word;
+  readonly wordlist: readonly Word[] | undefined;
+  readonly body: CompoundList;
 }
 
 export interface Coproc {
-  type: "Coproc";
-  pos: number;
-  end: number;
-  name: Word | undefined;
-  body: Node;
-  redirects: Redirect[];
+  readonly type: "Coproc";
+  readonly pos: number;
+  readonly end: number;
+  readonly name: Word | undefined;
+  /** A CompoundList body only occurs in recovery and is accompanied by an error. */
+  readonly body: Command | CompoundCommand | Redirected | CompoundList;
 }
 
 export interface ArithmeticFor {
-  type: "ArithmeticFor";
-  pos: number;
-  end: number;
-  initialize: ArithmeticExpression | undefined;
-  test: ArithmeticExpression | undefined;
-  update: ArithmeticExpression | undefined;
-  body: CompoundList;
+  readonly type: "ArithmeticFor";
+  readonly pos: number;
+  readonly end: number;
+  readonly initialize: ArithmeticExpression | undefined;
+  readonly test: ArithmeticExpression | undefined;
+  readonly update: ArithmeticExpression | undefined;
+  readonly body: CompoundList;
 }
 
 export type TestExpression =
@@ -350,110 +520,102 @@ export type TestExpression =
   | TestGroupExpression;
 
 export interface TestUnaryExpression {
-  type: "TestUnary";
-  pos: number;
-  end: number;
-  operator: string;
-  operand: Word;
+  readonly type: "TestUnary";
+  readonly pos: number;
+  readonly end: number;
+  readonly operator: string;
+  readonly operand: Word;
 }
 
 export interface TestBinaryExpression {
-  type: "TestBinary";
-  pos: number;
-  end: number;
-  operator: string;
-  left: Word;
-  right: Word;
+  readonly type: "TestBinary";
+  readonly pos: number;
+  readonly end: number;
+  readonly operator: string;
+  readonly left: Word;
+  readonly right: Word;
 }
 
 export interface TestLogicalExpression {
-  type: "TestLogical";
-  pos: number;
-  end: number;
-  operator: "&&" | "||";
-  left: TestExpression;
-  right: TestExpression;
+  readonly type: "TestLogical";
+  readonly pos: number;
+  readonly end: number;
+  readonly operator: "&&" | "||";
+  readonly left: TestExpression;
+  readonly right: TestExpression;
 }
 
 export interface TestNotExpression {
-  type: "TestNot";
-  pos: number;
-  end: number;
-  operand: TestExpression;
+  readonly type: "TestNot";
+  readonly pos: number;
+  readonly end: number;
+  readonly operand: TestExpression;
 }
 
 export interface TestGroupExpression {
-  type: "TestGroup";
-  pos: number;
-  end: number;
-  expression: TestExpression;
+  readonly type: "TestGroup";
+  readonly pos: number;
+  readonly end: number;
+  readonly expression: TestExpression;
 }
 
 export interface TestCommand {
-  type: "TestCommand";
-  pos: number;
-  end: number;
-  expression: TestExpression;
+  readonly type: "TestCommand";
+  readonly pos: number;
+  readonly end: number;
+  readonly expression: TestExpression;
 }
 
 export interface ArithmeticCommand {
-  type: "ArithmeticCommand";
-  pos: number;
-  end: number;
-  expression: ArithmeticExpression | undefined;
-  body: string;
+  readonly type: "ArithmeticCommand";
+  readonly pos: number;
+  readonly end: number;
+  readonly expression: ArithmeticExpression | undefined;
+  readonly body: string;
 }
 
 export interface Statement {
-  type: "Statement";
-  pos: number;
-  end: number;
-  command: Node;
-  background: boolean | undefined;
-  redirects: Redirect[];
+  readonly type: "Statement";
+  readonly pos: number;
+  readonly end: number;
+  readonly command: PipelineNode | AndOr;
+  readonly background: boolean | undefined;
 }
 
-export type Node =
-  | Command
-  | Pipeline
-  | AndOr
-  | If
-  | For
-  | ArithmeticFor
-  | Select
-  | While
-  | Function
-  | Subshell
-  | BraceGroup
+export type SyntaxNode =
+  | ParsedScript
+  | Statement
   | CompoundList
-  | Case
-  | Coproc
-  | TestCommand
-  | ArithmeticCommand
-  | Statement;
+  | CaseItem
+  | PipelineNode
+  | AndOr
+  | Word
+  | WordPart
+  | Assignment
+  | ArrayValue
+  | Redirection
+  | RedirectDescriptor
+  | HereDocDelimiter
+  | HereDocBody
+  | ArithmeticExpression
+  | TestExpression
+  | ParameterOperation;
 
 export interface Script {
-  type: "Script";
-  pos: number;
-  end: number;
-  shebang: string | undefined;
-  commands: Statement[];
+  readonly type: "Script";
+  readonly pos: number;
+  readonly end: number;
+  readonly shebang: string | undefined;
+  readonly commands: readonly Statement[];
+  /** Decoded source owned by escaped-backtick scripts; descendant positions index this string. */
+  readonly source?: string;
 }
 
 export interface ParsedScript extends Script {
-  /**
-   * Present only on scripts parsed from a rebuilt string (decoded escaped-backtick
-   * substitutions), whose positions index this decoded string instead of the
-   * caller's source. Absent everywhere else: positions already index the string
-   * the caller parsed. Non-enumerable when present.
-   */
-  readonly source?: string;
-  errors?: ParseError[];
+  readonly errors?: readonly ParseError[] | undefined;
 }
 
 export interface ParseError {
-  message: string;
-  pos: number;
+  readonly message: string;
+  readonly pos: number;
 }
-
-export type DeferredCommandExpansion = CommandExpansionPart | ProcessSubstitutionPart | ArithmeticCommandExpansion;

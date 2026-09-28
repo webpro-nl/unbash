@@ -41,11 +41,12 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "format": "oxfmt",
     "lint": "oxlint",
-    "prepack": "tsc",
+    "prepack": "tsc -p tsconfig.build.json",
     "test": "node --test test/*.test.ts",
+    "test:types": "tsc -p tsconfig.build.json && tsc",
     "playground": "pnpx rolldown src/parser.ts -f esm -m -o playground/parser.js && pnpx rolldown src/printer.ts -f esm -m -o playground/printer.js && sed -i 's/id=\"version\">[^<]*/id=\"version\">'\"$(node -p \"require('.\\x2fpackage.json').version\")\"'/' playground/index.html",
     "bench": "node bench/all.ts",
     "release": "release-it"
