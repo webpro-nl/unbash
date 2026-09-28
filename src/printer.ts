@@ -313,7 +313,7 @@ function testCmd(n: TestCommand): string {
 function testExpr(e: TestExpression): string {
   switch (e.type) {
     case "TestUnary":
-      return e.operator + " " + wd(e.operand);
+      return e.operand.text === "" ? e.operator : e.operator + " " + wd(e.operand);
     case "TestBinary":
       return wd(e.left) + " " + e.operator + " " + wd(e.right);
     case "TestLogical":

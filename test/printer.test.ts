@@ -351,6 +351,11 @@ test("arithmetic commands with unparsed tokens print their body verbatim", () =>
   }
 });
 
+test("unary test operator without an operand prints as written", () => {
+  assert.equal(fmt("[[ -f ]]"), "[[ -f ]]");
+  assert.equal(fmt("[[ ! -z ]]"), "[[ ! -z ]]");
+});
+
 // --- Multiple statements ---
 
 test("multiple statements", () => {

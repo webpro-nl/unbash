@@ -1253,10 +1253,10 @@ class Parser {
     const firstPos = first.pos;
     const firstEnd = first.end;
 
-    // Unary test: -op word, recognized only as written.
+    // Unary test: -op word, recognized only as written. Bash rejects the operator without an
+    // operand, so keep the operator and report the missing word instead of demoting it to a string.
     if (first.keywordEligible && UNARY_TEST_OPS[val] === 1) {
-      const nt = this.tok.peek(LexContext.TestMode).token;
-      if (nt === Token.Word) {
+      if (this.tok.peek(LexContext.TestMode).token === Token.Word) {
         const operand = this.readWord(LexContext.TestMode);
         return {
           type: "TestUnary",
@@ -1266,6 +1266,9 @@ class Parser {
           operand,
         } satisfies TestUnaryExpression;
       }
+      this.error("expected operand after unary test operator", firstEnd);
+      const operand = new WordImpl("", firstEnd, firstEnd, this.source, undefined, this.depth);
+      return { type: "TestUnary", pos: firstPos, end: firstEnd, operator: val, operand } satisfies TestUnaryExpression;
     }
 
     // Check for binary op

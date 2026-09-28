@@ -680,12 +680,30 @@ test("word parts in binary left/right", () => {
 
 // --- Edge cases ---
 
-test("unary op at end (bare -f) is standalone word", () => {
-  const t = getTest("[[ -f ]]");
-  // -f with no operand → treated as implicit -n of the string "-f"
-  assert.equal(t.expression.type, "TestUnary");
+test("unary operator without an operand reports an error (Bash 5.3 rejects it)", () => {
+  for (const [source, operator, pos, select] of [
+    ["[[ -f ]]", "-f", 5, (e: TestExpression) => e],
+    ["[[ -n ]]", "-n", 5, (e: TestExpression) => e],
+    ["[[ ! -z ]]", "-z", 7, (e: TestExpression) => not(e).operand],
+    ["[[ -f && -n x ]]", "-f", 5, (e: TestExpression) => logical(e).left],
+  ] as const) {
+    const ast = parse(source);
+    assert.deepEqual(ast.errors, [{ message: "expected operand after unary test operator", pos }], source);
+    const node = ast.commands[0].command as TestCommand;
+    const expression = unary(select(node.expression));
+    assert.equal(expression.type, "TestUnary", source);
+    assert.equal(expression.operator, operator, source);
+    assert.equal(expression.operand.text, "", source);
+    assert.deepEqual([expression.pos, expression.end], [pos - 2, pos], source);
+  }
+});
+
+test("quoted unary operator spelling remains a string test", () => {
+  const ast = parse('[[ "-f" ]]');
+  assert.equal(ast.errors, undefined);
+  const t = ast.commands[0].command as TestCommand;
   assert.equal(unary(t.expression).operator, "-n");
-  assert.equal(unary(t.expression).operand.text, "-f");
+  assert.equal(unary(t.expression).operand.text, '"-f"');
 });
 
 test("regex with complex pattern", () => {
