@@ -3,7 +3,7 @@ import type {
   ArithmeticCommand,
   ArithmeticExpression,
   ArithmeticFor,
-  AssignmentPrefix,
+  Assignment,
   BraceGroup,
   Case,
   Command,
@@ -12,20 +12,24 @@ import type {
   For,
   Function,
   If,
-  Node,
+  Negation,
+  PipelineNode,
   Pipeline,
+  HereDoc,
+  HereString,
   Redirect,
+  Redirection,
   Script,
   Select,
   Statement,
   Subshell,
   TestCommand,
   TestExpression,
+  Time,
   While,
   Word,
 } from "./types.ts";
 import { requiresFunctionKeyword } from "./lexer.ts";
-import { WordImpl } from "./word.ts";
 
 export function print(script: Script): string {
   // Saved and restored, not cleared: a lazy getter can re-enter print(), and clearing would
@@ -45,7 +49,7 @@ function isFunc(s: Statement): boolean {
   return s.command.type === "Function";
 }
 
-function stmts(list: Statement[], indent: number): string {
+function stmts(list: readonly Statement[], indent: number): string {
   let out = "";
   for (let i = 0; i < list.length; i++) {
     if (i > 0) out += isFunc(list[i - 1]) || isFunc(list[i]) ? "\n\n" : "\n";
@@ -58,7 +62,6 @@ function stmt(s: Statement, indent: number): string {
   const pad = "  ".repeat(indent);
   const queued = heredocQueue.length;
   let out = pad + printNode(s.command, indent);
-  for (const r of s.redirects) out += " " + redir(r);
   if (s.background) out += " &";
   return heredocQueue.length === queued ? out : flushHeredocs(out, queued);
 }
@@ -66,7 +69,7 @@ function stmt(s: Statement, indent: number): string {
 // Heredoc marks identify the line after which to emit queued bodies. Prefix redirects defer
 // their marks past multiline command words, so each body follows the complete header.
 const HEREDOC_MARK = "\u0000";
-const heredocQueue: Redirect[] = [];
+const heredocQueue: HereDoc[] = [];
 
 function flushHeredocs(text: string, queued: number): string {
   if (heredocQueue.length === queued) return text;
@@ -97,22 +100,31 @@ function flushHeredocs(text: string, queued: number): string {
   return out + text.slice(copied);
 }
 
-function delimName(r: Redirect): string {
-  return r.target?.value ?? "";
+function heredocBody(r: HereDoc): string {
+  const content = r.body.text;
+  const delimiter = r.delimiter?.value ?? "";
+  const hasNewline = content.endsWith("\n");
+  let separator = content.length > 0 && !hasNewline ? "\n" : "";
+  if (!r.delimiter?.quoted) {
+    const end = content.length - (hasNewline ? 1 : 0);
+    let backslashes = end;
+    while (backslashes > 0 && content.charCodeAt(backslashes - 1) === 92) backslashes--;
+    if ((end - backslashes) % 2 === 1) separator += "\n";
+  }
+  return content + separator + delimiter + (delimiter ? "" : "\n");
 }
 
-function heredocBody(r: Redirect): string {
-  const content = r.content ?? "";
-  const delimiter = delimName(r);
-  return content + (content.length > 0 && !content.endsWith("\n") ? "\n" : "") + delimiter + (delimiter ? "" : "\n");
-}
-
-function printNode(n: Node, indent: number): string {
+function printNode(n: PipelineNode | AndOr, indent: number): string {
   switch (n.type) {
     case "Command":
       return cmd(n);
+    case "Redirected":
+      return appendRedirects(printNode(n.command, indent), n.redirects);
     case "Pipeline":
       return pipe(n, indent);
+    case "Time":
+    case "Negation":
+      return pipelinePrefix(n, indent);
     case "AndOr":
       return andOr(n, indent);
     case "If":
@@ -129,8 +141,6 @@ function printNode(n: Node, indent: number): string {
       return subshell(n, indent);
     case "BraceGroup":
       return braceGroup(n, indent);
-    case "CompoundList":
-      return stmts(n.commands, indent);
     case "TestCommand":
       return testCmd(n);
     case "ArithmeticCommand":
@@ -141,72 +151,94 @@ function printNode(n: Node, indent: number): string {
       return arithFor(n, indent);
     case "Coproc":
       return coprocNode(n, indent);
-    case "Statement": {
-      let out = printNode(n.command, indent);
-      for (const r of n.redirects) out += " " + redir(r);
-      if (n.background) out += " &";
-      return out;
-    }
   }
 }
 
 function wd(w: Word): string {
-  if (!w.parts) return w.text;
-  let out = "";
-  for (const p of w.parts) out += p.text;
-  return out;
+  return w.text;
 }
 
-function assign(a: AssignmentPrefix): string {
-  let out = a.name ?? "";
-  if (a.index != null) out += "[" + a.index + "]";
+function assign(a: Assignment): string {
+  let out = a.name;
+  if (a.index) out += "[" + a.index.text + "]";
   out += a.append ? "+=" : "=";
-  if (a.array) {
-    out += "(" + a.array.map((w) => wd(w)).join(" ") + ")";
-  } else if (a.value) {
-    out += wd(a.value);
+  const value = a.value;
+  if (value.type === "ArrayValue") {
+    out += "(" + value.elements.map((w) => wd(w)).join(" ") + ")";
+  } else {
+    out += wd(value);
   }
   return out;
 }
 
 function cmd(c: Command): string {
-  if (c.name && c.prefix.length === 0 && c.redirects.length === 0) {
-    let out = wd(c.name);
-    for (const word of c.suffix) out += " " + wd(word);
-    return out;
-  }
-  const parts: string[] = [];
-  for (const a of c.prefix) parts.push(assign(a));
-  let redirectIndex = 0;
+  let out = "";
+  let separator = "";
   let heredocMarks = "";
-  if (c.name) {
-    while (redirectIndex < c.redirects.length && c.redirects[redirectIndex].pos < c.name.pos) {
-      const text = redir(c.redirects[redirectIndex++]);
-      if (text.endsWith(HEREDOC_MARK)) {
-        parts.push(text.slice(0, -1));
-        heredocMarks += HEREDOC_MARK;
-      } else {
-        parts.push(text);
-      }
+  for (const item of c.prefix) {
+    const text = item.type === "Assignment" ? assign(item) : redir(item);
+    if (text.endsWith(HEREDOC_MARK)) {
+      out += separator + text.slice(0, -1);
+      heredocMarks += HEREDOC_MARK;
+    } else {
+      out += separator + text;
     }
-    parts.push(wd(c.name));
+    separator = " ";
   }
-  for (const s of c.suffix) parts.push(wd(s));
-  for (; redirectIndex < c.redirects.length; redirectIndex++) parts.push(redir(c.redirects[redirectIndex]));
-  return parts.join(" ") + heredocMarks;
+  if (c.name) {
+    out += separator + wd(c.name);
+    separator = " ";
+  }
+  for (const item of c.suffix) {
+    const text = item.type === "Word" ? wd(item) : item.type === "Assignment" ? assign(item) : redir(item);
+    if (text.endsWith(HEREDOC_MARK)) {
+      out += separator + text.slice(0, -1);
+      heredocMarks += HEREDOC_MARK;
+    } else {
+      out += separator + text;
+    }
+    separator = " ";
+  }
+  return out + heredocMarks;
+}
+
+function appendRedirects(command: string, redirects: readonly Redirection[]): string {
+  let out = command;
+  let marks = "";
+  for (const redirect of redirects) {
+    const text = redir(redirect);
+    if (text.endsWith(HEREDOC_MARK)) {
+      out += " " + text.slice(0, -1);
+      marks += HEREDOC_MARK;
+    } else {
+      out += " " + text;
+    }
+  }
+  return out + marks;
 }
 
 function pipe(p: Pipeline, indent: number): string {
   let out = "";
-  if (p.time) out = "time";
-  if (p.negated) out += out ? " !" : "!";
-  else if (p.negated === false && !p.time && p.commands.length === 0) out = "! !";
-  if (out && p.commands.length > 0) out += " ";
   for (let i = 0; i < p.commands.length; i++) {
     if (i > 0) out += " " + p.operators[i - 1] + " ";
     out += printNode(p.commands[i], indent);
   }
   return out;
+}
+
+function pipelinePrefix(prefix: Time | Negation, indent: number): string {
+  let out = "";
+  let node: PipelineNode | undefined = prefix;
+  while (node?.type === "Time" || node?.type === "Negation") {
+    if (node.type === "Time") {
+      out += "time";
+      if (node.posix) out += " -p";
+      if (node.endOfOptions) out += " --";
+    } else out += "!";
+    node = node.command;
+    if (node) out += " ";
+  }
+  return node ? out + printNode(node, indent) : out;
 }
 
 function andOr(a: AndOr, indent: number): string {
@@ -241,7 +273,7 @@ function ifNode(n: If, indent: number, isElif: boolean): string {
 function forNode(n: For, indent: number): string {
   const pad = "  ".repeat(indent);
   let out = "for " + wd(n.name);
-  if (n.wordlist.length > 0) {
+  if (n.wordlist) {
     out += " in";
     for (const w of n.wordlist) out += " " + wd(w);
   }
@@ -280,17 +312,17 @@ function caseNode(n: Case, indent: number): string {
 function funcNode(n: Function, indent: number): string {
   const pad = "  ".repeat(indent);
   const name = wd(n.name);
+  const body = n.body.type === "Redirected" ? n.body.command : n.body;
   let out = (requiresFunctionKeyword(name) ? "function " + name + " {" : name + "() {") + "\n";
-  if (n.body.type === "BraceGroup") {
-    out += stmts(n.body.body.commands, indent + 1) + "\n";
-  } else if (n.body.type === "CompoundList") {
-    out += stmts(n.body.commands, indent + 1) + "\n";
+  if (body.type === "BraceGroup") {
+    out += stmts(body.body.commands, indent + 1) + "\n";
+  } else if (body.type === "CompoundList") {
+    out += stmts(body.commands, indent + 1) + "\n";
   } else {
-    out += "  ".repeat(indent + 1) + printNode(n.body, indent + 1) + "\n";
+    out += "  ".repeat(indent + 1) + printNode(body, indent + 1) + "\n";
   }
   out += pad + "}";
-  for (const r of n.redirects) out += " " + redir(r);
-  return out;
+  return n.body.type === "Redirected" ? appendRedirects(out, n.body.redirects) : out;
 }
 
 function subshell(n: Subshell, indent: number): string {
@@ -351,9 +383,11 @@ function arithFor(n: ArithmeticFor, indent: number): string {
 function coprocNode(n: Coproc, indent: number): string {
   let out = "coproc";
   if (n.name) out += " " + wd(n.name);
-  out += " " + printNode(n.body, indent);
-  for (const r of n.redirects) out += " " + redir(r);
-  return out;
+  if (n.body.type !== "CompoundList") return out + " " + printNode(n.body, indent);
+  // A list body is recovery from a missing or invalid body; the keyword takes the first statement's indent.
+  const pad = "  ".repeat(indent);
+  const body = stmts(n.body.commands, indent).slice(pad.length);
+  return body === "" ? out : out + " " + body;
 }
 
 function arithExpr(e: ArithmeticExpression): string {
@@ -363,7 +397,8 @@ function arithExpr(e: ArithmeticExpression): string {
     case "ArithmeticGroup":
       return "(" + arithExpr(e.expression) + ")";
     case "ArithmeticUnary":
-      return e.prefix ? e.operator + arithExpr(e.operand) : arithExpr(e.operand) + e.operator;
+      if (e.prefix) return (e.operator === "!" ? "! " : e.operator) + arithExpr(e.operand);
+      return arithExpr(e.operand) + e.operator;
     case "ArithmeticTernary":
       return arithExpr(e.test) + " ? " + arithExpr(e.consequent) + " : " + arithExpr(e.alternate);
     case "ArithmeticBinary": {
@@ -463,7 +498,7 @@ function arithNeedsParens(child: ArithmeticExpression, parentPrec: number, isSaf
 function selectNode(n: Select, indent: number): string {
   const pad = "  ".repeat(indent);
   let out = "select " + wd(n.name);
-  if (n.wordlist.length > 0) {
+  if (n.wordlist) {
     out += " in";
     for (const w of n.wordlist) out += " " + wd(w);
   }
@@ -479,31 +514,32 @@ function selectNode(n: Select, indent: number): string {
 const UNSAFE_TARGET = /[\s"'\\|&;<>()]/;
 
 function singleQuote(value: string): string {
-  return "'" + value.replaceAll("'", "'\\''") + "'";
+  return "'" + value.split("'").join("'\\''") + "'";
 }
 
-function redirectTarget(r: Redirect): string {
+function redirectTarget(r: Redirect | HereString): string {
   const w = r.target!;
-  if ((r.operator === "<<" || r.operator === "<<-") && r.heredocQuoted) return singleQuote(w.value);
-  if (w.parts) return wd(w);
-  const sourceText = w instanceof WordImpl ? w.sourceText() : undefined;
-  if (sourceText !== undefined && sourceText !== w.text) return singleQuote(w.value);
   if (!UNSAFE_TARGET.test(w.text)) return w.text;
+  if (w.parts) return w.text;
   return singleQuote(w.value);
 }
 
-function redir(r: Redirect): string {
+function redir(r: Redirection): string {
   let out = "";
-  if (r.fileDescriptor != null) out += r.fileDescriptor;
-  if (r.variableName) out += "{" + r.variableName + "}";
+  if (r.descriptor?.type === "FileDescriptor") out += r.descriptor.value;
+  else if (r.descriptor) out += "{" + r.descriptor.name + "}";
   out += r.operator;
+  if (r.type === "HereDoc") {
+    if (r.delimiter) {
+      out += " " + (r.delimiter.quoted ? singleQuote(r.delimiter.value) : r.delimiter.text);
+      heredocQueue.push(r);
+      out += HEREDOC_MARK;
+    }
+    return out;
+  }
   if (r.target) {
     if (r.operator !== "<&" && r.operator !== ">&") out += " ";
     out += redirectTarget(r);
-  }
-  if (r.content != null && (r.operator === "<<" || r.operator === "<<-")) {
-    heredocQueue.push(r);
-    out += HEREDOC_MARK;
   }
   return out;
 }
@@ -525,7 +561,6 @@ function inlineClause(cl: CompoundList, keyword: string): string {
 
 function inlineStmt(s: Statement): string {
   let out = printNode(s.command, 0);
-  for (const r of s.redirects) out += " " + redir(r);
   if (s.background) out += " &";
   return out;
 }
