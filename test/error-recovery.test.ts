@@ -360,3 +360,17 @@ test("errors are ordered by source position", () => {
     JSON.stringify(mixed.errors),
   );
 });
+
+test("empty brace groups and subshells report a missing command", () => {
+  for (const [source, message, pos] of [
+    ["{ }", "expected command in brace group", 0],
+    ["( )", "expected command in subshell", 0],
+    ["f() { }", "expected command in brace group", 4],
+    ["{ # comment\n}", "expected command in brace group", 0],
+  ] as const) {
+    assert.deepEqual(parse(source).errors, [{ message, pos }], source);
+  }
+  for (const source of ["{ :; }", "( : )", "echo $( )", "x=$( )"]) {
+    assert.equal(parse(source).errors, undefined, source);
+  }
+});

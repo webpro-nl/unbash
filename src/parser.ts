@@ -775,6 +775,7 @@ class Parser {
     this.syntaxDepth++;
     const commands = this.list();
     this.syntaxDepth--;
+    if (commands.length === 0) this.error("expected command in subshell", pos);
     const closeEnd = this.acceptEnd(Token.RParen, LexContext.Normal);
     if (closeEnd < 0) this.error("expected ')' to close subshell", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
@@ -798,6 +799,7 @@ class Parser {
     this.syntaxDepth++;
     const commands = this.list();
     this.syntaxDepth--;
+    if (commands.length === 0) this.error("expected command in brace group", pos);
     const closeEnd = this.acceptEnd(Token.RBrace, LexContext.Normal);
     if (closeEnd < 0) this.error("expected '}' to close brace group", this.tok.getPos());
     const end = closeEnd >= 0 ? closeEnd : pos;
