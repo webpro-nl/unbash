@@ -1871,10 +1871,10 @@ export class Lexer {
 
   private readWord(out: TokenValue, ctx: LexContext, tokenStart: number = 0): void {
     this.readWordText();
-    if (ctx === LexContext.Normal && this._wordRaw) {
+    if (ctx === LexContext.Normal) {
       const next = this.pos < this.srcEnd ? this.src.charCodeAt(this.pos) : 0;
-      if (next !== CH_LT && next !== CH_GT) {
-        setSpanToken(out, Token.Word, tokenStart, this.pos, true);
+      if (!this._wordRaw || (next !== CH_LT && next !== CH_GT)) {
+        setSpanToken(out, Token.Word, tokenStart, this.pos, this._wordRaw);
         out.keywordEligible = this._wordKeywordEligible;
         return;
       }
@@ -1907,12 +1907,9 @@ export class Lexer {
     const wordEnd = this.pos;
     const wordLen = wordEnd - tokenStart;
 
-    // The checks below run on the raw span for raw words. The few non-raw words
-    // they could still match — keyword/]] spellings via line continuations or
-    // quote decoding (short, unquoted) and fd prefixes (followed by < or >) —
-    // materialize their processed value here.
+    // Only keyword classification needs a non-raw word's processed value.
     let value: string | null = null;
-    if (!raw && !hasExpansions) {
+    if (!raw && !hasExpansions && keywordEligible && (ctx === LexContext.CommandStart || ctx === LexContext.TestMode)) {
       const nextCh = wordEnd < this.srcEnd ? src.charCodeAt(wordEnd) : 0;
       if ((!quoted && wordLen <= 16) || nextCh === CH_LT || nextCh === CH_GT) {
         value = this.wordValueOf(tokenStart, wordEnd);
