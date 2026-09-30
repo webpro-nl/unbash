@@ -602,6 +602,7 @@ class Parser {
   private pipelineCommands(): CommandNode | Pipeline | null {
     const first = this.command();
     if (!first) return null;
+    if (this.tok.peek(LexContext.Normal).token !== Token.Pipe) return first;
 
     const commands: CommandNode[] = [first];
     const operators: PipeOperator[] = [];
