@@ -39,8 +39,8 @@ importers:
         specifier: 1.2.3
         version: 1.2.3
       sh-syntax:
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.7.0
+        version: 0.7.0
       tree-sitter:
         specifier: ^0.25.1
         version: 0.25.1
@@ -51,8 +51,8 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
       web-tree-sitter:
-        specifier: ^0.26.11
-        version: 0.26.11
+        specifier: ^0.27.0
+        version: 0.27.0
 
 packages:
 
@@ -1492,8 +1492,8 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  sh-syntax@0.6.0:
-    resolution: {integrity: sha512-52VK6z/cdZHv7UURjIcwfBUQZrAhIEEe0bY4lrkfypjnFIKsDZdD3Uaz/dBiw/sF8BeX0Mssv140s8EnrsJ9dQ==}
+  sh-syntax@0.7.0:
+    resolution: {integrity: sha512-sgMyAxpHiGgAaNg+gD3ad41vha24CzIjjghD4mdiON1lUafZPLJNYknyjcXmU4geilPstd69zCKkpccY0YvajA==}
     engines: {node: '>=16.0.0'}
 
   shell-quote-word@1.0.1:
@@ -1632,8 +1632,8 @@ packages:
   vlq@0.2.3:
     resolution: {integrity: sha512-DRibZL6DsNhIgYQ+wNdWDL2SL3bKPlVrRiBqV5yuMm++op8W4kGFtaQfCs4KEJn0wBZcHVHJ3eoywX8983k1ow==}
 
-  web-tree-sitter@0.26.11:
-    resolution: {integrity: sha512-Q5Dm3YTIXSXuH6FxX6RuzX2Qwpc4DPGiYMU87Wg5Z8OIStiQFiUex4zMDc0vBTw78EphaYJacncJghCHzbZptg==}
+  web-tree-sitter@0.27.0:
+    resolution: {integrity: sha512-XK08gj6RwTMQatAG7uVRP8MunqotL/XC19vHgkSPKmELgbGPBj4ECvB8haHOUnyj6ls2B8t42UTro14zxGgAHg==}
 
   wildcard-match@5.1.4:
     resolution: {integrity: sha512-wldeCaczs8XXq7hj+5d/F38JE2r7EXgb6WQDM84RVwxy81T/sxB5e9+uZLK9Q9oNz1mlvjut+QtvgaOQFPVq/g==}
@@ -3127,7 +3127,7 @@ snapshots:
 
   semver@7.8.5: {}
 
-  sh-syntax@0.6.0: {}
+  sh-syntax@0.7.0: {}
 
   shell-quote-word@1.0.1: {}
 
@@ -3295,7 +3295,7 @@ snapshots:
 
   vlq@0.2.3: {}
 
-  web-tree-sitter@0.26.11: {}
+  web-tree-sitter@0.27.0: {}
 
   wildcard-match@5.1.4: {}
 
