@@ -28,7 +28,8 @@ class ArrayValueImpl implements ArrayValue {
       if (token.token !== Token.Word && token.token !== Token.Assignment) continue;
       const text = token.raw ? token.value : this.#source.slice(token.pos, token.end);
       const resolver = text.charCodeAt(0) === 91 ? computeArrayElementParts : undefined;
-      elements.push(new WordImpl(text, token.pos, token.end, this.#source, resolver, this.#depth));
+      const source = resolver === undefined && token.raw && token.keywordEligible ? undefined : this.#source;
+      elements.push(new WordImpl(text, token.pos, token.end, source, resolver, this.#depth));
     }
     this.#elements = elements;
     return elements;

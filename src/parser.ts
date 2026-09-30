@@ -1437,12 +1437,14 @@ class Parser {
 
   private toWord(tok: TokenValue): Word {
     const text = tok.raw ? tok.value : this.source.slice(tok.pos, tok.end);
-    return new WordImpl(text, tok.pos, tok.end, this.source, undefined, this.depth);
+    // Raw keyword-eligible words have no quotes or expansions to resolve.
+    const source = tok.raw && tok.keywordEligible ? undefined : this.source;
+    return new WordImpl(text, tok.pos, tok.end, source, undefined, this.depth);
   }
 
   private toWordFromPosEnd(tok: TokenValue, pos: number, end: number): Word {
-    const text = tok.raw && tok.pos === pos && tok.end === end ? tok.value : this.source.slice(pos, end);
-    return new WordImpl(text, pos, end, this.source, undefined, this.depth);
+    if (tok.pos === pos && tok.end === end) return this.toWord(tok);
+    return new WordImpl(this.source.slice(pos, end), pos, end, this.source, undefined, this.depth);
   }
 
   private parseAssignment(token: TokenValue): Assignment {
