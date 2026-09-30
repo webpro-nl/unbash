@@ -170,6 +170,11 @@ function assign(a: AssignmentPrefix): string {
 }
 
 function cmd(c: Command): string {
+  if (c.name && c.prefix.length === 0 && c.redirects.length === 0) {
+    let out = wd(c.name);
+    for (const word of c.suffix) out += " " + wd(word);
+    return out;
+  }
   const parts: string[] = [];
   for (const a of c.prefix) parts.push(assign(a));
   let redirectIndex = 0;
