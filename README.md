@@ -97,11 +97,12 @@ A `Word` holds its expansions in `parts`. This is a lazy getter, computed on
 first access (not an own enumerable property):
 
 ```js
-const word = parse("echo a$(id)b").commands[0].command.suffix[0];
+const source = "echo a$(id)b";
+const word = parse(source).commands[0].command.suffix[0];
 
 word.parts; // [Literal, CommandExpansion, Literal]
 
-Object.keys(word); // ["text", "pos", "end"] — no `parts`
+Object.keys(word); // ["type", "text", "pos", "end"]
 ({ ...word }); // same
 structuredClone(word); // same
 ```
@@ -118,8 +119,9 @@ const script = parse('echo "$HOME" $(mktemp)');
 for (const statement of script.commands) {
   const command = statement.command;
   if (command.type !== "Command") continue;
-  for (const word of [command.name, ...command.suffix]) {
-    for (const part of word?.parts ?? []) {
+  for (const word of [command.name, ...command.args]) {
+    if (word?.type !== "Word") continue;
+    for (const part of word.parts ?? []) {
       if (part.type === "CommandExpansion") console.log(part.text);
     }
   }
@@ -127,9 +129,14 @@ for (const statement of script.commands) {
 // $(mktemp)
 ```
 
-Word-like fields that can execute nested shell syntax expose the same structure.
-`BraceExpansion`, `ExtendedGlob`, and `ArithmeticWord` use `parts`; parameter
-and assignment array indexes use `indexParts`.
+`BraceExpansion`, `ExtendedGlob`, `ArithmeticWord`, and `HereDocBody` expose
+nested syntax through `parts`. Parameter and assignment indexes are Words with
+their own `parts`. Assignment values are Words or ArrayValues; array elements
+are Words. Declaration assignments and redirects are separate command items,
+each with its own children. `Command.args` and `Command.redirects` are lazy
+views over the ordered `prefix` and `suffix` items. They are getters like
+`parts`, but `JSON.stringify` omits them because the two lists already carry
+every item.
 
 Positions are zero-based UTF-16 code-unit offsets forming half-open `[pos, end)`
 ranges in the source owned by the nearest `ParsedScript`. Root scripts and
@@ -144,9 +151,10 @@ source.slice(command.pos, command.end); // exact nested command source
 ```
 
 A legacy backtick script whose body contains backslash escapes owns its decoded
-string as a non-enumerable `source` property. Ordinary scripts nested inside it
-index that decoded source. Object spread and `structuredClone` omit `source`
-because it is non-enumerable.
+string as an enumerable `source` property, retained by JSON serialization.
+Ordinary scripts nested inside it index that decoded source. Live nodes still
+have lazy prototype getters; use `JSON.stringify` when serializing their
+complete public syntax.
 
 Parse errors inside a lazily parsed script surface on that script, not on the
 root: check `errors` on every nested `script` while traversing. A consumer that
@@ -180,8 +188,7 @@ fi
 
 - Incremental parsing
 - CST output preserving all tokens and punctuation
-- Granular error recovery that wraps errors in `ERROR` nodes and continues
-  parsing
+- Error recovery with `ERROR` nodes and missing tokens
 
 unbash provides:
 
@@ -198,7 +205,7 @@ unbash provides:
 [sh-syntax][10] is a WASM wrapper around the robust [mvdan/sh][11] Go parser. It
 is highly recommended if you need:
 
-- Support for multiple shell dialects (Bash, POSIX sh, mksh, Bats, and Zsh)
+- Support for Bash, POSIX sh, mksh, Bats, and experimental Zsh parsing
 - Mature, configurable formatting and pretty-printing
 
 unbash provides:
@@ -211,9 +218,8 @@ unbash provides:
 
 ## unbash vs bash-parser
 
-[bash-parser][13] (last publish: 2017) and its fork
-[@ericcornelissen/bash-parser][14] (community dependency maintenance fork ❤️ now
-archived) provide:
+[bash-parser][13] and its fork [@ericcornelissen/bash-parser][14] (community
+dependency maintenance fork ❤️ now archived) provide:
 
 - A POSIX-only mode that rejects bash-specific syntax
 
@@ -231,27 +237,30 @@ unbash provides:
 
 ## Benchmarks
 
-Parse throughput in MB/s, calculated from the median of 11 per-run p75 iteration times; higher is better. Parentheses show unbash's relative speed. Measured on Apple M1 Pro/32GB using Node.js 24.19.0.
+Parse throughput in MB/s; higher is better. Median per-run p75 iteration times
+from 11 runs per unbash version and 22 per other parser, on Apple M1 Pro/32GB
+with Node.js 24.19.0. Parentheses show speed relative to unbash v5.
 
 | Parser                       | short (1.1KiB) | advanced (0.9KiB) | medium (150KiB) | large (970KiB) |
 | ---------------------------- | -------------: | ----------------: | --------------: | -------------: |
-| **unbash**                   |       **79.2** |          **71.3** |        **97.7** |      **115.8** |
-| tree-sitter-bash (native)    |     4.58 (17x) |        6.49 (11x) |      14.94 (7x) |    11.90 (10x) |
-| tree-sitter-bash (WASM)      |     4.92 (16x) |        5.61 (13x) |      8.80 (11x) |     8.22 (14x) |
-| sh-syntax                    |   0.03 (2391x) |      0.04 (1694x) |      8.22 (12x) |     14.01 (8x) |
-| bash-parser                  |    0.27 (299x) |               n/a |             n/a |            n/a |
-| @ericcornelissen/bash-parser |    0.25 (312x) |               n/a |             n/a |            n/a |
+| **unbash v5**                |       **73.6** |          **73.0** |       **104.1** |      **123.9** |
+| unbash v4                    |   79.2 (0.93x) |      71.3 (1.02x) |    96.5 (1.08x) |  100.7 (1.23x) |
+| tree-sitter-bash (native)    |     4.58 (16x) |        6.47 (11x) |      15.00 (7x) |    11.88 (10x) |
+| tree-sitter-bash (WASM)      |     4.96 (15x) |        5.61 (13x) |      8.78 (12x) |     8.21 (15x) |
+| sh-syntax                    |   0.03 (2268x) |      0.04 (1728x) |      8.26 (13x) |     14.02 (9x) |
+| bash-parser                  |    0.26 (278x) |               n/a |             n/a |            n/a |
+| @ericcornelissen/bash-parser |    0.26 (288x) |               n/a |             n/a |            n/a |
 
-Run the benchmarks using Node.js v22+:
+Run the benchmarks using Node.js 24+:
 
 ```sh
 pnpm install
-node bench/all.ts
+pnpm bench
 ```
 
 ## Size
 
-The parser bundle is 80KB minified and 19KB gzipped.
+The parser bundle is 85KiB minified and 21KiB gzipped.
 
 ## Playgrounds
 
