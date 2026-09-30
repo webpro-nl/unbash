@@ -160,6 +160,45 @@ test("{fd}>&- close redirect with varname", () => {
   assert.equal(c.redirects![0].variableName, "fd");
 });
 
+test("array redirect descriptors preserve their source range and printed form", () => {
+  const source = "exec {foo[1]}>&-";
+  const ast = parse(source);
+  const command = getCmd(ast);
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(command.suffix, []);
+  assert.equal(command.redirects.length, 1);
+  const redirect = command.redirects[0];
+  assert.deepEqual(
+    [redirect.variableName, redirect.fileDescriptor, redirect.operator, redirect.pos, redirect.end],
+    ["foo[1]", undefined, ">&", 5, 16],
+  );
+  assert.deepEqual([redirect.target?.text, redirect.target?.pos, redirect.target?.end], ["-", 15, 16]);
+  assert.equal(print(ast), "exec {foo[1]}>&-");
+  assert.equal(print(parse(print(ast))), "exec {foo[1]}>&-");
+});
+
+test("array redirect descriptors accept arithmetic and nested indexes", () => {
+  for (const [source, variableName, printed] of [
+    [": {fds[index]}>&-", "fds[index]", ": {fds[index]}>&-"],
+    [": {fds[1+2]}<&-", "fds[1+2]", ": {fds[1+2]}<&-"],
+    [": {fds[a[0]]}>out", "fds[a[0]]", ": {fds[a[0]]}> out"],
+    [": {fds[$i]}>&-", "fds[$i]", ": {fds[$i]}>&-"],
+    [": {fds[${i}]}>&-", "fds[${i}]", ": {fds[${i}]}>&-"],
+    [": {fds[${i:-]}]}>&-", "fds[${i:-]}]", ": {fds[${i:-]}]}>&-"],
+    [": {fds[$((1))]}>&-", "fds[$((1))]", ": {fds[$((1))]}>&-"],
+    ["{fds[0]}<input cat", "fds[0]", "{fds[0]}< input cat"],
+  ]) {
+    const ast = parse(source);
+    const command = getCmd(ast);
+    assert.equal(ast.errors, undefined, source);
+    assert.deepEqual(command.suffix, [], source);
+    assert.equal(command.redirects.length, 1, source);
+    assert.equal(command.redirects[0].variableName, variableName, source);
+    assert.equal(print(ast), printed, source);
+    assert.equal(print(parse(printed)), printed, source);
+  }
+});
+
 test("multiple fd redirections on one command", () => {
   const c = getCmd(parse("foo >&2 <&0 2>file"));
   assert.ok((c.redirects?.length ?? 0) >= 3);
@@ -477,13 +516,20 @@ test("a trailing backslash is a literal redirect target", () => {
   assert.equal((parse("cat <<x\\").commands[0].command as Command).redirects[0].target?.text, "x\\");
 });
 
-test("redirect descriptors require unquoted digits or a valid identifier", () => {
+test("redirect descriptors require unquoted digits or a valid variable reference", () => {
   for (const [source, words, printed] of [
     ["echo x {1v}>out", ["x", "{1v}"], "echo x {1v} > out"],
     ["echo x {v-w}>out", ["x", "{v-w}"], "echo x {v-w} > out"],
     ['echo x "2">out', ["x", '"2"'], 'echo x "2" > out'],
     ['echo x "{fd}">out', ["x", '"{fd}"'], 'echo x "{fd}" > out'],
     ["echo x {f\\d}>out", ["x", "{f\\d}"], "echo x {f\\d} > out"],
+    ["echo x {1fds[1]}>out", ["x", "{1fds[1]}"], "echo x {1fds[1]} > out"],
+    ["echo x {fds[]}>out", ["x", "{fds[]}"], "echo x {fds[]} > out"],
+    ["echo x {fds[1]x}>out", ["x", "{fds[1]x}"], "echo x {fds[1]x} > out"],
+    ["echo x {fds[1][2]}>out", ["x", "{fds[1][2]}"], "echo x {fds[1][2]} > out"],
+    ["echo x {fds[[1]}>out", ["x", "{fds[[1]}"], "echo x {fds[[1]} > out"],
+    ["echo x {fds[1]]}>out", ["x", "{fds[1]]}"], "echo x {fds[1]]} > out"],
+    ['echo x "{fds[1]}">out', ["x", '"{fds[1]}"'], 'echo x "{fds[1]}" > out'],
     ["echo x {_a1}>out", ["x"], "echo x {_a1}> out"],
     ["echo x 2>out", ["x"], "echo x 2> out"],
   ]) {

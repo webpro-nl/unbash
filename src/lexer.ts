@@ -372,14 +372,6 @@ function isAllDigitsRange(src: string, start: number, end: number): boolean {
   return end > start;
 }
 
-function isIdentifierRange(src: string, start: number, end: number): boolean {
-  for (let i = start; i < end; i++) {
-    const c = src.charCodeAt(i);
-    if (c >= 128 || !(isIdChar[c] & (i === start ? 1 : 2))) return false;
-  }
-  return end > start;
-}
-
 const ASSIGNMENT_INVALID = -1;
 const ASSIGNMENT_NAME_START = 0;
 const ASSIGNMENT_NAME = 1;
@@ -1890,6 +1882,20 @@ export class Lexer {
     this.classifyWord(out, ctx, tokenStart);
   }
 
+  private isRedirectVariable(start: number, end: number): boolean {
+    const src = this.src;
+    for (let i = start; i < end; i++) {
+      const c = src.charCodeAt(i);
+      if (c === CH_LBRACKET && i > start) {
+        return (
+          i + 2 < end && src.charCodeAt(end - 1) === CH_RBRACKET && this.findClosingBracket(i + 1, end) === end - 1
+        );
+      }
+      if (c >= 128 || !(isIdChar[c] & (i === start ? 1 : 2))) return false;
+    }
+    return end > start;
+  }
+
   private classifyWord(out: TokenValue, ctx: LexContext, tokenStart: number): void {
     const src = this.src;
     const raw = this._wordRaw;
@@ -2015,7 +2021,7 @@ export class Lexer {
           if (
             fc === CH_LBRACE &&
             src.charCodeAt(wordEnd - 1) === CH_RBRACE &&
-            isIdentifierRange(src, tokenStart + 1, wordEnd - 1)
+            this.isRedirectVariable(tokenStart + 1, wordEnd - 1)
           ) {
             const varname = src.slice(tokenStart + 1, wordEnd - 1);
             if (this.readRedirection(out, tokenStart)) {
