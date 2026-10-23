@@ -217,6 +217,21 @@ test("ANSI-C byte escapes outside valid UTF-8 become U+FFFD", () => {
   );
 });
 
+test("ANSI-C NUL escapes end the string", () => {
+  const src = String.raw`read -r -d $'\0' $'a\0b'c $'\x00x' $'\400y' $'\c@z' $'\u0000u' $'\U00000000q' $'a\0\'b'c $'\xc3\xa9\0\xc3\xa9'`;
+  const ast = parse(src);
+  const c = getCmd(ast);
+
+  assert.equal(ast.errors, undefined);
+  assert.deepEqual(
+    c.suffix.map((word) => nodeOfType(word, "Word").value),
+    ["-r", "-d", "", "ac", "", "", "", "", "", "ac", "é"],
+  );
+
+  const nonAscii = getCmd(parse("echo $'a\\càtail'Z")).suffix[0];
+  assert.match(nodeOfType(nonAscii, "Word").value, /tailZ$/);
+});
+
 test("ANSI-C \\c operand edge cases", () => {
   const src = String.raw`$'\c' $'\c\\' $'\c\'' $'AB\c' $'\c\cA' $'\c<\\' $'\c\x41' $'\cq' $'\c1' $'\c?'`;
   const c = getCmd(parse(src));

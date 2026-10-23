@@ -43,6 +43,8 @@ export function decodeAnsiCQuoted(source: string, start: number, limit: number) 
   let pos = start;
   let value = "";
   let bytes: number[] = [];
+  // Bash ends the string at the first NUL an escape produces; scanning still runs to the closing quote.
+  let nul = -1;
 
   while (pos < limit && source.charCodeAt(pos) !== 39) {
     const escapeStart = pos;
@@ -58,6 +60,7 @@ export function decodeAnsiCQuoted(source: string, start: number, limit: number) 
       bytes = [];
     }
     if (byte) {
+      if (byte.value === 0 && nul === -1) nul = value.length;
       value += String.fromCharCode(byte.value);
       pos = byte.end;
       continue;
@@ -138,7 +141,10 @@ export function decodeAnsiCQuoted(source: string, start: number, limit: number) 
           }
           break;
         }
-        value += String.fromCharCode(code === 63 ? 127 : code & 31);
+        const control = code === 63 ? 127 : code & 31;
+        // Bash applies \c to the operand's first UTF-8 byte, which equals the code unit only for ASCII.
+        if (control === 0 && code < 128 && nul === -1) nul = value.length;
+        value += String.fromCharCode(control);
         break;
       }
       case "u":
@@ -151,7 +157,9 @@ export function decodeAnsiCQuoted(source: string, start: number, limit: number) 
           break;
         }
         const raw = source.slice(escapeStart, pos);
-        value += codePoint(Number.parseInt(source.slice(digitsStart, pos), 16), raw);
+        const point = Number.parseInt(source.slice(digitsStart, pos), 16);
+        if (point === 0 && nul === -1) nul = value.length;
+        value += codePoint(point, raw);
         break;
       }
       default:
@@ -160,6 +168,7 @@ export function decodeAnsiCQuoted(source: string, start: number, limit: number) 
     }
   }
   if (bytes.length > 0) value += decodeBytes(bytes);
+  if (nul !== -1) value = value.slice(0, nul);
 
   const closed = pos < limit;
   if (closed) pos++;
