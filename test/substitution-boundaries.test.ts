@@ -418,3 +418,74 @@ test("decoded backticks keep an independent source after an ambiguous substituti
   assert.equal(expansion.script?.commands.length, 2);
   assert.equal(verify(source, ast), source);
 });
+
+test("<< inside an unquoted parameter expansion is pattern text, not a heredoc (#18)", () => {
+  for (const body of [
+    "echo ${x#<<}\n",
+    "echo ${x%<<-}\n",
+    "echo ${x/<</a}\n",
+    "echo ${x:-<<}\n",
+    "echo ${x#<<EOF}\nEOF\n",
+    "echo ${x#<<\n}",
+    "echo ${x#<<} ${y}\n",
+    "echo ${x/b/)}\n",
+    "echo ${#x}\n",
+    "echo ${x:-$'\\''}\n",
+    "echo ${ cat <<EOF\n'\nEOF\n}\n",
+    "echo ${| cat <<EOF\n'\nEOF\n}\n",
+    "echo ${\tcat <<EOF\n'\nEOF\n}\n",
+    'echo "${ echo ")"; }"\n',
+    'echo "${| echo ")"; }"\n',
+  ]) {
+    for (const [open, close] of [
+      ["$(", ")"],
+      ["<(", ")"],
+      [">(", ")"],
+    ]) {
+      const source = `echo ${open}${body}${close}\necho after`;
+      const ast = parse(source);
+      assert.equal(ast.errors, undefined, source);
+      assert.equal(ast.commands.length, 2, source);
+      const argument = nodeOfType(nodeOfType(ast.commands[0].command, "Command").args[0], "Word");
+      const expansion = nodeOfType(argument.parts?.[0], "CommandExpansion", "ProcessSubstitution");
+      const script = expansion.script!;
+      assert.equal(script.errors, undefined, source);
+      assert.equal(source.slice(script.pos, script.end), body, source);
+      const after = nodeOfType(ast.commands[1].command, "Command");
+      assert.equal(after.name?.text, "echo", source);
+      assert.equal(verify(source, ast), source);
+    }
+  }
+});
+
+test("heredocs beside and inside unquoted parameter expansions in $() still consume their bodies (#18)", () => {
+  for (const [source, bodies] of [
+    ["x=$(echo ${x#<<} <<EOF\nbody\nEOF\n)\necho after", ["body\n"]],
+    ["x=$(echo ${x#$(cat <<EOF\nbody\nEOF\n)}\n)\necho after", ["body\n"]],
+    ["x=$(echo ${x#<<} <<A <<B\na\nA\nb\nB\n)\necho after", ["a\n", "b\n"]],
+    ["x=$(${ cat <<EOF\nbody\nEOF\n})\necho after", ["body\n"]],
+  ] as const) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    assert.equal(ast.commands.length, 2, source);
+    const found: string[] = [];
+    JSON.stringify(ast, (key, value) => {
+      if (key === "errors") assert.equal(value, undefined, source);
+      if (value?.type === "HereDoc") found.push(source.slice(value.body.pos, value.body.end));
+      return value;
+    });
+    assert.deepEqual(found, bodies, source);
+    assert.equal(verify(source, ast), source);
+  }
+});
+
+test("an unterminated parameter expansion inside $() is reported at the substitution (#18)", () => {
+  const source = "x=$(echo ${x\n)\necho after";
+  const ast = parse(source);
+  assert.deepEqual(
+    ast.errors?.map((error) => error.message),
+    ["unterminated command substitution"],
+  );
+  assert.equal(ast.commands.length, 1);
+  assert.equal(verify(source, ast), source);
+});

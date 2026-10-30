@@ -547,6 +547,11 @@ export const LexContext = {
 } as const;
 export type LexContext = (typeof LexContext)[keyof typeof LexContext];
 
+// `${` followed by blank, newline or `|` opens a brace command substitution, not a parameter.
+function isBraceCommandOpener(after: number): boolean {
+  return after === CH_SPACE || after === CH_TAB || after === CH_NL || after === CH_PIPE;
+}
+
 export class Lexer {
   static _findSubstitutionEnd:
     | ((source: string, start: number, end: number, depth: number, context: SubstitutionContext) => number)
@@ -3957,7 +3962,10 @@ export class Lexer {
         c === CH_SQUOTE ||
         c === CH_DQUOTE ||
         c === CH_BACKTICK ||
-        (c === CH_DOLLAR && (src.charCodeAt(this.pos + 1) === CH_SQUOTE || src.charCodeAt(this.pos + 1) === CH_DOLLAR))
+        (c === CH_DOLLAR &&
+          (src.charCodeAt(this.pos + 1) === CH_SQUOTE ||
+            src.charCodeAt(this.pos + 1) === CH_DOLLAR ||
+            src.charCodeAt(this.pos + 1) === CH_LBRACE))
       ) {
         break;
       } else if (c === CH_LT && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LT) {
@@ -4060,6 +4068,11 @@ export class Lexer {
           continue;
         } else if (ch === CH_DOLLAR) {
           const next = src.charCodeAt(this.pos + 1);
+          if (next === CH_SQUOTE && quote.close === CH_RBRACE) {
+            this.pos += 2;
+            this.skipAnsiCQuoted();
+            continue;
+          }
           if (next === CH_LBRACE) {
             quotes.push({ close: CH_RBRACE, depth });
             parameterDepth++;
@@ -4252,6 +4265,12 @@ export class Lexer {
           this.pos++;
           this.skipAnsiCQuoted();
         } else if (next === CH_DOLLAR) {
+          this.pos++;
+        } else if (next === CH_LBRACE && !isBraceCommandOpener(src.charCodeAt(this.pos + 1))) {
+          // `${` opens a parameter expansion; `<<`, `)` and `#` inside it are pattern text. The
+          // `${ cmd; }` and `${|cmd; }` command forms keep the plain scan, as readDollar dispatches them.
+          quotes.push({ close: CH_RBRACE, depth });
+          parameterDepth++;
           this.pos++;
         }
         wordStart = false;
