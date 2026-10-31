@@ -1750,6 +1750,7 @@ export class Lexer {
           // <<< herestring
           this.pos++;
           this.skipSpacesAndTabs();
+          if (this.pos < this.srcEnd && this.processSubstitutionTarget(out, "<<<", tokenStart)) return true;
           const targetPos = this.pos;
           if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL && src.charCodeAt(this.pos) !== CH_HASH) {
             this.readRedirectTargetText();
@@ -1814,18 +1815,7 @@ export class Lexer {
     this.skipSpacesAndTabs();
     if (this.pos < this.srcEnd) {
       const nc = src.charCodeAt(this.pos);
-      if ((nc === CH_LT || nc === CH_GT) && this.pos + 1 < this.srcEnd && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
-        const psStart = this.pos;
-        this.pos += 2;
-        this.extractBalanced();
-        if (this._unbalanced) this.errors.push({ message: "unterminated process substitution", pos: psStart });
-        const psText = src.slice(psStart, this.pos);
-        setToken(out, Token.Redirect, op, tokenStart, this.pos);
-        out.content = psText;
-        out.targetPos = psStart;
-        out.targetEnd = this.pos;
-        return true;
-      }
+      if (this.processSubstitutionTarget(out, op, tokenStart)) return true;
       const targetPos = this.pos;
       if (nc !== CH_NL && nc !== CH_HASH) this.readRedirectTargetText();
       this.redirectToken(out, op, tokenStart, targetPos);
@@ -1833,6 +1823,24 @@ export class Lexer {
     }
 
     this.redirectToken(out, op, tokenStart, this.pos);
+    return true;
+  }
+
+  // A process substitution as the redirect target: `cat < <(f)`, `cat <<< <(f)`.
+  private processSubstitutionTarget(out: TokenValue, op: string, tokenStart: number): boolean {
+    const src = this.src;
+    const nc = src.charCodeAt(this.pos);
+    if (!((nc === CH_LT || nc === CH_GT) && this.pos + 1 < this.srcEnd && src.charCodeAt(this.pos + 1) === CH_LPAREN))
+      return false;
+    const psStart = this.pos;
+    this.pos += 2;
+    this.extractBalanced();
+    if (this._unbalanced) this.errors.push({ message: "unterminated process substitution", pos: psStart });
+    const psText = src.slice(psStart, this.pos);
+    setToken(out, Token.Redirect, op, tokenStart, this.pos);
+    out.content = psText;
+    out.targetPos = psStart;
+    out.targetEnd = this.pos;
     return true;
   }
 
@@ -2574,6 +2582,9 @@ export class Lexer {
         keywordEligible = false;
         const dollarStart = pos;
         if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
+        // `$'…'` and `$"…"` quote: even empty, they make a word.
+        const next = pos + 1 < len ? src.charCodeAt(pos + 1) : 0;
+        if (next === CH_SQUOTE || next === CH_DQUOTE) quoted = true;
         this.pos = pos;
         this.readDollar();
         pos = this.pos;
