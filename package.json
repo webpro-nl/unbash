@@ -1,6 +1,6 @@
 {
   "name": "unbash",
-  "version": "6.0.2",
+  "version": "6.0.3",
   "description": "The best bash parser in JavaScript. Fast, complete, typed.",
   "keywords": [
     "ast",
