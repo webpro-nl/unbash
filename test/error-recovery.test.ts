@@ -253,7 +253,16 @@ test("missing redirect targets collect errors", () => {
 });
 
 test("quoted empty redirect targets are not missing targets", () => {
-  for (const source of ['echo >""', "echo >''", "echo >$''", 'echo >$""', 'echo <<< ""', "echo <<< $''", "cat <<''"]) {
+  for (const source of [
+    'echo >""',
+    "echo >''",
+    "echo >$''",
+    'echo >$""',
+    'echo <<< ""',
+    "echo <<< $''",
+    'echo <<< $""',
+    "cat <<''",
+  ]) {
     const ast = parse(source);
     assert.equal(ast.errors, undefined, source);
     const redirect = redirectsOf(nodeOfType(ast.commands[0].command, "Command"))[0];
@@ -264,7 +273,12 @@ test("quoted empty redirect targets are not missing targets", () => {
 });
 
 test("process substitutions are here-string targets", () => {
-  for (const source of ["cat <<< <(f)", "cat <<< >(f)", "cat <<<<(f)"]) {
+  for (const [source, target] of [
+    ["cat <<< <(f)", "<(f)"],
+    ["cat <<< >(f)", ">(f)"],
+    ["cat <<<<(f)", "<(f)"],
+    ["cat <<<>(f)", ">(f)"],
+  ]) {
     const ast = parse(source);
     assert.equal(ast.errors, undefined, source);
     const redirect = nodeOfType(
@@ -273,7 +287,8 @@ test("process substitutions are here-string targets", () => {
       "Redirect",
     );
     assert.equal(redirect.operator, "<<<", source);
-    assert.equal(redirect.target?.text, source.slice(source.lastIndexOf("(") - 1), source);
+    assert.equal(redirect.target?.text, target, source);
+    assert.equal(redirect.target?.parts?.[0]?.type, "ProcessSubstitution", source);
   }
 });
 
