@@ -1747,42 +1747,34 @@ export class Lexer {
         this.pos++;
         const third = this.pos < this.srcEnd ? src.charCodeAt(this.pos) : 0;
         if (third === CH_LT) {
-          // <<< herestring
+          // <<< herestring: its target reads like any other redirect target
           this.pos++;
+          op = "<<<";
+        } else {
+          const dash = third === CH_DASH;
+          if (dash) this.pos++;
           this.skipSpacesAndTabs();
-          if (this.pos < this.srcEnd && this.processSubstitutionTarget(out, "<<<", tokenStart)) return true;
           const targetPos = this.pos;
-          if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL && src.charCodeAt(this.pos) !== CH_HASH) {
-            this.readRedirectTargetText();
+          if (this.pos >= this.srcEnd || src.charCodeAt(this.pos) !== CH_HASH) this.readHereDocDelimiter();
+          const hasTarget = this.pos > targetPos;
+          if (hasTarget) {
+            (this.pendingHereDocs ?? (this.pendingHereDocs = [])).push({
+              delimiter: this._hereDelim,
+              strip: dash,
+              quoted: this._hereQuoted,
+            });
           }
-          this.redirectToken(out, "<<<", tokenStart, targetPos);
+          setToken(out, Token.Redirect, dash ? "<<-" : "<<", tokenStart, this.pos);
+          out.content = hasTarget ? this._hereDelim : undefined;
+          out.delimiterQuoted = hasTarget && this._hereQuoted;
+          out.targetPos = targetPos;
+          out.targetEnd = hasTarget ? this.pos : targetPos;
           return true;
         }
-        const dash = third === CH_DASH;
-        if (dash) this.pos++;
-        this.skipSpacesAndTabs();
-        const targetPos = this.pos;
-        if (this.pos >= this.srcEnd || src.charCodeAt(this.pos) !== CH_HASH) this.readHereDocDelimiter();
-        const hasTarget = this.pos > targetPos;
-        if (hasTarget) {
-          (this.pendingHereDocs ?? (this.pendingHereDocs = [])).push({
-            delimiter: this._hereDelim,
-            strip: dash,
-            quoted: this._hereQuoted,
-          });
-        }
-        setToken(out, Token.Redirect, dash ? "<<-" : "<<", tokenStart, this.pos);
-        out.content = hasTarget ? this._hereDelim : undefined;
-        out.delimiterQuoted = hasTarget && this._hereQuoted;
-        out.targetPos = targetPos;
-        out.targetEnd = hasTarget ? this.pos : targetPos;
-        return true;
-      }
-      if (next === CH_LPAREN) {
+      } else if (next === CH_LPAREN) {
         this.readProcessSubstitution(out, "<", tokenStart);
         return true;
-      }
-      if (next === CH_GT) {
+      } else if (next === CH_GT) {
         op = "<>";
         this.pos++;
       } else if (next === CH_AMP) {
@@ -1815,7 +1807,18 @@ export class Lexer {
     this.skipSpacesAndTabs();
     if (this.pos < this.srcEnd) {
       const nc = src.charCodeAt(this.pos);
-      if (this.processSubstitutionTarget(out, op, tokenStart)) return true;
+      if ((nc === CH_LT || nc === CH_GT) && this.pos + 1 < this.srcEnd && src.charCodeAt(this.pos + 1) === CH_LPAREN) {
+        const psStart = this.pos;
+        this.pos += 2;
+        this.extractBalanced();
+        if (this._unbalanced) this.errors.push({ message: "unterminated process substitution", pos: psStart });
+        const psText = src.slice(psStart, this.pos);
+        setToken(out, Token.Redirect, op, tokenStart, this.pos);
+        out.content = psText;
+        out.targetPos = psStart;
+        out.targetEnd = this.pos;
+        return true;
+      }
       const targetPos = this.pos;
       if (nc !== CH_NL && nc !== CH_HASH) this.readRedirectTargetText();
       this.redirectToken(out, op, tokenStart, targetPos);
@@ -1823,24 +1826,6 @@ export class Lexer {
     }
 
     this.redirectToken(out, op, tokenStart, this.pos);
-    return true;
-  }
-
-  // A process substitution as the redirect target: `cat < <(f)`, `cat <<< <(f)`.
-  private processSubstitutionTarget(out: TokenValue, op: string, tokenStart: number): boolean {
-    const src = this.src;
-    const nc = src.charCodeAt(this.pos);
-    if (!((nc === CH_LT || nc === CH_GT) && this.pos + 1 < this.srcEnd && src.charCodeAt(this.pos + 1) === CH_LPAREN))
-      return false;
-    const psStart = this.pos;
-    this.pos += 2;
-    this.extractBalanced();
-    if (this._unbalanced) this.errors.push({ message: "unterminated process substitution", pos: psStart });
-    const psText = src.slice(psStart, this.pos);
-    setToken(out, Token.Redirect, op, tokenStart, this.pos);
-    out.content = psText;
-    out.targetPos = psStart;
-    out.targetEnd = this.pos;
     return true;
   }
 
