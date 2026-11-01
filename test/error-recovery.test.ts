@@ -253,13 +253,27 @@ test("missing redirect targets collect errors", () => {
 });
 
 test("quoted empty redirect targets are not missing targets", () => {
-  for (const source of ['echo >""', "echo >''", 'echo <<< ""', "cat <<''"]) {
+  for (const source of ['echo >""', "echo >''", "echo >$''", 'echo >$""', 'echo <<< ""', "echo <<< $''", "cat <<''"]) {
     const ast = parse(source);
     assert.equal(ast.errors, undefined, source);
     const redirect = redirectsOf(nodeOfType(ast.commands[0].command, "Command"))[0];
     const target = redirect.type === "HereDoc" ? redirect.delimiter : redirect.target;
     assert.ok(target, source);
     assert.equal(target.value, "", source);
+  }
+});
+
+test("process substitutions are here-string targets", () => {
+  for (const source of ["cat <<< <(f)", "cat <<< >(f)", "cat <<<<(f)"]) {
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined, source);
+    const redirect = nodeOfType(
+      redirectsOf(nodeOfType(ast.commands[0].command, "Command"))[0],
+      "HereString",
+      "Redirect",
+    );
+    assert.equal(redirect.operator, "<<<", source);
+    assert.equal(redirect.target?.text, source.slice(source.lastIndexOf("(") - 1), source);
   }
 });
 
