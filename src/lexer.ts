@@ -2123,7 +2123,8 @@ export class Lexer {
     let value: string | null = null;
     if (!raw && !hasExpansions && keywordEligible && (ctx === LexContext.CommandStart || ctx === LexContext.TestMode)) {
       const nextCh = wordEnd < this.srcEnd ? src.charCodeAt(wordEnd) : 0;
-      if ((!quoted && wordLen <= 16) || nextCh === CH_LT || nextCh === CH_GT) {
+      // Line continuations can make a short keyword's physical span arbitrarily long.
+      if (!quoted || nextCh === CH_LT || nextCh === CH_GT) {
         value = this.wordValueOf(tokenStart, wordEnd);
       }
     }
