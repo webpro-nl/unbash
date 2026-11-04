@@ -1703,6 +1703,21 @@ export class Lexer {
           if (append) this.pos++;
           this.skipSpacesAndTabs();
           const targetPos = this.pos;
+          const nc = this.pos < this.srcEnd ? src.charCodeAt(this.pos) : 0;
+          if (
+            (nc === CH_LT || nc === CH_GT) &&
+            this.pos + 1 < this.srcEnd &&
+            src.charCodeAt(this.pos + 1) === CH_LPAREN
+          ) {
+            this.pos += 2;
+            this.extractBalanced();
+            if (this._unbalanced) this.errors.push({ message: "unterminated process substitution", pos: targetPos });
+            setToken(out, Token.Redirect, append ? "&>>" : "&>", tokenStart, this.pos);
+            out.content = src.slice(targetPos, this.pos);
+            out.targetPos = targetPos;
+            out.targetEnd = this.pos;
+            return true;
+          }
           if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL && src.charCodeAt(this.pos) !== CH_HASH) {
             this.readRedirectTargetText();
           }
