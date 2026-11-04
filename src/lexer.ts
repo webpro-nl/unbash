@@ -708,12 +708,22 @@ export class Lexer {
     // retries it, so answer from the last bracket in the window first.
     const limit = Math.min(end, this.srcEnd);
     let window = this._bracketWindow;
-    if (!window || window.limit !== limit) {
-      window = { limit, last: this.src.lastIndexOf("]", limit - 1) };
+    if (!window || window.limit !== limit || window.depth !== this._nestingDepth) {
+      window = { limit, depth: this._nestingDepth, last: this.src.lastIndexOf("]", limit - 1) };
       this._bracketWindow = window;
     }
     if (start > window.last) return -1;
-    return this.findClosingShellDelimiter(start, end, CH_RBRACKET);
+    const cached = window.matches?.get(start);
+    if (cached !== undefined) return cached;
+    // Index only after a failed search: ordinary subscripts need no per-character cache.
+    const matches = window.matches ? new Map<number, number>() : undefined;
+    const errorCount = this._errors?.length ?? 0;
+    const close = this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, true, matches);
+    if (matches && (this._errors?.length ?? 0) === errorCount) {
+      for (const [pos, result] of matches) window.matches!.set(pos, result);
+    }
+    if (close === -1 && window.matches === undefined) window.matches = new Map();
+    return close;
   }
 
   /** Find the closing bracket of `$[ … ]`, which unlike a subscript does not recurse into `${ }`. */
@@ -801,17 +811,29 @@ export class Lexer {
 
   // Only array assignment bodies take comments and leading `[` subscripts and reject operators;
   // extglob shares this scanner, and `#` is pattern data there.
-  private findClosingShellDelimiter(start: number, end: number, closing: number, array = false, braces = true): number {
+  private findClosingShellDelimiter(
+    start: number,
+    end: number,
+    closing: number,
+    array = false,
+    braces = true,
+    bracketMatches?: Map<number, number>,
+  ): number {
     const savedPos = this.pos;
     const savedEnd = this.srcEnd;
     const savedUnbalanced = this._unbalanced;
     this.srcEnd = Math.min(end, this.srcEnd);
     const delimiters = [closing];
+    const bracketStarts: number[][] | undefined = bracketMatches ? [[]] : undefined;
     let pos = start;
     let wordStart = true;
     let invalid = -1;
 
     while (pos < this.srcEnd) {
+      const expected = delimiters[delimiters.length - 1];
+      // Only visited positions in bracket scopes are equivalent fresh searches. Recovery
+      // can reinterpret quotes/comments, so positions inside skipped syntax stay uncached.
+      if (bracketStarts && expected === CH_RBRACKET) bracketStarts[bracketStarts.length - 1].push(pos);
       const ch = this.src.charCodeAt(pos);
       if (ch === CH_BACKSLASH) {
         if (pos + 1 < this.srcEnd && this.src.charCodeAt(pos + 1) !== CH_NL) wordStart = false;
@@ -856,7 +878,6 @@ export class Lexer {
         wordStart = false;
         continue;
       }
-      const expected = delimiters[delimiters.length - 1];
       if (ch === CH_DOLLAR && pos + 1 < this.srcEnd) {
         const after = this.src.charCodeAt(pos + 1);
         if (after === CH_SQUOTE) {
@@ -871,6 +892,7 @@ export class Lexer {
         }
         if (after === CH_LBRACE && braces) {
           delimiters.push(CH_RBRACE);
+          bracketStarts?.push([]);
           pos += 2;
           wordStart = false;
           continue;
@@ -879,6 +901,7 @@ export class Lexer {
       if (array && delimiters.length === 1) {
         if (ch === CH_LBRACKET && wordStart) {
           delimiters.push(CH_RBRACKET);
+          bracketStarts?.push([]);
         } else if (
           invalid === -1 &&
           (ch === CH_SEMI ||
@@ -893,10 +916,14 @@ export class Lexer {
       }
       if (expected === CH_RBRACKET && ch === CH_LBRACKET) {
         delimiters.push(CH_RBRACKET);
+        bracketStarts?.push([]);
       } else if (expected === CH_RPAREN && ch === CH_LPAREN) {
         delimiters.push(CH_RPAREN);
+        bracketStarts?.push([]);
       } else if (ch === expected) {
         delimiters.pop();
+        const starts = bracketStarts?.pop();
+        if (starts) for (const start of starts) bracketMatches!.set(start, pos);
         if (delimiters.length === 0) {
           this.pos = savedPos;
           this.srcEnd = savedEnd;
@@ -913,6 +940,9 @@ export class Lexer {
       pos++;
     }
 
+    if (bracketStarts) {
+      for (const starts of bracketStarts) for (const start of starts) bracketMatches!.set(start, -1);
+    }
     this.pos = savedPos;
     this.srcEnd = savedEnd;
     this._unbalanced = savedUnbalanced;
@@ -2037,7 +2067,7 @@ export class Lexer {
   private _wordHasExpansions = false;
   private _wordKeywordEligible = false;
   private _wordAssignmentState: number | undefined;
-  private _bracketWindow: { limit: number; last: number } | undefined;
+  private _bracketWindow: { limit: number; depth: number; last: number; matches?: Map<number, number> } | undefined;
   _wordParts: WordPart[] | null = null;
   private _resultText = "";
   // True when the last $-construct's value is exactly its raw source span.
