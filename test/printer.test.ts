@@ -322,6 +322,62 @@ test("arithmetic unary operators retain their spelling", () => {
   assert.equal(fmt("(( ~ 1 + - 2 + + 3 + ++ i + j -- ))"), "(( ~1 + -2 + +3 + ++i + j-- ))");
 });
 
+for (const operator of ["-", "+"]) {
+  test(`arithmetic nested unary ${operator} preserves both operators`, () => {
+    const printed = fmt(`(( ${operator} ${operator}x ))`);
+    const reparsed = parse(printed);
+    const command = nodeOfType(reparsed.commands[0].command, "ArithmeticCommand");
+    const outer = nodeOfType(command.expression, "ArithmeticUnary");
+    assert.equal(outer.operator, operator);
+    assert.equal(outer.prefix, true);
+    const inner = nodeOfType(outer.operand, "ArithmeticUnary");
+    assert.equal(inner.operator, operator);
+    assert.equal(inner.prefix, true);
+    assert.equal(nodeOfType(inner.operand, "ArithmeticWord").value, "x");
+    assert.equal(reparsed.errors, undefined);
+  });
+}
+
+test("arithmetic unary token boundaries survive printing and reparsing", () => {
+  const shape = (value: unknown) =>
+    JSON.stringify(value, (key, value) => (key === "pos" || key === "end" ? undefined : value));
+  for (const [expression, expected] of [
+    ["- - -x", "- - -x"],
+    ["+ + +x", "+ + +x"],
+    ["- --x", "- --x"],
+    ["+ ++x", "+ ++x"],
+    ["- -x--", "- -x--"],
+    ["+ +x++", "+ +x++"],
+    ["- -2", "- -2"],
+    ["+ +2", "+ +2"],
+    ["- +x", "-+x"],
+    ["+ -x", "+-x"],
+    ["- ++x", "-++x"],
+    ["+ --x", "+--x"],
+    ["++ x", "++x"],
+    ["-- x", "--x"],
+    ["x ++", "x++"],
+    ["x --", "x--"],
+    ["-(-x)", "-(-x)"],
+    ["+(+x)", "+(+x)"],
+    ["~ - -x", "~- -x"],
+    ["! + +x", "! + +x"],
+  ]) {
+    const original = parse(`(( ${expression} ))`);
+    const printed = print(original);
+    assert.equal(printed, `(( ${expected} ))`, expression);
+    const reparsed = parse(printed);
+    assert.equal(
+      shape(nodeOfType(reparsed.commands[0].command, "ArithmeticCommand").expression),
+      shape(nodeOfType(original.commands[0].command, "ArithmeticCommand").expression),
+      expression,
+    );
+    assert.equal(original.errors, undefined, expression);
+    assert.equal(reparsed.errors, undefined, expression);
+    assert.equal(print(reparsed), printed, expression);
+  }
+});
+
 // --- Arithmetic for ---
 
 test("arithmetic for loop", () => {
@@ -335,6 +391,24 @@ test("arithmetic for negation keeps history expansion inactive in every expressi
   const expected = "for (( i = ! 0; ! (i > 1); i += ! 0 )); do\n  echo $i\ndone";
   assert.equal(fmt("for ((i=! 0; ! (i>1); i+=! 0)); do echo $i; done"), expected);
   assert.equal(fmt(expected), expected);
+});
+
+test("arithmetic for preserves unary token boundaries in every expression", () => {
+  const source = "for ((i=- -2; + +i<4; i+=+ +1)); do :; done";
+  const original = parse(source);
+  const printed = print(original);
+  assert.equal(printed, "for (( i = - -2; + +i < 4; i += + +1 )); do\n  :\ndone");
+  const reparsed = parse(printed);
+  const before = nodeOfType(original.commands[0].command, "ArithmeticFor");
+  const after = nodeOfType(reparsed.commands[0].command, "ArithmeticFor");
+  const shape = (value: unknown) =>
+    JSON.stringify(value, (key, value) => (key === "pos" || key === "end" ? undefined : value));
+  for (const field of ["initialize", "test", "update"] as const) {
+    assert.equal(shape(after[field]), shape(before[field]), field);
+  }
+  assert.equal(original.errors, undefined);
+  assert.equal(reparsed.errors, undefined);
+  assert.equal(print(reparsed), printed);
 });
 
 // --- Coproc ---
