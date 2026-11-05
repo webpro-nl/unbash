@@ -33,6 +33,18 @@ for (const size of SIZES) {
     const reads = countReads(source);
     assert.ok(reads <= READS_PER_CHAR * source.length, `${reads} reads for ${source.length} characters`);
   });
+
+  test(`unmatched $[ openers in a ${size}-byte word are scanned in linear reads`, () => {
+    const source = "echo " + "$[".repeat(Math.floor((size - 5) / 2));
+    const reads = countReads(source);
+    assert.ok(reads <= READS_PER_CHAR * source.length, `${reads} reads for ${source.length} characters`);
+  });
+
+  test(`unmatched $[ openers with one final ] in a ${size}-byte word are scanned in linear reads`, () => {
+    const source = "echo " + "$[".repeat(Math.floor((size - 6) / 2)) + "]";
+    const reads = countReads(source);
+    assert.ok(reads <= READS_PER_CHAR * source.length, `${reads} reads for ${source.length} characters`);
+  });
 }
 
 test("an unmatched outer brace keeps a valid inner expansion", () => {
@@ -46,5 +58,20 @@ test("a brace expansion after unmatched openers keeps its inner expansion", () =
   assert.deepEqual(wordParts("n{{{a,b}"), [
     ["Literal", "n{{"],
     ["BraceExpansion", "{a,b}"],
+  ]);
+});
+
+test("nested $[ expansions parse as a single arithmetic expansion", () => {
+  assert.deepEqual(wordParts("echo $[$[1]]"), [["ArithmeticExpansion", "$[$[1]]"]]);
+  assert.deepEqual(wordParts("echo $[1+$[2]]x"), [
+    ["ArithmeticExpansion", "$[1+$[2]]"],
+    ["Literal", "x"],
+  ]);
+});
+
+test("an unmatched $[ before a valid $[ expansion keeps the inner expansion", () => {
+  assert.deepEqual(wordParts("echo $[$[1]"), [
+    ["Literal", "$["],
+    ["ArithmeticExpansion", "$[1]"],
   ]);
 });

@@ -718,7 +718,20 @@ export class Lexer {
 
   /** Find the closing bracket of `$[ … ]`, which unlike a subscript does not recurse into `${ }`. */
   private findClosingArithmeticBracket(start: number, end: number = this.srcEnd): number {
-    return this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, false);
+    // readDollar falls back to a literal `$` after a failed search and the word reader retries at
+    // the next `$[`, which scans to the end of the window again. Only failures are recorded:
+    // a successful inner search must still run to keep its errors and position handling.
+    const limit = Math.min(end, this.srcEnd);
+    let window = this._arithmeticBracketWindow;
+    if (!window || window.source !== this.src || window.end !== limit || window.depth !== this._nestingDepth) {
+      window = { source: this.src, end: limit, depth: this._nestingDepth, failed: new Set() };
+      this._arithmeticBracketWindow = window;
+    }
+    if (window.failed.has(start)) return -1;
+    const close = this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, false, window.failed);
+    // The scan can re-enter this method through nested lexers, which replace the window.
+    this._arithmeticBracketWindow = window;
+    return close;
   }
 
   /** Find the closing brace for a parameter expansion, ignoring braces inside nested shell syntax. */
@@ -801,12 +814,22 @@ export class Lexer {
 
   // Only array assignment bodies take comments and leading `[` subscripts and reject operators;
   // extglob shares this scanner, and `#` is pattern data there.
-  private findClosingShellDelimiter(start: number, end: number, closing: number, array = false, braces = true): number {
+  private findClosingShellDelimiter(
+    start: number,
+    end: number,
+    closing: number,
+    array = false,
+    braces = true,
+    failedBrackets?: Set<number>,
+  ): number {
     const savedPos = this.pos;
     const savedEnd = this.srcEnd;
     const savedUnbalanced = this._unbalanced;
     this.srcEnd = Math.min(end, this.srcEnd);
     const delimiters = [closing];
+    // Positions just after each still-open `[`. On failure these searches would fail identically
+    // when started on their own, since they scan the same text to the same end.
+    const bracketStarts = failedBrackets ? [start] : undefined;
     let pos = start;
     let wordStart = true;
     let invalid = -1;
@@ -893,10 +916,12 @@ export class Lexer {
       }
       if (expected === CH_RBRACKET && ch === CH_LBRACKET) {
         delimiters.push(CH_RBRACKET);
+        bracketStarts?.push(pos + 1);
       } else if (expected === CH_RPAREN && ch === CH_LPAREN) {
         delimiters.push(CH_RPAREN);
       } else if (ch === expected) {
         delimiters.pop();
+        bracketStarts?.pop();
         if (delimiters.length === 0) {
           this.pos = savedPos;
           this.srcEnd = savedEnd;
@@ -913,6 +938,7 @@ export class Lexer {
       pos++;
     }
 
+    if (bracketStarts) for (const opener of bracketStarts) failedBrackets!.add(opener);
     this.pos = savedPos;
     this.srcEnd = savedEnd;
     this._unbalanced = savedUnbalanced;
@@ -2048,6 +2074,7 @@ export class Lexer {
   private _wordKeywordEligible = false;
   private _wordAssignmentState: number | undefined;
   private _bracketWindow: { limit: number; last: number } | undefined;
+  private _arithmeticBracketWindow: { source: string; end: number; depth: number; failed: Set<number> } | undefined;
   private _braceWindow: { source: string; end: number; depth: number; results: Map<number, number> } | undefined;
   _wordParts: WordPart[] | null = null;
   private _resultText = "";
