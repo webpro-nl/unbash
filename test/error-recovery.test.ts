@@ -5,23 +5,26 @@ import { parse } from "../src/parser.ts";
 
 // ── Error recovery ──────────────────────────────────────────────────
 
+function parseCountingReads(source: string) {
+  const charCodeAt = String.prototype.charCodeAt;
+  let reads = 0;
+  String.prototype.charCodeAt = function (index: number): number {
+    if (this === source) reads++;
+    return charCodeAt.call(this, index);
+  };
+  try {
+    return { script: parse(source), reads };
+  } finally {
+    String.prototype.charCodeAt = charCodeAt;
+  }
+}
+
 test("unclosed subscript recovery has linear character-read growth", () => {
   for (const line of ["a[x y\n", "a[$x y\n", 'a["x" y\n', "a[${x} y\n", "a[$(echo x) y\n"]) {
     for (const closer of ["", "]"]) {
       const counts = [64, 128, 256].map((count) => {
         const source = line.repeat(count) + closer;
-        const charCodeAt = String.prototype.charCodeAt;
-        let reads = 0;
-        String.prototype.charCodeAt = function (index: number): number {
-          if (this === source) reads++;
-          return charCodeAt.call(this, index);
-        };
-        let script;
-        try {
-          script = parse(source);
-        } finally {
-          String.prototype.charCodeAt = charCodeAt;
-        }
+        const { script, reads } = parseCountingReads(source);
         assert.equal(script.commands.length, count, source);
         assert.deepEqual(
           script.errors,
@@ -39,6 +42,25 @@ test("unclosed subscript recovery has linear character-read growth", () => {
       }
     }
   }
+});
+
+test("redirect variable subscripts keep unclosed subscript recovery linear", () => {
+  const line = "a[x y\n{b[1]}>f\n";
+  const counts = [64, 128, 256].map((count) => {
+    const { script, reads } = parseCountingReads(line.repeat(count) + "]");
+    assert.equal(script.commands.length, count * 2 - 1);
+    assert.deepEqual(
+      script.errors,
+      Array.from({ length: count - 1 }, (_, index) => ({
+        message: "unterminated array subscript",
+        pos: index * line.length + 1,
+      })),
+    );
+    const [redirect] = redirectsOf(script.commands[count * 2 - 3].command);
+    assert.equal(nodeOfType(redirect.descriptor, "FileDescriptorVariable").name, "b[1]");
+    return reads;
+  });
+  for (let i = 1; i < counts.length; i++) assert.ok(counts[i] < counts[i - 1] * 2.2, JSON.stringify(counts));
 });
 
 test("an unclosed subscript preserves later assignments across recovery boundaries", () => {

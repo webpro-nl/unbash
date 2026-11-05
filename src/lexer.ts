@@ -2108,8 +2108,11 @@ export class Lexer {
     for (let i = start; i < end; i++) {
       const c = src.charCodeAt(i);
       if (c === CH_LBRACKET && i > start) {
+        // Scan the token directly: a token-bounded findClosingBracket would replace its recovery window.
         return (
-          i + 2 < end && src.charCodeAt(end - 1) === CH_RBRACKET && this.findClosingBracket(i + 1, end) === end - 1
+          i + 2 < end &&
+          src.charCodeAt(end - 1) === CH_RBRACKET &&
+          this.findClosingShellDelimiter(i + 1, end, CH_RBRACKET) === end - 1
         );
       }
       if (c >= 128 || !(isIdChar[c] & (i === start ? 1 : 2))) return false;
