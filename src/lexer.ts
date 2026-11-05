@@ -708,21 +708,34 @@ export class Lexer {
     // retries it, so answer from the last bracket in the window first.
     const limit = Math.min(end, this.srcEnd);
     let window = this._bracketWindow;
-    if (!window || window.limit !== limit || window.depth !== this._nestingDepth) {
+    if (!window || window.limit !== limit) {
       window = { limit, depth: this._nestingDepth, last: this.src.lastIndexOf("]", limit - 1) };
       this._bracketWindow = window;
     }
     if (start > window.last) return -1;
+    if (window.depth !== this._nestingDepth) {
+      window = { limit, depth: this._nestingDepth, last: window.last };
+      this._bracketWindow = window;
+    }
     const cached = window.matches?.get(start);
     if (cached !== undefined) return cached;
-    // Index only after a failed search: ordinary subscripts need no per-character cache.
-    const matches = window.matches ? new Map<number, number>() : undefined;
     const errorCount = this._errors?.length ?? 0;
-    const close = this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, true, matches);
-    if (matches && (this._errors?.length ?? 0) === errorCount) {
-      for (const [pos, result] of matches) window.matches!.set(pos, result);
+    const close = this.findClosingShellDelimiter(start, end, CH_RBRACKET);
+    if (close !== -1) return close;
+    if (window.matches === undefined) {
+      window.matches = null;
+    } else if ((this._errors?.length ?? 0) === errorCount) {
+      // Only repeated failures need an index; the extra scan must not add diagnostics.
+      const savedErrors = this._errors;
+      const matches = new Map<number, number>();
+      const indexedClose = this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, true, matches);
+      if (indexedClose === -1 && (this._errors?.length ?? 0) === errorCount) {
+        if (window.matches === null) window.matches = matches;
+        else for (const [pos, result] of matches) window.matches.set(pos, result);
+      }
+      this._errors = savedErrors;
+      if (savedErrors !== null) savedErrors.length = errorCount;
     }
-    if (close === -1 && window.matches === undefined) window.matches = new Map();
     return close;
   }
 
@@ -2067,7 +2080,9 @@ export class Lexer {
   private _wordHasExpansions = false;
   private _wordKeywordEligible = false;
   private _wordAssignmentState: number | undefined;
-  private _bracketWindow: { limit: number; depth: number; last: number; matches?: Map<number, number> } | undefined;
+  private _bracketWindow:
+    | { limit: number; depth: number; last: number; matches?: Map<number, number> | null }
+    | undefined;
   _wordParts: WordPart[] | null = null;
   private _resultText = "";
   // True when the last $-construct's value is exactly its raw source span.

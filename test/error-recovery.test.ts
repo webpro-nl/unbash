@@ -63,6 +63,39 @@ test("redirect variable subscripts keep unclosed subscript recovery linear", () 
   for (let i = 1; i < counts.length; i++) assert.ok(counts[i] < counts[i - 1] * 2.2, JSON.stringify(counts));
 });
 
+test("successful subscripts after recovery avoid per-query tables", () => {
+  for (const count of [64, 256]) {
+    const MapConstructor = globalThis.Map;
+    const SetConstructor = globalThis.Set;
+    let allocations = 0;
+    function track<T extends typeof Map | typeof Set>(constructor: T): T {
+      return new Proxy(constructor, {
+        construct(target, args) {
+          allocations++;
+          return Reflect.construct(target, args);
+        },
+      });
+    }
+    globalThis.Map = track(MapConstructor);
+    globalThis.Set = track(SetConstructor);
+    let script: ReturnType<typeof parse>;
+    try {
+      script = parse("a[x y\n" + "b[1 + 2]=2\n".repeat(count));
+    } finally {
+      globalThis.Map = MapConstructor;
+      globalThis.Set = SetConstructor;
+    }
+    assert.ok(allocations <= 4, `${allocations} tables for ${count} successful subscripts`);
+    assert.equal(script.commands.length, count + 1);
+    assert.deepEqual(script.errors, [{ message: "unterminated array subscript", pos: 1 }]);
+    const last = nodeOfType(script.commands[count].command, "Command");
+    const assignment = nodeOfType(last.prefix[0], "Assignment");
+    assert.equal(assignment.name, "b");
+    assert.equal(assignment.index?.text, "1 + 2");
+    assert.equal(nodeOfType(assignment.value, "Word").value, "2");
+  }
+});
+
 test("an unclosed subscript preserves later assignments across recovery boundaries", () => {
   for (const [suffix, index] of [
     ["a[$x y\nb[z w]=1", "z w"],
