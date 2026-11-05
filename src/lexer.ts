@@ -925,14 +925,24 @@ export class Lexer {
   private scanBraceExpansion(start: number): number {
     const src = this.src;
     const len = this.srcEnd;
+    // The word reader retries at every `{` of an unmatched run, and each retry scans to the end
+    // of the window. One cache per window holds at most one entry per brace opener.
+    let window = this._braceWindow;
+    if (!window || window.source !== src || window.end !== len || window.depth !== this._nestingDepth) {
+      window = { source: src, end: len, depth: this._nestingDepth, results: new Map() };
+      this._braceWindow = window;
+    }
+    const results = window.results;
+    const cached = results.get(start);
+    if (cached !== undefined) return cached;
     const first = start + 1 < len ? src.charCodeAt(start + 1) : 0;
     if (first <= CH_SPACE || first === CH_RBRACE) return -1;
     const savedPos = this.pos;
     const savedUnbalanced = this._unbalanced;
     const errorCount = this._errors === null ? 0 : this._errors.length;
-    let depth = 1;
-    let hasSep = false;
-    let end = -1;
+    // Innermost opener last. Each frame is resolved on its own, so an unmatched outer brace
+    // still records the valid expansion nested inside it.
+    const frames = [{ start, hasSep: false }];
     let pos = start + 1;
     while (pos < len) {
       const ch = src.charCodeAt(pos);
@@ -940,12 +950,11 @@ export class Lexer {
       if (type === 0) {
         pos++;
         if (ch === CH_RBRACE) {
-          if (--depth === 0) {
-            end = pos;
-            break;
-          }
-        } else if (depth === 1 && (ch === 0x2c /* , */ || (ch === 0x2e /* . */ && src.charCodeAt(pos) === 0x2e))) {
-          hasSep = true;
+          const frame = frames.pop()!;
+          results.set(frame.start, frame.hasSep ? pos : -1);
+          if (frames.length === 0) break;
+        } else if (ch === 0x2c /* , */ || (ch === 0x2e /* . */ && src.charCodeAt(pos) === 0x2e)) {
+          frames[frames.length - 1].hasSep = true;
         }
         continue;
       }
@@ -977,7 +986,7 @@ export class Lexer {
         while (pos < len && src.charCodeAt(pos) !== CH_BACKTICK) pos += src.charCodeAt(pos) === CH_BACKSLASH ? 2 : 1;
         pos++;
       } else if (ch === CH_LBRACE) {
-        depth++;
+        frames.push({ start: pos, hasSep: false });
         pos++;
       } else if (next === CH_SQUOTE) {
         pos = decodeAnsiCQuoted(src, pos + 2, len).end;
@@ -996,7 +1005,8 @@ export class Lexer {
     this.pos = savedPos;
     this._unbalanced = savedUnbalanced;
     if (this._errors !== null) this._errors.length = errorCount;
-    return hasSep ? end : -1;
+    for (const frame of frames) results.set(frame.start, -1);
+    return results.get(start)!;
   }
 
   skipSubshellBody(): number {
@@ -2038,6 +2048,7 @@ export class Lexer {
   private _wordKeywordEligible = false;
   private _wordAssignmentState: number | undefined;
   private _bracketWindow: { limit: number; last: number } | undefined;
+  private _braceWindow: { source: string; end: number; depth: number; results: Map<number, number> } | undefined;
   _wordParts: WordPart[] | null = null;
   private _resultText = "";
   // True when the last $-construct's value is exactly its raw source span.
