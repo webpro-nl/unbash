@@ -2688,7 +2688,9 @@ export class Lexer {
         if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
         const first = pos + 1 < len ? src.charCodeAt(pos + 1) : 0;
         const braceEnd =
-          first <= CH_SPACE || first === CH_RBRACE ? -1 : this.scanBraceExpansion(pos, (braceResults ??= new Map()));
+          first <= CH_SPACE || first === CH_RBRACE
+            ? -1
+            : this.scanBraceExpansion(pos, braceResults ?? (braceResults = new Map()));
         if (braceEnd > 0) {
           keywordEligible = false;
           lastValueChar = src.charCodeAt(braceEnd - 1);
