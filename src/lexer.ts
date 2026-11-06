@@ -678,6 +678,7 @@ export class Lexer {
   private wordValueOf(start: number, end: number): string {
     const savedPos = this.pos;
     const savedEnd = this.srcEnd;
+    const savedBracketWindow = this._bracketWindow;
     const savedBuildValue = this._buildValue;
     const savedUnbalanced = this._unbalanced;
     const errorCount = this._errors === null ? 0 : this._errors.length;
@@ -696,6 +697,7 @@ export class Lexer {
     const value = this._wordText;
     this.pos = savedPos;
     this.srcEnd = savedEnd;
+    this._bracketWindow = savedBracketWindow;
     this._buildValue = savedBuildValue;
     this._unbalanced = savedUnbalanced;
     if (this._errors !== null) this._errors.length = errorCount;
@@ -717,24 +719,12 @@ export class Lexer {
       window = { limit, depth: this._nestingDepth, last: window.last };
       this._bracketWindow = window;
     }
-    const cached = window.matches?.get(start);
-    if (cached !== undefined) return cached;
-    const errorCount = this._errors?.length ?? 0;
-    const close = this.findClosingShellDelimiter(start, end, CH_RBRACKET);
-    if (close !== -1) return close;
-    if (window.matches === undefined) {
-      window.matches = null;
-    } else if ((this._errors?.length ?? 0) === errorCount) {
-      // Only repeated failures need an index; the extra scan must not add diagnostics.
-      const savedErrors = this._errors;
-      const matches = new Map<number, number>();
-      const indexedClose = this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, true, matches);
-      if (indexedClose === -1 && (this._errors?.length ?? 0) === errorCount) {
-        if (window.matches === null) window.matches = matches;
-        else for (const [pos, result] of matches) window.matches.set(pos, result);
-      }
-      this._errors = savedErrors;
-      if (savedErrors !== null) savedErrors.length = errorCount;
+    if (window.failed?.has(start)) return -1;
+    const unmatched: number[][] = [];
+    const close = this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, true, unmatched);
+    if (close === -1) {
+      const failed = (window.failed ??= new Set<number>());
+      for (const starts of unmatched) for (const pos of starts) failed.add(pos);
     }
     return close;
   }
@@ -753,6 +743,7 @@ export class Lexer {
   findClosingParenthesis(start: number, end: number = this.srcEnd): number {
     const savedPos = this.pos;
     const savedEnd = this.srcEnd;
+    const savedBracketWindow = this._bracketWindow;
     const savedUnbalanced = this._unbalanced;
     this.pos = start;
     this.srcEnd = Math.min(end, this.srcEnd);
@@ -760,6 +751,7 @@ export class Lexer {
     const close = this._unbalanced ? -1 : this.pos - 1;
     this.pos = savedPos;
     this.srcEnd = savedEnd;
+    this._bracketWindow = savedBracketWindow;
     this._unbalanced = savedUnbalanced;
     return close;
   }
@@ -830,14 +822,15 @@ export class Lexer {
     closing: number,
     array = false,
     braces = true,
-    bracketMatches?: Map<number, number>,
+    bracketStarts?: number[][],
   ): number {
     const savedPos = this.pos;
     const savedEnd = this.srcEnd;
+    const savedBracketWindow = this._bracketWindow;
     const savedUnbalanced = this._unbalanced;
     this.srcEnd = Math.min(end, this.srcEnd);
     const delimiters = [closing];
-    const bracketStarts: number[][] | undefined = bracketMatches ? [[]] : undefined;
+    bracketStarts?.push([]);
     let pos = start;
     let wordStart = true;
     let invalid = -1;
@@ -935,11 +928,11 @@ export class Lexer {
         bracketStarts?.push([]);
       } else if (ch === expected) {
         delimiters.pop();
-        const starts = bracketStarts?.pop();
-        if (starts) for (const start of starts) bracketMatches!.set(start, pos);
+        bracketStarts?.pop();
         if (delimiters.length === 0) {
           this.pos = savedPos;
           this.srcEnd = savedEnd;
+          this._bracketWindow = savedBracketWindow;
           this._unbalanced = savedUnbalanced;
           if (invalid !== -1)
             this.errors.push({ message: `unexpected '${this.src[invalid]}' in array assignment`, pos: invalid });
@@ -953,11 +946,9 @@ export class Lexer {
       pos++;
     }
 
-    if (bracketStarts) {
-      for (const starts of bracketStarts) for (const start of starts) bracketMatches!.set(start, -1);
-    }
     this.pos = savedPos;
     this.srcEnd = savedEnd;
+    this._bracketWindow = savedBracketWindow;
     this._unbalanced = savedUnbalanced;
     return -1;
   }
@@ -2080,9 +2071,7 @@ export class Lexer {
   private _wordHasExpansions = false;
   private _wordKeywordEligible = false;
   private _wordAssignmentState: number | undefined;
-  private _bracketWindow:
-    | { limit: number; depth: number; last: number; matches?: Map<number, number> | null }
-    | undefined;
+  private _bracketWindow: { limit: number; depth: number; last: number; failed?: Set<number> } | undefined;
   _wordParts: WordPart[] | null = null;
   private _resultText = "";
   // True when the last $-construct's value is exactly its raw source span.
@@ -2971,6 +2960,7 @@ export class Lexer {
     if (this._nestingDepth >= MAX_SYNTAX_NESTING) return new WordImpl(this.src.slice(start, end), start, end);
     this._nestingDepth++;
     const savedEnd = this.srcEnd;
+    const savedBracketWindow = this._bracketWindow;
     const savedPos = this.pos;
     const savedText = this._wordText;
     const savedParts = this._wordParts;
@@ -2989,6 +2979,7 @@ export class Lexer {
     }
 
     this.srcEnd = savedEnd;
+    this._bracketWindow = savedBracketWindow;
     this.pos = savedPos;
     this._wordText = savedText;
     this._wordParts = savedParts;
