@@ -679,6 +679,7 @@ export class Lexer {
     const savedPos = this.pos;
     const savedEnd = this.srcEnd;
     const savedBracketWindow = this._bracketWindow;
+    const savedArithmeticBracketWindow = this._arithmeticBracketWindow;
     const savedBuildValue = this._buildValue;
     const savedUnbalanced = this._unbalanced;
     const errorCount = this._errors === null ? 0 : this._errors.length;
@@ -698,6 +699,7 @@ export class Lexer {
     this.pos = savedPos;
     this.srcEnd = savedEnd;
     this._bracketWindow = savedBracketWindow;
+    this._arithmeticBracketWindow = savedArithmeticBracketWindow;
     this._buildValue = savedBuildValue;
     this._unbalanced = savedUnbalanced;
     if (this._errors !== null) this._errors.length = errorCount;
@@ -731,7 +733,14 @@ export class Lexer {
 
   /** Find the closing bracket of `$[ … ]`, which unlike a subscript does not recurse into `${ }`. */
   private findClosingArithmeticBracket(start: number, end: number = this.srcEnd): number {
-    return this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, false);
+    const limit = Math.min(end, this.srcEnd);
+    let window = this._arithmeticBracketWindow;
+    if (!window || window.end !== limit || window.depth !== this._nestingDepth) {
+      window = { end: limit, depth: this._nestingDepth, failed: new Set() };
+      this._arithmeticBracketWindow = window;
+    }
+    if (window.failed.has(start)) return -1;
+    return this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, false, undefined, window.failed);
   }
 
   /** Find the closing brace for a parameter expansion, ignoring braces inside nested shell syntax. */
@@ -744,6 +753,7 @@ export class Lexer {
     const savedPos = this.pos;
     const savedEnd = this.srcEnd;
     const savedBracketWindow = this._bracketWindow;
+    const savedArithmeticBracketWindow = this._arithmeticBracketWindow;
     const savedUnbalanced = this._unbalanced;
     this.pos = start;
     this.srcEnd = Math.min(end, this.srcEnd);
@@ -752,6 +762,7 @@ export class Lexer {
     this.pos = savedPos;
     this.srcEnd = savedEnd;
     this._bracketWindow = savedBracketWindow;
+    this._arithmeticBracketWindow = savedArithmeticBracketWindow;
     this._unbalanced = savedUnbalanced;
     return close;
   }
@@ -823,14 +834,17 @@ export class Lexer {
     array = false,
     braces = true,
     bracketStarts?: number[][],
+    failedBrackets?: Set<number>,
   ): number {
     const savedPos = this.pos;
     const savedEnd = this.srcEnd;
     const savedBracketWindow = this._bracketWindow;
+    const savedArithmeticBracketWindow = this._arithmeticBracketWindow;
     const savedUnbalanced = this._unbalanced;
     this.srcEnd = Math.min(end, this.srcEnd);
     const delimiters = [closing];
     bracketStarts?.push([]);
+    const failedStarts = failedBrackets ? [start] : undefined;
     let pos = start;
     let wordStart = true;
     let invalid = -1;
@@ -923,16 +937,19 @@ export class Lexer {
       if (expected === CH_RBRACKET && ch === CH_LBRACKET) {
         delimiters.push(CH_RBRACKET);
         bracketStarts?.push([]);
+        failedStarts?.push(pos + 1);
       } else if (expected === CH_RPAREN && ch === CH_LPAREN) {
         delimiters.push(CH_RPAREN);
         bracketStarts?.push([]);
       } else if (ch === expected) {
         delimiters.pop();
+        failedStarts?.pop();
         bracketStarts?.pop();
         if (delimiters.length === 0) {
           this.pos = savedPos;
           this.srcEnd = savedEnd;
           this._bracketWindow = savedBracketWindow;
+          this._arithmeticBracketWindow = savedArithmeticBracketWindow;
           this._unbalanced = savedUnbalanced;
           if (invalid !== -1)
             this.errors.push({ message: `unexpected '${this.src[invalid]}' in array assignment`, pos: invalid });
@@ -946,9 +963,12 @@ export class Lexer {
       pos++;
     }
 
+    // Only still-open brackets share this failure; closed inner expansions remain observable.
+    if (failedStarts) for (const start of failedStarts) failedBrackets!.add(start);
     this.pos = savedPos;
     this.srcEnd = savedEnd;
     this._bracketWindow = savedBracketWindow;
+    this._arithmeticBracketWindow = savedArithmeticBracketWindow;
     this._unbalanced = savedUnbalanced;
     return -1;
   }
@@ -956,17 +976,16 @@ export class Lexer {
   // End of the brace expansion opened at `start`, or -1. As in Bash's brace_gobbler, quotes,
   // escapes, parameter expansions and substitutions are opaque; an unquoted metacharacter
   // ends the word before the brace closes. The word scan reports errors in the skipped text.
-  private scanBraceExpansion(start: number): number {
+  private scanBraceExpansion(start: number, results: Map<number, number>): number {
     const src = this.src;
     const len = this.srcEnd;
-    const first = start + 1 < len ? src.charCodeAt(start + 1) : 0;
-    if (first <= CH_SPACE || first === CH_RBRACE) return -1;
+    const cached = results.get(start);
+    if (cached !== undefined) return cached;
     const savedPos = this.pos;
     const savedUnbalanced = this._unbalanced;
     const errorCount = this._errors === null ? 0 : this._errors.length;
-    let depth = 1;
-    let hasSep = false;
-    let end = -1;
+    // Opener/separator pairs resolve each nested scope even when its outer scope fails.
+    const frames = [start, 0];
     let pos = start + 1;
     while (pos < len) {
       const ch = src.charCodeAt(pos);
@@ -974,12 +993,11 @@ export class Lexer {
       if (type === 0) {
         pos++;
         if (ch === CH_RBRACE) {
-          if (--depth === 0) {
-            end = pos;
-            break;
-          }
-        } else if (depth === 1 && (ch === 0x2c /* , */ || (ch === 0x2e /* . */ && src.charCodeAt(pos) === 0x2e))) {
-          hasSep = true;
+          const hasSep = frames.pop();
+          results.set(frames.pop()!, hasSep ? pos : -1);
+          if (frames.length === 0) break;
+        } else if (ch === 0x2c /* , */ || (ch === 0x2e /* . */ && src.charCodeAt(pos) === 0x2e)) {
+          frames[frames.length - 1] = 1;
         }
         continue;
       }
@@ -1011,7 +1029,7 @@ export class Lexer {
         while (pos < len && src.charCodeAt(pos) !== CH_BACKTICK) pos += src.charCodeAt(pos) === CH_BACKSLASH ? 2 : 1;
         pos++;
       } else if (ch === CH_LBRACE) {
-        depth++;
+        frames.push(pos, 0);
         pos++;
       } else if (next === CH_SQUOTE) {
         pos = decodeAnsiCQuoted(src, pos + 2, len).end;
@@ -1030,7 +1048,8 @@ export class Lexer {
     this.pos = savedPos;
     this._unbalanced = savedUnbalanced;
     if (this._errors !== null) this._errors.length = errorCount;
-    return hasSep ? end : -1;
+    for (let index = 0; index < frames.length; index += 2) results.set(frames[index], -1);
+    return results.get(start)!;
   }
 
   skipSubshellBody(): number {
@@ -2072,6 +2091,7 @@ export class Lexer {
   private _wordKeywordEligible = false;
   private _wordAssignmentState: number | undefined;
   private _bracketWindow: { limit: number; depth: number; last: number; failed?: Set<number> } | undefined;
+  private _arithmeticBracketWindow: { end: number; depth: number; failed: Set<number> } | undefined;
   _wordParts: WordPart[] | null = null;
   private _resultText = "";
   // True when the last $-construct's value is exactly its raw source span.
@@ -2348,6 +2368,7 @@ export class Lexer {
     let litBuf = "";
     let litStart = 0;
     let hasGlobs = false;
+    let braceResults: Map<number, number> | undefined;
     if (bp) {
       parts = [];
       litBuf = text; // fast-path prefix is literal
@@ -2665,7 +2686,11 @@ export class Lexer {
 
       if (ch === CH_LBRACE) {
         if (assignmentState >= 0 && assignmentState < ASSIGNMENT_INDEX_BASE) assignmentState = ASSIGNMENT_INVALID;
-        const braceEnd = this.scanBraceExpansion(pos);
+        const first = pos + 1 < len ? src.charCodeAt(pos + 1) : 0;
+        const braceEnd =
+          first <= CH_SPACE || first === CH_RBRACE
+            ? -1
+            : this.scanBraceExpansion(pos, braceResults ?? (braceResults = new Map()));
         if (braceEnd > 0) {
           keywordEligible = false;
           lastValueChar = src.charCodeAt(braceEnd - 1);
@@ -2961,6 +2986,7 @@ export class Lexer {
     this._nestingDepth++;
     const savedEnd = this.srcEnd;
     const savedBracketWindow = this._bracketWindow;
+    const savedArithmeticBracketWindow = this._arithmeticBracketWindow;
     const savedPos = this.pos;
     const savedText = this._wordText;
     const savedParts = this._wordParts;
@@ -2980,6 +3006,7 @@ export class Lexer {
 
     this.srcEnd = savedEnd;
     this._bracketWindow = savedBracketWindow;
+    this._arithmeticBracketWindow = savedArithmeticBracketWindow;
     this.pos = savedPos;
     this._wordText = savedText;
     this._wordParts = savedParts;
