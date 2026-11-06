@@ -723,7 +723,7 @@ export class Lexer {
     const unmatched: number[][] = [];
     const close = this.findClosingShellDelimiter(start, end, CH_RBRACKET, false, true, unmatched);
     if (close === -1) {
-      const failed = (window.failed ??= new Set<number>());
+      const failed = window.failed ?? (window.failed = new Set<number>());
       for (const starts of unmatched) for (const pos of starts) failed.add(pos);
     }
     return close;
