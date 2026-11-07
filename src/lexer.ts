@@ -1753,13 +1753,7 @@ export class Lexer {
           this.pos += 2;
           const append = this.pos < this.srcEnd && src.charCodeAt(this.pos) === CH_GT;
           if (append) this.pos++;
-          this.skipSpacesAndTabs();
-          const targetPos = this.pos;
-          if (this.pos < this.srcEnd && src.charCodeAt(this.pos) !== CH_NL && src.charCodeAt(this.pos) !== CH_HASH) {
-            this.readRedirectTargetText();
-          }
-          this.redirectToken(out, append ? "&>>" : "&>", tokenStart, targetPos);
-          return true;
+          return this.readRedirectTarget(out, append ? "&>>" : "&>", tokenStart);
         }
         this.pos++;
         setToken(out, Token.Amp, "&", tokenStart, this.pos);
@@ -1856,6 +1850,11 @@ export class Lexer {
       }
     }
 
+    return this.readRedirectTarget(out, op, tokenStart);
+  }
+
+  private readRedirectTarget(out: TokenValue, op: string, tokenStart: number): boolean {
+    const src = this.src;
     this.skipSpacesAndTabs();
     if (this.pos < this.srcEnd) {
       const nc = src.charCodeAt(this.pos);
