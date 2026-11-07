@@ -742,3 +742,14 @@ test("reserved-word function names print with the function keyword", () => {
   assert.ok(fmt("function f { :; }").startsWith("f() {"));
   assert.ok(fmt("f() { :; }").startsWith("f() {"));
 });
+
+test("case patterns preserve parentheses around continued esac", () => {
+  for (const pattern of ["es\\\nac", "e\\\nsac", "esac"]) {
+    const source = "case x in (" + pattern + ") echo yes;; esac";
+    assert.equal(parse(source).errors, undefined);
+    const printed = fmt(source);
+    assert.ok(printed.includes("(" + pattern + ")"));
+    assert.equal(parse(printed).errors, undefined);
+    assert.equal(fmt(printed), printed);
+  }
+});

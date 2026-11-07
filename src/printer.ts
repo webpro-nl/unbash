@@ -284,7 +284,7 @@ function caseNode(n: Case, indent: number): string {
   let out = "case " + wd(n.word) + " in\n";
   for (const item of n.items) {
     // A leading `esac` closes the case unless the optional `(` precedes the pattern list.
-    const open = item.pattern.length > 0 && wd(item.pattern[0]) === "esac" ? "(" : "";
+    const open = item.pattern.length > 0 && wd(item.pattern[0]).split("\\\n").join("") === "esac" ? "(" : "";
     out += iPad + open + item.pattern.map((p) => wd(p)).join(" | ") + ")\n";
     if (item.body.commands.length > 0) {
       out += stmts(item.body.commands, indent + 2) + "\n";
