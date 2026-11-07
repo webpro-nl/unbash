@@ -1655,9 +1655,15 @@ export class Lexer {
     const src = this.src;
     const len = this.srcEnd;
 
-    let pos = skipBlanks(src, this.pos, len);
-    if (ctx === LexContext.TestMode) {
-      while (pos < len && src.charCodeAt(pos) === CH_NL) pos = skipBlanks(src, pos + 1, len);
+    let pos = this.pos;
+    while (true) {
+      pos = skipBlanks(src, pos, len);
+      if (ctx === LexContext.TestMode) {
+        while (pos < len && src.charCodeAt(pos) === CH_NL) pos = skipBlanks(src, pos + 1, len);
+      }
+      if (pos >= len || src.charCodeAt(pos) !== CH_HASH) break;
+      // Leave the newline for normal-mode tokenization and pending heredocs.
+      while (pos < len && src.charCodeAt(pos) !== CH_NL) pos++;
     }
     this.pos = pos;
 
@@ -1669,13 +1675,6 @@ export class Lexer {
 
     const tokenStart = pos;
     const ch = src.charCodeAt(pos);
-
-    if (ch === CH_HASH) {
-      // Skip comment
-      while (this.pos < len && src.charCodeAt(this.pos) !== CH_NL) this.pos++;
-      this.readNext(out, ctx);
-      return;
-    }
 
     if (ch === CH_NL) {
       this.pos++;
