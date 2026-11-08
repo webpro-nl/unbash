@@ -5,25 +5,128 @@ import { parse } from "../src/parser.ts";
 
 // ── Error recovery ──────────────────────────────────────────────────
 
+function parseCountingReads(source: string) {
+  const charCodeAt = String.prototype.charCodeAt;
+  let reads = 0;
+  String.prototype.charCodeAt = function (index: number): number {
+    if (this === source) reads++;
+    return charCodeAt.call(this, index);
+  };
+  try {
+    return { script: parse(source), reads };
+  } finally {
+    String.prototype.charCodeAt = charCodeAt;
+  }
+}
+
+test("unclosed subscript recovery has linear character-read growth", () => {
+  for (const line of ["a[x y\n", "a[$x y\n", 'a["x" y\n', "a[${x} y\n", "a[$(echo x) y\n"]) {
+    for (const closer of ["", "]"]) {
+      const counts = [64, 128, 256].map((count) => {
+        const source = line.repeat(count) + closer;
+        const { script, reads } = parseCountingReads(source);
+        assert.equal(script.commands.length, count, source);
+        assert.deepEqual(
+          script.errors,
+          Array.from({ length: count - (closer ? 1 : 0) }, (_, index) => ({
+            message: "unterminated array subscript",
+            pos: index * line.length + 1,
+          })),
+        );
+        const last = nodeOfType(script.commands[count - 1].command, "Command");
+        assert.equal(last.name?.text, closer ? line + closer : line.slice(0, line.lastIndexOf(" ")));
+        return reads;
+      });
+      for (let i = 1; i < counts.length; i++) {
+        assert.ok(counts[i] < counts[i - 1] * 2.2, `${JSON.stringify({ line, closer, counts })}`);
+      }
+    }
+  }
+});
+
+test("redirect variable subscripts keep unclosed subscript recovery linear", () => {
+  const line = "a[x y\n{b[1]}>f\n";
+  const counts = [64, 128, 256].map((count) => {
+    const { script, reads } = parseCountingReads(line.repeat(count) + "]");
+    assert.equal(script.commands.length, count * 2 - 1);
+    assert.deepEqual(
+      script.errors,
+      Array.from({ length: count - 1 }, (_, index) => ({
+        message: "unterminated array subscript",
+        pos: index * line.length + 1,
+      })),
+    );
+    const [redirect] = redirectsOf(script.commands[count * 2 - 3].command);
+    assert.equal(nodeOfType(redirect.descriptor, "FileDescriptorVariable").name, "b[1]");
+    return reads;
+  });
+  for (let i = 1; i < counts.length; i++) assert.ok(counts[i] < counts[i - 1] * 2.2, JSON.stringify(counts));
+});
+
+test("successful subscripts after recovery avoid per-query tables", () => {
+  for (const count of [64, 256]) {
+    const MapConstructor = globalThis.Map;
+    const SetConstructor = globalThis.Set;
+    let allocations = 0;
+    function track<T extends typeof Map | typeof Set>(constructor: T): T {
+      return new Proxy(constructor, {
+        construct(target, args) {
+          allocations++;
+          return Reflect.construct(target, args);
+        },
+      });
+    }
+    globalThis.Map = track(MapConstructor);
+    globalThis.Set = track(SetConstructor);
+    let script: ReturnType<typeof parse>;
+    try {
+      script = parse("a[x y\n" + "b[1 + 2]=2\n".repeat(count));
+    } finally {
+      globalThis.Map = MapConstructor;
+      globalThis.Set = SetConstructor;
+    }
+    assert.ok(allocations <= 4, `${allocations} tables for ${count} successful subscripts`);
+    assert.equal(script.commands.length, count + 1);
+    assert.deepEqual(script.errors, [{ message: "unterminated array subscript", pos: 1 }]);
+    const last = nodeOfType(script.commands[count].command, "Command");
+    const assignment = nodeOfType(last.prefix[0], "Assignment");
+    assert.equal(assignment.name, "b");
+    assert.equal(assignment.index?.text, "1 + 2");
+    assert.equal(nodeOfType(assignment.value, "Word").value, "2");
+  }
+});
+
 test("an unclosed subscript preserves later assignments across recovery boundaries", () => {
-  for (const [source, index] of [
+  for (const [suffix, index] of [
     ["a[$x y\nb[z w]=1", "z w"],
     ['a[$x y # "\nb[$x z]=1\n# "', "$x z"],
+    ["a[$x y # '\nb[$x z]=1\n# '", "$x z"],
   ] as const) {
-    const script = parse(source);
-    assert.deepEqual(script.errors, [{ message: "unterminated array subscript", pos: 1 }], source);
-    assert.equal(script.commands.length, 2, source);
-    const first = nodeOfType(script.commands[0].command, "Command");
-    assert.equal(first.name?.text, "a[$x", source);
-    assert.deepEqual(
-      first.suffix.map((part) => nodeOfType(part, "Word").text),
-      ["y"],
-      source,
-    );
-    const next = nodeOfType(script.commands[1].command, "Command");
-    const assignment = nodeOfType(next.prefix[0], "Assignment");
-    assert.equal(assignment.name, "b", source);
-    assert.equal(assignment.index?.text, index, source);
+    for (const prefix of ["", "a[$x y\n"]) {
+      const source = prefix + suffix;
+      const script = parse(source);
+      const failures = prefix ? 2 : 1;
+      assert.deepEqual(
+        script.errors,
+        Array.from({ length: failures }, (_, index) => ({
+          message: "unterminated array subscript",
+          pos: index * prefix.length + 1,
+        })),
+        source,
+      );
+      assert.equal(script.commands.length, failures + 1, source);
+      const first = nodeOfType(script.commands[0].command, "Command");
+      assert.equal(first.name?.text, "a[$x", source);
+      assert.deepEqual(
+        first.suffix.map((part) => nodeOfType(part, "Word").text),
+        ["y"],
+        source,
+      );
+      const next = nodeOfType(script.commands[failures].command, "Command");
+      const assignment = nodeOfType(next.prefix[0], "Assignment");
+      assert.equal(assignment.name, "b", source);
+      assert.equal(assignment.index?.text, index, source);
+    }
   }
 });
 

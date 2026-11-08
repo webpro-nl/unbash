@@ -193,3 +193,25 @@ test("ordinary process substitutions and quoted operator characters retain their
     assert.deepEqual(bash(printed), bash(source));
   }
 });
+
+test("continued combined redirects preserve process substitution targets", () => {
+  for (const op of ["&>", "&>>"]) {
+    for (const operator of variants(op)) {
+      for (const target of ["<(printf payload)", ">(cat)"]) {
+        const source = `cmd ${operator} ${target}`;
+        const lexer = new Lexer(source);
+        lexer.next();
+        const token = lexer.next();
+        assert.equal(token.value, op);
+        assert.equal(token.content, target);
+        assert.equal(token.targetPos, source.indexOf(target));
+        assert.equal(token.targetEnd, source.length);
+        const ast = parse(source);
+        assert.equal(ast.errors, undefined);
+        assert.equal(verify(source, ast), source);
+        assert.equal(print(ast), print(parse(`cmd ${op} ${target}`)));
+        assert.equal(print(parse(print(ast))), print(ast));
+      }
+    }
+  }
+});
