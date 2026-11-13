@@ -1706,22 +1706,25 @@ export class Lexer {
   private tryReadOperator(out: TokenValue, ch: number, ctx: LexContext, tokenStart: number): boolean {
     const src = this.src;
     const pos = this.pos;
-    const next = pos + 1 < this.srcEnd ? src.charCodeAt(pos + 1) : 0;
+    // Control operators ignore continuations, but token spans keep physical offsets.
+    const nextPos = skipLineContinuations(src, pos + 1, this.srcEnd);
+    const next = nextPos < this.srcEnd ? src.charCodeAt(nextPos) : 0;
 
     switch (ch) {
       case CH_SEMI:
         if (next === CH_SEMI) {
-          if (pos + 2 < this.srcEnd && src.charCodeAt(pos + 2) === CH_AMP) {
-            this.pos += 3;
+          const thirdPos = skipLineContinuations(src, nextPos + 1, this.srcEnd);
+          if (thirdPos < this.srcEnd && src.charCodeAt(thirdPos) === CH_AMP) {
+            this.pos = thirdPos + 1;
             setToken(out, Token.DoubleSemiAmp, ";;&", tokenStart, this.pos);
             return true;
           }
-          this.pos += 2;
+          this.pos = nextPos + 1;
           setToken(out, Token.DoubleSemi, ";;", tokenStart, this.pos);
           return true;
         }
         if (next === CH_AMP) {
-          this.pos += 2;
+          this.pos = nextPos + 1;
           setToken(out, Token.SemiAmp, ";&", tokenStart, this.pos);
           return true;
         }
@@ -1730,12 +1733,12 @@ export class Lexer {
         return true;
       case CH_PIPE:
         if (next === CH_PIPE) {
-          this.pos += 2;
+          this.pos = nextPos + 1;
           setToken(out, Token.Or, "||", tokenStart, this.pos);
           return true;
         }
         if (next === CH_AMP) {
-          this.pos += 2;
+          this.pos = nextPos + 1;
           setToken(out, Token.Pipe, "|&", tokenStart, this.pos);
           return true;
         } // |& → pipe (stderr merge)
@@ -1744,22 +1747,23 @@ export class Lexer {
         return true;
       case CH_AMP:
         if (next === CH_AMP) {
-          this.pos += 2;
+          this.pos = nextPos + 1;
           setToken(out, Token.And, "&&", tokenStart, this.pos);
           return true;
         }
         if (next === CH_GT) {
           // &> or &>> — redirect, not background
-          this.pos += 2;
-          const append = this.pos < this.srcEnd && src.charCodeAt(this.pos) === CH_GT;
-          if (append) this.pos++;
+          this.pos = nextPos + 1;
+          const thirdPos = skipLineContinuations(src, this.pos, this.srcEnd);
+          const append = thirdPos < this.srcEnd && src.charCodeAt(thirdPos) === CH_GT;
+          if (append) this.pos = thirdPos + 1;
           return this.readRedirectTarget(out, append ? "&>>" : "&>", tokenStart);
         }
         this.pos++;
         setToken(out, Token.Amp, "&", tokenStart, this.pos);
         return true;
       case CH_LPAREN:
-        if (ctx === LexContext.CommandStart && next === CH_LPAREN) {
+        if (ctx === LexContext.CommandStart && nextPos === pos + 1 && next === CH_LPAREN) {
           const savedErrors = this.errors.length;
           this.readArithmeticCommand(out, tokenStart);
           if (!this._notArithmetic) return true;
@@ -1788,17 +1792,19 @@ export class Lexer {
 
     if (ch === CH_LT) {
       this.pos++;
-      const next = this.pos < this.srcEnd ? src.charCodeAt(this.pos) : 0;
+      const nextPos = skipLineContinuations(src, this.pos, this.srcEnd);
+      const next = nextPos < this.srcEnd ? src.charCodeAt(nextPos) : 0;
       if (next === CH_LT) {
-        this.pos++;
-        const third = this.pos < this.srcEnd ? src.charCodeAt(this.pos) : 0;
+        this.pos = nextPos + 1;
+        const thirdPos = skipLineContinuations(src, this.pos, this.srcEnd);
+        const third = thirdPos < this.srcEnd ? src.charCodeAt(thirdPos) : 0;
         if (third === CH_LT) {
           // <<< herestring: its target reads like any other redirect target
-          this.pos++;
+          this.pos = thirdPos + 1;
           op = "<<<";
         } else {
           const dash = third === CH_DASH;
-          if (dash) this.pos++;
+          if (dash) this.pos = thirdPos + 1;
           this.skipSpacesAndTabs();
           const targetPos = this.pos;
           if (this.pos >= this.srcEnd || src.charCodeAt(this.pos) !== CH_HASH) this.readHereDocDelimiter();
@@ -1817,34 +1823,35 @@ export class Lexer {
           out.targetEnd = hasTarget ? this.pos : targetPos;
           return true;
         }
-      } else if (next === CH_LPAREN) {
+      } else if (nextPos === this.pos && next === CH_LPAREN) {
         this.readProcessSubstitution(out, "<", tokenStart);
         return true;
       } else if (next === CH_GT) {
         op = "<>";
-        this.pos++;
+        this.pos = nextPos + 1;
       } else if (next === CH_AMP) {
         op = "<&";
-        this.pos++;
+        this.pos = nextPos + 1;
       } else {
         op = "<";
       }
     } else if (ch === CH_GT) {
       this.pos++;
-      const next = this.pos < this.srcEnd ? src.charCodeAt(this.pos) : 0;
-      if (next === CH_LPAREN) {
+      const nextPos = skipLineContinuations(src, this.pos, this.srcEnd);
+      const next = nextPos < this.srcEnd ? src.charCodeAt(nextPos) : 0;
+      if (nextPos === this.pos && next === CH_LPAREN) {
         this.readProcessSubstitution(out, ">", tokenStart);
         return true;
       }
       if (next === CH_GT) {
         op = ">>";
-        this.pos++;
+        this.pos = nextPos + 1;
       } else if (next === CH_AMP) {
         op = ">&";
-        this.pos++;
+        this.pos = nextPos + 1;
       } else if (next === CH_PIPE) {
         op = ">|";
-        this.pos++;
+        this.pos = nextPos + 1;
       } else {
         op = ">";
       }
