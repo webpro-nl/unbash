@@ -340,7 +340,7 @@ function walkNode(node: SyntaxNode, source: string, path: string) {
     case "Command":
       if (node.name) walkWord(node.name, source, `${path}.name`);
       for (let i = 0; i < node.prefix.length; i++) {
-        const a = node.prefix[i];
+        const a: Command["prefix"][number] = node.prefix[i];
         assert.ok(a.pos >= 0 && a.end >= a.pos && a.end <= source.length, `${path}.prefix[${i}]`);
       }
       for (let i = 0; i < node.suffix.length; i++) {
@@ -388,7 +388,7 @@ function walkNode(node: SyntaxNode, source: string, path: string) {
     case "Case":
       walkWord(node.word, source, `${path}.word`);
       for (let i = 0; i < node.items.length; i++) {
-        const item = node.items[i];
+        const item: Case["items"][number] = node.items[i];
         assert.ok(item.pos >= 0 && item.end >= item.pos && item.end <= source.length, `${path}.items[${i}]`);
         walkCompoundList(item.body, source, `${path}.items[${i}].body`);
       }
