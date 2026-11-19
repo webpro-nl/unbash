@@ -1706,6 +1706,27 @@ export class Lexer {
   private tryReadOperator(out: TokenValue, ch: number, ctx: LexContext, tokenStart: number): boolean {
     const src = this.src;
     const pos = this.pos;
+    switch (ch) {
+      case CH_LPAREN:
+        if (ctx === LexContext.CommandStart && pos + 1 < this.srcEnd && src.charCodeAt(pos + 1) === CH_LPAREN) {
+          const savedErrors = this.errors.length;
+          this.readArithmeticCommand(out, tokenStart);
+          if (!this._notArithmetic) return true;
+          this.errors.length = savedErrors;
+          this.pos = tokenStart;
+        }
+        this.pos++;
+        setToken(out, Token.LParen, "(", tokenStart, this.pos);
+        return true;
+      case CH_RPAREN:
+        this.pos++;
+        setToken(out, Token.RParen, ")", tokenStart, this.pos);
+        return true;
+      case CH_LT:
+      case CH_GT:
+        return this.readRedirection(out, ch, tokenStart);
+    }
+
     // Control operators ignore continuations, but token spans keep physical offsets.
     const nextPos = skipLineContinuations(src, pos + 1, this.srcEnd);
     const next = nextPos < this.srcEnd ? src.charCodeAt(nextPos) : 0;
@@ -1762,38 +1783,23 @@ export class Lexer {
         this.pos++;
         setToken(out, Token.Amp, "&", tokenStart, this.pos);
         return true;
-      case CH_LPAREN:
-        if (ctx === LexContext.CommandStart && nextPos === pos + 1 && next === CH_LPAREN) {
-          const savedErrors = this.errors.length;
-          this.readArithmeticCommand(out, tokenStart);
-          if (!this._notArithmetic) return true;
-          this.errors.length = savedErrors;
-          this.pos = tokenStart;
-        }
-        this.pos++;
-        setToken(out, Token.LParen, "(", tokenStart, this.pos);
-        return true;
-      case CH_RPAREN:
-        this.pos++;
-        setToken(out, Token.RParen, ")", tokenStart, this.pos);
-        return true;
-      case CH_LT:
-      case CH_GT:
-        return this.readRedirection(out, tokenStart);
       default:
         return false;
     }
   }
 
-  private readRedirection(out: TokenValue, tokenStart: number): boolean {
+  private readRedirection(out: TokenValue, ch: number, tokenStart: number): boolean {
     const src = this.src;
-    const ch = src.charCodeAt(this.pos);
+    this.pos++;
+    const nextPos = skipLineContinuations(src, this.pos, this.srcEnd);
+    const next = nextPos < this.srcEnd ? src.charCodeAt(nextPos) : 0;
+    if (next === CH_LPAREN && nextPos === this.pos) {
+      this.readProcessSubstitution(out, ch === CH_LT ? "<" : ">", tokenStart);
+      return true;
+    }
     let op = "";
 
     if (ch === CH_LT) {
-      this.pos++;
-      const nextPos = skipLineContinuations(src, this.pos, this.srcEnd);
-      const next = nextPos < this.srcEnd ? src.charCodeAt(nextPos) : 0;
       if (next === CH_LT) {
         this.pos = nextPos + 1;
         const thirdPos = skipLineContinuations(src, this.pos, this.srcEnd);
@@ -1823,9 +1829,6 @@ export class Lexer {
           out.targetEnd = hasTarget ? this.pos : targetPos;
           return true;
         }
-      } else if (nextPos === this.pos && next === CH_LPAREN) {
-        this.readProcessSubstitution(out, "<", tokenStart);
-        return true;
       } else if (next === CH_GT) {
         op = "<>";
         this.pos = nextPos + 1;
@@ -1835,14 +1838,7 @@ export class Lexer {
       } else {
         op = "<";
       }
-    } else if (ch === CH_GT) {
-      this.pos++;
-      const nextPos = skipLineContinuations(src, this.pos, this.srcEnd);
-      const next = nextPos < this.srcEnd ? src.charCodeAt(nextPos) : 0;
-      if (nextPos === this.pos && next === CH_LPAREN) {
-        this.readProcessSubstitution(out, ">", tokenStart);
-        return true;
-      }
+    } else {
       if (next === CH_GT) {
         op = ">>";
         this.pos = nextPos + 1;
@@ -2288,7 +2284,7 @@ export class Lexer {
           const fc = src.charCodeAt(tokenStart);
           if (fc >= CH_0 && fc <= CH_9 && isAllDigitsRange(src, tokenStart, wordEnd)) {
             const fd = Number.parseInt(src.slice(tokenStart, wordEnd), 10);
-            if (this.readRedirection(out, tokenStart)) {
+            if (this.readRedirection(out, nc, tokenStart)) {
               out.fileDescriptor = fd;
               out.descriptorEnd = wordEnd;
               return;
@@ -2300,7 +2296,7 @@ export class Lexer {
             this.isRedirectVariable(tokenStart + 1, wordEnd - 1)
           ) {
             const varname = src.slice(tokenStart + 1, wordEnd - 1);
-            if (this.readRedirection(out, tokenStart)) {
+            if (this.readRedirection(out, nc, tokenStart)) {
               out.variableName = varname;
               out.descriptorEnd = wordEnd;
               return;
