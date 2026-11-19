@@ -18,6 +18,38 @@ const tokens = (src: string) => {
 
 const getCmd = (ast: ReturnType<typeof parse>, i = 0) => nodeOfType(ast.commands[i].command, "Command");
 
+const continuation = "\\\n";
+
+test("if split by line continuations keeps its physical token span", () => {
+  for (const [count, end] of [
+    [7, 18],
+    [8, 20],
+  ]) {
+    const source = `  i${continuation.repeat(count)}f true; then :; fi`;
+    const token = new Lexer(source).next(LexContext.CommandStart);
+    assert.equal(token.token, Token.If);
+    assert.equal(token.value, "if");
+    assert.equal(token.pos, 2);
+    assert.equal(token.end, end);
+
+    const ast = parse(source);
+    assert.equal(ast.errors, undefined);
+    assert.equal(ast.commands[0].command.type, "If");
+  }
+});
+
+test("a quoted continued if remains a command name", () => {
+  const ast = parse(`"i${continuation.repeat(8)}f" true`);
+  assert.equal(ast.errors, undefined);
+  assert.equal(getCmd(ast).name?.value, "if");
+});
+
+test("a continued ]] closes a test command", () => {
+  const ast = parse(`[[ x ]${continuation.repeat(8)}]`);
+  assert.equal(ast.errors, undefined);
+  assert.equal(ast.commands[0].command.type, "TestCommand");
+});
+
 test("case patterns reserve only an unquoted esac", () => {
   for (const source of ["if", "for", "!", "[[", "]]", "a=b", "a[1]=b", "'esac'", '"esac"', "\\esac", "i\\\nf"]) {
     const token = new Lexer(source).next(LexContext.CasePattern);
