@@ -506,6 +506,44 @@ test("heredoc inside <() process substitution", () => {
   assert.equal(parse(src).errors, undefined);
 });
 
+test("continued heredoc operators keep closing parentheses inside the body", () => {
+  const continuation = "\\\n";
+  for (const opener of ["<(", ">(", "$("]) {
+    for (const [operator, spelling, indent] of [
+      ["<<", `<${continuation}<`, ""],
+      ["<<-", `<${continuation}<${continuation}-`, "\t"],
+    ]) {
+      const source = `cat ${opener}cat ${spelling}EOF\n${indent})\n${indent}EOF\n)`;
+      const ast = parse(source);
+      assert.equal(ast.errors, undefined, source);
+      const part = nodeOfType(
+        nodeOfType(getCmd(ast).args[0], "Word").parts?.[0],
+        "CommandExpansion",
+        "ProcessSubstitution",
+      );
+      assert.ok(part.script);
+      assert.equal(part.script.errors, undefined);
+      const heredoc = nodeOfType(redirectsOf(getCmd(part.script))[0], "HereDoc");
+      assert.equal(heredoc.operator, operator);
+      assert.equal(heredoc.body.text, indent + ")\n");
+      assert.equal(heredoc.delimiter?.value, "EOF");
+      assert.equal(print(ast), source);
+    }
+  }
+});
+
+test("a continued here-string inside a substitution leaves the following command intact", () => {
+  const source = "cat <(cat <<\\\n< word\nprintf done)";
+  const ast = parse(source);
+  assert.equal(ast.errors, undefined);
+  const part = nodeOfType(nodeOfType(getCmd(ast).args[0], "Word").parts?.[0], "ProcessSubstitution");
+  assert.ok(part.script);
+  assert.equal(part.script.errors, undefined);
+  assert.equal(redirectsOf(getCmd(part.script))[0].type, "HereString");
+  assert.equal(getCmd(part.script, 1).name?.value, "printf");
+  assert.equal(print(ast), source);
+});
+
 test('herestring inside "$()" is not a heredoc', () => {
   const src = `echo "$(cat <<< word\necho done)"`;
   const ast = parse(src);
