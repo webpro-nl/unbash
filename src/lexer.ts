@@ -1788,6 +1788,15 @@ export class Lexer {
     }
   }
 
+  private readHereOperator(secondLessThan: number): "<<" | "<<-" | "<<<" {
+    this.pos = secondLessThan + 1;
+    const thirdPos = skipLineContinuations(this.src, this.pos, this.srcEnd);
+    const third = thirdPos < this.srcEnd ? this.src.charCodeAt(thirdPos) : 0;
+    if (third !== CH_LT && third !== CH_DASH) return "<<";
+    this.pos = thirdPos + 1;
+    return third === CH_LT ? "<<<" : "<<-";
+  }
+
   private readRedirection(out: TokenValue, ch: number, tokenStart: number): boolean {
     const src = this.src;
     this.pos++;
@@ -1801,16 +1810,8 @@ export class Lexer {
 
     if (ch === CH_LT) {
       if (next === CH_LT) {
-        this.pos = nextPos + 1;
-        const thirdPos = skipLineContinuations(src, this.pos, this.srcEnd);
-        const third = thirdPos < this.srcEnd ? src.charCodeAt(thirdPos) : 0;
-        if (third === CH_LT) {
-          // <<< herestring: its target reads like any other redirect target
-          this.pos = thirdPos + 1;
-          op = "<<<";
-        } else {
-          const dash = third === CH_DASH;
-          if (dash) this.pos = thirdPos + 1;
+        op = this.readHereOperator(nextPos);
+        if (op !== "<<<") {
           this.skipSpacesAndTabs();
           const targetPos = this.pos;
           if (this.pos >= this.srcEnd || src.charCodeAt(this.pos) !== CH_HASH) this.readHereDocDelimiter();
@@ -1818,11 +1819,11 @@ export class Lexer {
           if (hasTarget) {
             (this.pendingHereDocs ?? (this.pendingHereDocs = [])).push({
               delimiter: this._hereDelim,
-              strip: dash,
+              strip: op === "<<-",
               quoted: this._hereQuoted,
             });
           }
-          setToken(out, Token.Redirect, dash ? "<<-" : "<<", tokenStart, this.pos);
+          setToken(out, Token.Redirect, op, tokenStart, this.pos);
           out.content = hasTarget ? this._hereDelim : undefined;
           out.delimiterQuoted = hasTarget && this._hereQuoted;
           out.targetPos = targetPos;
@@ -4031,8 +4032,6 @@ export class Lexer {
             src.charCodeAt(this.pos + 1) === CH_LBRACE))
       ) {
         break;
-      } else if (c === CH_LT && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LT) {
-        break;
       } else if (c === CH_HASH && wordStart) {
         break;
       } else if (
@@ -4046,6 +4045,10 @@ export class Lexer {
       ) {
         break;
       } else {
+        if (c === CH_LT && this.pos + 1 < len) {
+          const next = src.charCodeAt(this.pos + 1);
+          if (next === CH_LT || next === CH_BACKSLASH) break;
+        }
         wordStart = c < 128 && (charType[c] & 1) !== 0;
         this.pos++;
       }
@@ -4354,22 +4357,24 @@ export class Lexer {
         }
         if (this.pos < len) this.pos++;
         wordStart = false;
-      } else if (ch === CH_LT && arithBase < 0 && this.pos + 1 < len && src.charCodeAt(this.pos + 1) === CH_LT) {
+      } else if (ch === CH_LT && arithBase < 0) {
+        const second = skipLineContinuations(src, this.pos + 1, len);
+        if (second >= len || src.charCodeAt(second) !== CH_LT) {
+          this.pos++;
+          wordStart = true;
+          continue;
+        }
         // << is a heredoc operator even in case-pattern position — unquoted <<
         // inside a pattern is a bash syntax error, so no caseDepth gate here
-        if (this.pos + 2 < len && src.charCodeAt(this.pos + 2) === CH_LT) {
-          this.pos += 3; // <<< herestring
-        } else {
-          this.pos += 2;
-          const strip = this.pos < len && src.charCodeAt(this.pos) === CH_DASH;
-          if (strip) this.pos++;
+        const op = this.readHereOperator(second);
+        if (op !== "<<<") {
           this.skipSpacesAndTabs();
           this.readHereDocDelimiter();
           // Empty unquoted delimiter means there was no delimiter word (`<< )`)
           if (this._hereDelim || this._hereQuoted) {
             (pendingDelims ?? (pendingDelims = [])).push({
               delimiter: this._hereDelim,
-              strip,
+              strip: op === "<<-",
               quoted: this._hereQuoted,
             });
           }
