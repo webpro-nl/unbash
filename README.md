@@ -20,14 +20,17 @@ structure without executing it. It returns a typed, source-positioned AST.
 
 Example use cases:
 
-- Classify scripts for permission prompts, allowlists, or audit findings
+- Check commands against blocklists before execution ([Desktop Commander][5])
+- Extract embedded scripts and heredocs for syntax highlighting ([T3 Code][6])
+- Extract command names and arguments for approval rules ([ZCode][7])
 - Collect executables and literal file, configuration, and dependency references
+- Find test report paths in CI commands and package scripts ([Spec
+  Controller][8])
 - Import or convert commands such as `curl` to code
-- Build a shell portability checker using parse errors and AST analysis
-- Attach diagnostics to generated or pasted Bash using source-positioned errors
-  and partial trees
-- Build explanations, visualizations, or structured previews of pipelines,
-  conditions, expansions, and nested commands
+- Check package scripts for shell portability
+- Report syntax errors in pasted or generated Bash using the partial tree and
+  error positions
+- Build command summaries and pipeline previews ([Ultimate][9])
 
 ## Supported syntax
 
@@ -52,8 +55,8 @@ unbash is a tolerant parser: for malformed, incomplete or excessively nested
 input, it recovers where possible and returns a best-effort partial AST with
 source-positioned errors for what it detects while parsing.
 
-To parse `process.argv` (`string[]`), use Node.js [`parseArgs`][5] or a library
-such as [yargs][6] or [citty][7].
+To parse `process.argv` (`string[]`), use Node.js [`parseArgs`][10] or a library
+such as [yargs][11] or [citty][12].
 
 ## Usage
 
@@ -79,7 +82,7 @@ Result:
 }
 ```
 
-See the full AST at [unbash.statichost.page#input=if \[ -f...][8]
+See the full AST at [unbash.statichost.page#input=if \[ -f...][13]
 
 Positions are zero-based UTF-16 code-unit offsets forming half-open `[pos, end)`
 ranges into the source.
@@ -108,7 +111,7 @@ visit(parse(source));
 
 The callback receives only the child and its return value is ignored. A nested
 script reports its own `errors`, so check them while visiting. See [Migrating
-from v5][9] for the node shapes and lazy fields.
+from v5][14] for the node shapes and lazy fields.
 
 ### Print
 
@@ -133,7 +136,7 @@ fi
 
 ## unbash vs tree-sitter-bash
 
-[tree-sitter-bash][10] is the right choice when you need:
+[tree-sitter-bash][15] is the right choice when you need:
 
 - Incremental parsing
 - CST output preserving all tokens and punctuation
@@ -147,11 +150,11 @@ unbash provides:
 - Structured word parts, arithmetic and test-expression trees, recursively
   parsed substitutions, and direct source positions
 - Best-effort error recovery that preserves a partial AST and collects errors
-- Also see [tree-sitter-bash gaps covered by unbash][11]
+- Also see [tree-sitter-bash gaps covered by unbash][16]
 
 ## unbash vs sh-syntax
 
-[sh-syntax][12] is a WASM wrapper around the robust [mvdan/sh][13] Go parser. It
+[sh-syntax][17] is a WASM wrapper around the robust [mvdan/sh][18] Go parser. It
 is highly recommended if you need:
 
 - Support for Bash, POSIX sh, mksh, Bats, and experimental Zsh parsing
@@ -163,11 +166,11 @@ unbash provides:
 - A smaller, JSON-friendly Bash AST with lazy structured word parts, recursively
   parsed substitutions, and direct source positions
 - Best-effort partial ASTs for malformed or incomplete editor and user input
-- Also see [sh-syntax gaps covered by unbash][14]
+- Also see [sh-syntax gaps covered by unbash][19]
 
 ## unbash vs bash-parser
 
-[bash-parser][15] and its fork [@ericcornelissen/bash-parser][16] (community
+[bash-parser][20] and its fork [@ericcornelissen/bash-parser][21] (community
 dependency maintenance fork ❤️ now archived) provide:
 
 - A POSIX-only mode that rejects bash-specific syntax
@@ -177,9 +180,9 @@ unbash provides:
 - A zero-dependency architecture
 - A typed TypeScript API (ESM-only)
 - Best-effort error recovery that preserves a partial AST and collects errors
-- Structured AST nodes for parameter expansions, arithmetic expressions, and `[[
-]]` test expressions; `bash-parser` treats `[[ ]]` as ordinary commands and
-  `(( ))` as nested subshells
+- Structured AST nodes for parameter expansions, arithmetic expressions, and
+  `[[ ]]` test expressions; `bash-parser` treats `[[ ]]` as ordinary commands
+  and `(( ))` as nested subshells
 - Herestrings, C-style `for`, `select`, process substitution, `coproc`, array
   assignments, extglob, `;&`/`;;&` case fallthrough, Bash 5.3 command
   substitutions, and `{variable}` file-descriptor redirects
@@ -219,8 +222,8 @@ The parser bundle is 100K minified and 26K gzipped.
 
 ## Playgrounds
 
-- [unbash.statichost.page][17]
-- [ast-explorer.dev][18]
+- [unbash.statichost.page][22]
+- [ast-explorer.dev][23]
 
 ## License
 
@@ -230,17 +233,22 @@ ISC
 [2]: https://www.npmx.dev/package/unbash
 [3]: https://img.shields.io/npm/v/unbash?color=f56e0f
 [4]: https://img.shields.io/badge/dynamic/json?url=https://npm-gapless.webpro.nl/downloads/range/last-month/unbash&query=$.totalCompact&label=downloads&suffix=/month&color=f56e0f
-[5]: https://nodejs.org/api/util.html#utilparseargsconfig
-[6]: https://yargs.js.org/
-[7]: https://www.npmjs.com/package/citty
-[8]: https://unbash.statichost.page/#input=if%20%5B%20-f%20%22%241%22%20%5D%3B%20then%20cat%20%22%241%22%3B%20fi
-[9]: docs/MIGRATION-v5-to-v6.md
-[10]: https://github.com/tree-sitter/tree-sitter-bash
-[11]: https://github.com/webpro-nl/unbash/issues/6
-[12]: https://github.com/un-ts/sh-syntax
-[13]: https://github.com/mvdan/sh
-[14]: https://github.com/webpro-nl/unbash/issues/7
-[15]: https://github.com/vorpaljs/bash-parser
-[16]: https://github.com/ericcornelissen/bash-parser
-[17]: https://unbash.statichost.page
-[18]: https://ast-explorer.dev/#eNoVjDsKwzAQRK8yDK5CyAGS2nVAId02jixZAbFr/Kls393rbh7zeBsrn5xLqpV3jr5X/XVzcYgOKRaD8LoNzffTBqFotgkZf8XtUW14oTdRIHaLq00WYscwpRFtCO8g2psm75n3toPHCdz+Ivg=
+[5]: https://github.com/wonderwhy-er/DesktopCommanderMCP/blob/9a101b17e44577f0baefa4c7120f087881c5cc56/src/utils/posix-commands.ts#L193
+[6]: https://github.com/pingdotgg/t3code/blob/504589183e83bd5dc33b8963b393d1977acf4e95/packages/client-runtime/src/work-log/embeddedScripts.ts#L300-L324
+[7]: https://github.com/zai-org/ZCode/blob/fec975905a2abd4c07e35c40d51fa097a2258ec9/apps/zcode-cli/packages/core/src/tool/handlers/bash-command-parser.ts#L53-L96
+[8]: https://github.com/3f-consulting/spec-controller/blob/83ac34b197db03702ca7503a6a1ffc32f2f90a3d/packages/core/src/inputs/shell.ts
+[9]: https://github.com/HazAT/ultimate/blob/08c0b24eacbb5c810c1a4d1db5d8da72a78728c7/extensions/coding-tools/bash-command.ts#L104
+[10]: https://nodejs.org/api/util.html#utilparseargsconfig
+[11]: https://yargs.js.org/
+[12]: https://www.npmjs.com/package/citty
+[13]: https://unbash.statichost.page/#input=if%20%5B%20-f%20%22%241%22%20%5D%3B%20then%20cat%20%22%241%22%3B%20fi
+[14]: docs/MIGRATION-v5-to-v6.md
+[15]: https://github.com/tree-sitter/tree-sitter-bash
+[16]: https://github.com/webpro-nl/unbash/issues/6
+[17]: https://github.com/un-ts/sh-syntax
+[18]: https://github.com/mvdan/sh
+[19]: https://github.com/webpro-nl/unbash/issues/7
+[20]: https://github.com/vorpaljs/bash-parser
+[21]: https://github.com/ericcornelissen/bash-parser
+[22]: https://unbash.statichost.page
+[23]: https://ast-explorer.dev/#eNoVjDsKwzAQRK8yDK5CyAGS2nVAId02jixZAbFr/Kls393rbh7zeBsrn5xLqpV3jr5X/XVzcYgOKRaD8LoNzffTBqFotgkZf8XtUW14oTdRIHaLq00WYscwpRFtCO8g2psm75n3toPHCdz+Ivg=
